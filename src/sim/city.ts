@@ -1,6 +1,7 @@
 import { type Vec2, clamp } from './geometry';
-import { RoadNetwork, type RoadSegment, type Snap } from './roads';
+import { ELEVATED_HEIGHT, MAX_GRADE, RoadNetwork, type RoadSegment, type Snap } from './roads';
 import { type RoadPoint, Traffic } from './traffic';
+import { BUS_SHARE, BUS_UPKEEP, STOP_COST, Transit } from './transit';
 import { type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
@@ -9,7 +10,7 @@ export const BULLDOZE_REFUND = 0.5;
 export const ROAD_UPKEEP = 0.004;
 export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
-const SAVE_VERSION = 2;
+const SAVE_VERSION = 3;
 
 export type Rng = () => number;
 
@@ -19,12 +20,16 @@ export interface CityStats {
   buildings: number;
   /** zoned cells that cannot grow because their road does not reach the highway */
   disconnected: number;
+  /** bus boardings yesterday */
+  riders: number;
 }
 
 export interface Budget {
   residentialTax: number;
   businessTax: number;
   roadUpkeep: number;
+  busFares: number;
+  busUpkeep: number;
 }
 
 export interface TaxRates {
@@ -36,12 +41,16 @@ export interface SaveData {
   v: number;
   money: number;
   day: number;
-  nodes: [number, number, number][];
+  /** id, x, y, height (v3) */
+  nodes: ([number, number, number] | [number, number, number, number])[];
   /** id, a, b, control x, control y, per-lot zone * 10 + level */
   segs: [number, number, number, number, number, number[]][];
   /** node ids where roads leave the map (v2) */
   outside?: number[];
   taxes?: TaxRates;
+  /** v3: bus stops (id, x, y) and lines (id, color, stop ids) */
+  stops?: [number, number, number][];
+  lines?: [number, number, number[]][];
 }
 
 /** A zoned cell together with the road it sits on. */
@@ -53,13 +62,14 @@ interface Placed {
 export class City {
   net = new RoadNetwork();
   traffic = new Traffic(this.net);
+  transit = new Transit(this.net, this.traffic);
   money = 80000;
   day = 0;
   demand: Record<DemandKey, number> = { R: 50, C: 30, O: 20, I: 40 };
-  stats: CityStats = { population: 0, jobs: 0, buildings: 0, disconnected: 0 };
+  stats: CityStats = { population: 0, jobs: 0, buildings: 0, disconnected: 0, riders: 0 };
   taxes: TaxRates = { residential: DEFAULT_TAX, business: DEFAULT_TAX };
   /** last day's income and expenses */
-  budget: Budget = { residentialTax: 0, businessTax: 0, roadUpkeep: 0 };
+  budget: Budget = { residentialTax: 0, businessTax: 0, roadUpkeep: 0, busFares: 0, busUpkeep: 0 };
   /** road ends at the map edge: the highway that people and goods come in by */
   outside = new Set<number>();
   /** junctions that can reach an outside connection */
@@ -83,6 +93,7 @@ export class City {
   private roadsChanged(): void {
     recomputeBlocked(this.net);
     this.traffic.onNetworkChanged();
+    this.transit.onNetworkChanged();
     this.computeConnectivity();
     this.roadsVersion++;
     this.lotsVersion++;
@@ -119,15 +130,39 @@ export class City {
     this.computeConnectivity();
   }
 
-  roadCost(a: Vec2, c: Vec2 | null, b: Vec2): number {
-    return Math.round(RoadNetwork.previewLength(a, c, b) * ROAD_COST_PER_M);
+  /** Price of a road; elevated decks cost three times as much as streets, ramps in between. */
+  roadCost(a: Vec2, c: Vec2 | null, b: Vec2, ha = 0, hb = 0): number {
+    const raised = (ha + hb) / 2 / ELEVATED_HEIGHT;
+    return Math.round(RoadNetwork.previewLength(a, c, b) * ROAD_COST_PER_M * (1 + 2 * raised));
   }
 
-  buildRoad(start: Snap, control: Vec2 | null, end: Snap, free = false): { ok: boolean; cost: number; reason?: string; endNode?: number } {
-    const cost = free ? 0 : this.roadCost(start.p, control, end.p);
+  /** Heights the two ends of a planned road would have, given the level new road ends are built at. */
+  roadHeights(start: Snap, end: Snap, height: number): [number, number] {
+    return [this.net.snapHeight(start, height), this.net.snapHeight(end, height)];
+  }
+
+  /** Why a planned road can't be built for its slope, or null. */
+  gradeProblem(start: Snap, control: Vec2 | null, end: Snap, height: number): string | null {
+    const [ha, hb] = this.roadHeights(start, end, height);
+    const climb = Math.abs(ha - hb);
+    if (climb < 0.01 || climb / RoadNetwork.previewLength(start.p, control, end.p) <= MAX_GRADE) return null;
+    return `坡度太陡：這段匝道至少要 ${Math.ceil(climb / MAX_GRADE)} 公尺長`;
+  }
+
+  buildRoad(
+    start: Snap,
+    control: Vec2 | null,
+    end: Snap,
+    free = false,
+    height = 0,
+  ): { ok: boolean; cost: number; reason?: string; endNode?: number } {
+    const [ha, hb] = this.roadHeights(start, end, height);
+    const cost = free ? 0 : this.roadCost(start.p, control, end.p, ha, hb);
     if (Math.hypot(start.p.x - end.p.x, start.p.y - end.p.y) < 4) return { ok: false, cost, reason: '道路太短' };
+    const steep = this.gradeProblem(start, control, end, height);
+    if (steep) return { ok: false, cost, reason: steep };
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
-    const created = this.net.addRoad(start, control, end);
+    const created = this.net.addRoad(start, control, end, height);
     if (!created.length) return { ok: false, cost, reason: '這裡已經有道路了' };
     this.money -= cost;
     this.roadsChanged();
@@ -146,6 +181,18 @@ export class City {
     this.money += refund;
     this.roadsChanged();
     return { ok: true, refund };
+  }
+
+  /** Opens a bus line through the given stops (a loop). */
+  createBusLine(stops: number[]): { ok: boolean; cost: number; reason?: string } {
+    const cost = stops.length * STOP_COST;
+    if (stops.length < 2) return { ok: false, cost, reason: '路線至少要兩個站' };
+    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
+    const plan = this.transit.plan(stops, true);
+    if (!plan.ok) return { ok: false, cost, reason: '有些站之間沒有道路相連' };
+    this.money -= cost;
+    this.transit.addLine(stops);
+    return { ok: true, cost };
   }
 
   paint(center: Vec2, radius: number, zone: Zone): number {
@@ -189,7 +236,7 @@ export class City {
       O: d(20 + (pop * 0.2 - jobs.O) * 0.4 - bTax),
       I: d(40 + (pop * 0.3 - jobs.I) * 0.4 - bTax),
     };
-    this.stats = { population: pop, jobs: totalJobs, buildings, disconnected };
+    this.stats = { population: pop, jobs: totalJobs, buildings, disconnected, riders: this.stats.riders };
     return zoned;
   }
 
@@ -225,6 +272,7 @@ export class City {
     }
     if (changed) this.lotsVersion++;
 
+    this.transit.maintain();
     this.spawnTrips(zoned, rng);
 
     let roadLength = 0;
@@ -233,8 +281,15 @@ export class City {
       residentialTax: this.stats.population * this.taxes.residential * 0.005,
       businessTax: this.stats.jobs * this.taxes.business * 0.004,
       roadUpkeep: roadLength * ROAD_UPKEEP,
+      // Buses pay in bursts as they reach stops; show a running average
+      busFares: this.budget.busFares * 0.9 + this.transit.faresToday * 0.1,
+      busUpkeep: this.transit.buses().length * BUS_UPKEEP,
     };
-    this.money += this.budget.residentialTax + this.budget.businessTax - this.budget.roadUpkeep;
+    const b = this.budget;
+    this.money += b.residentialTax + b.businessTax + this.transit.faresToday - b.roadUpkeep - b.busUpkeep;
+    this.stats.riders = this.transit.ridersToday;
+    this.transit.faresToday = 0;
+    this.transit.ridersToday = 0;
     this.day++;
   }
 
@@ -257,10 +312,13 @@ export class City {
 
     const wanted = Math.min(room, Math.round((this.stats.population + this.stats.jobs) / 60 + rng()));
     for (let i = 0; i < wanted && homes.length; i++) {
-      const from = at(pick(homes));
+      const home = pick(homes);
       // Without local jobs, residents commute out of town along the highway
-      const to = work.length ? at(pick(work)) : gate;
-      if (to) this.traffic.spawn(from, to, 'car', rng());
+      const job = work.length ? pick(work) : null;
+      // Commuters with a bus line from near home to near work mostly ride it
+      if (job && this.transit.lines.size && rng() < BUS_SHARE && this.transit.board(home.lot, job.lot)) continue;
+      const to = job ? at(job) : gate;
+      if (to) this.traffic.spawn(at(home), to, 'car', rng());
     }
     if (gate && industry.length && rng() < Math.min(0.9, this.stats.jobs / 300)) {
       this.traffic.spawn(gate, at(pick(industry)), 'truck', rng());
@@ -284,7 +342,7 @@ export class City {
       v: SAVE_VERSION,
       money: Math.round(this.money),
       day: this.day,
-      nodes: [...this.net.nodes.values()].map((n) => [n.id, round2(n.p.x), round2(n.p.y)]),
+      nodes: [...this.net.nodes.values()].map((n) => [n.id, round2(n.p.x), round2(n.p.y), round2(n.h)]),
       segs: [...this.net.segments.values()].map((s) => [
         s.id,
         s.a,
@@ -295,15 +353,17 @@ export class City {
       ]),
       outside: [...this.outside],
       taxes: { ...this.taxes },
+      stops: [...this.transit.stops.values()].map((s) => [s.id, round2(s.p.x), round2(s.p.y)]),
+      lines: [...this.transit.lines.values()].map((l) => [l.id, l.color, [...l.stops]]),
     };
   }
 
   static deserialize(data: SaveData): City {
-    if (data.v !== 1 && data.v !== SAVE_VERSION) throw new Error(`unsupported save version ${data.v}`);
+    if (data.v < 1 || data.v > SAVE_VERSION) throw new Error(`unsupported save version ${data.v}`);
     const city = new City();
     city.money = data.money;
     city.day = data.day;
-    for (const [id, x, y] of data.nodes) city.net.addNode({ x, y }, id);
+    for (const [id, x, y, h] of data.nodes) city.net.addNode({ x, y }, id, h ?? 0);
     for (const [id, a, b, cx, cy, lots] of data.segs) {
       const seg = city.net.createSegment(a, b, { x: cx, y: cy }, undefined, id);
       lots.forEach((v, i) => {
@@ -315,6 +375,8 @@ export class City {
     }
     for (const n of data.outside ?? []) city.outside.add(n);
     if (data.taxes) city.taxes = { ...data.taxes };
+    for (const [id, x, y] of data.stops ?? []) city.transit.addStop(id, { x, y });
+    for (const [id, color, stops] of data.lines ?? []) city.transit.addLine(stops, id, color);
     city.roadsChanged();
     city.measure();
     return city;

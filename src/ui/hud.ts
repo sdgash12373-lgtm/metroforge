@@ -1,5 +1,6 @@
 import { type City, MAX_TAX } from '../sim/city';
 import { ZONES, Zone } from '../sim/zoning';
+import { LINE_COLORS } from '../sim/transit';
 import { BRUSH_MAX, BRUSH_MIN, type Tool, type ToolController } from './tools';
 
 const TOOLS: { id: Tool; label: string; key: string }[] = [
@@ -9,6 +10,7 @@ const TOOLS: { id: Tool; label: string; key: string }[] = [
   { id: 'zone', label: '分區', key: '4' },
   { id: 'bulldoze', label: '拆除', key: '5' },
   { id: 'traffic', label: '交通', key: '6' },
+  { id: 'bus', label: '公車', key: '7' },
 ];
 
 export const SPEEDS = [0, 1, 3] as const;
@@ -39,7 +41,7 @@ export class Hud {
   private toastTimer = 0;
   private warning: HTMLElement;
   private budgetPanel: HTMLElement;
-  private budgetRows: Record<'res' | 'biz' | 'roads' | 'net', HTMLElement>;
+  private budgetRows: Record<'res' | 'biz' | 'fares' | 'roads' | 'buses' | 'net', HTMLElement>;
   private taxInputs: { res: HTMLInputElement; biz: HTMLInputElement; resLabel: HTMLElement; bizLabel: HTMLElement };
   private city: City | null = null;
   private topBar: HTMLElement;
@@ -138,7 +140,14 @@ export class Hud {
       this.budgetPanel.append(r);
       return v;
     };
-    this.budgetRows = { res: row('住宅稅'), biz: row('商業稅'), roads: row('道路維護'), net: row('每日淨額') };
+    this.budgetRows = {
+      res: row('住宅稅'),
+      biz: row('商業稅'),
+      fares: row('公車票價'),
+      roads: row('道路維護'),
+      buses: row('公車營運'),
+      net: row('每日淨額'),
+    };
     this.budgetRows.net.parentElement!.classList.add('total');
     const slider = (id: string, label: string, onInput: (v: number) => void) => {
       const wrap = el('label', 'tax');
@@ -250,14 +259,39 @@ export class Hud {
       };
       size.append(el('span', '', '範圍'), range, value);
       this.sub.append(size);
-    } else if (this.tools.drawing) {
-      option('結束拉路', false, () => {
-        this.tools.cancel();
-        this.render();
-      });
+    } else if (this.tools.tool === 'road' || this.tools.tool === 'curve') {
+      option('地面', !this.tools.elevated, () => this.tools.setElevated(false));
+      option('高架', this.tools.elevated, () => this.tools.setElevated(true));
+      if (this.tools.drawing) {
+        option('結束拉路', false, () => {
+          this.tools.cancel();
+          this.render();
+        });
+      }
+    } else if (this.tools.tool === 'bus') {
+      this.renderBusDock(option);
     }
     this.sub.hidden = this.sub.childElementCount === 0;
     this.updateHint();
+  }
+
+  private renderBusDock(option: (label: string, on: boolean, onClick: () => void, swatch?: number) => void): void {
+    const t = this.tools;
+    const city = this.city;
+    if (t.lineDraft.length) {
+      option(`完成路線（${t.lineDraft.length} 站）`, false, () => t.finishLine(), LINE_COLORS[((city?.transit.nextLine ?? 1) - 1) % LINE_COLORS.length]);
+      option('取消', false, () => t.cancel());
+      return;
+    }
+    if (!city) return;
+    for (const line of city.transit.lines.values()) {
+      const label = `${line.id} 號線 · ${line.stops.length} 站${line.ok ? '' : ' · 中斷'}`;
+      option(label, t.selectedLine === line.id, () => t.selectLine(t.selectedLine === line.id ? null : line.id), line.color);
+    }
+    const picked = t.selectedLine;
+    if (picked !== null && city.transit.lines.has(picked)) {
+      option('刪除這條路線', false, () => t.deleteLine(picked));
+    }
   }
 
   updateHint(): void {
@@ -271,8 +305,10 @@ export class Hud {
     if (!this.budgetPanel.hidden) {
       this.budgetRows.res.textContent = money(b.residentialTax);
       this.budgetRows.biz.textContent = money(b.businessTax);
+      this.budgetRows.fares.textContent = money(b.busFares);
       this.budgetRows.roads.textContent = money(-b.roadUpkeep);
-      const net = b.residentialTax + b.businessTax - b.roadUpkeep;
+      this.budgetRows.buses.textContent = money(-b.busUpkeep);
+      const net = b.residentialTax + b.businessTax + b.busFares - b.roadUpkeep - b.busUpkeep;
       this.budgetRows.net.textContent = money(net);
       this.budgetRows.net.classList.toggle('neg', net < 0);
       for (const [input, label, v] of [

@@ -81,6 +81,18 @@ export function tAtLength(samples: Sample[], s: number): number {
   return 1;
 }
 
+/** Arc length at curve parameter t of a sampled curve (inverse of tAtLength). */
+export function lengthAt(samples: Sample[], t: number): number {
+  for (let i = 1; i < samples.length; i++) {
+    if (samples[i].t >= t) {
+      const p = samples[i - 1];
+      const f = (t - p.t) / (samples[i].t - p.t || 1);
+      return p.s + f * (samples[i].s - p.s);
+    }
+  }
+  return samples[samples.length - 1].s;
+}
+
 /** Distance from p to segment ab, plus the fraction along ab of the closest point. */
 export function pointSegment(p: Vec2, a: Vec2, b: Vec2): { d: number; f: number } {
   const dx = b.x - a.x;

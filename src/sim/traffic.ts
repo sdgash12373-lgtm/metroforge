@@ -14,7 +14,7 @@ const MIN_GAP = 2.0;
 export const GIVE_UP_AFTER = 40;
 
 export type Dir = 1 | -1;
-export type VehicleKind = 'car' | 'truck';
+export type VehicleKind = 'car' | 'truck' | 'bus';
 
 /** One travel direction of one segment. */
 export interface LaneRef {
@@ -24,7 +24,7 @@ export interface LaneRef {
 
 export const laneKey = (seg: number, dir: Dir): number => seg * 2 + (dir === 1 ? 0 : 1);
 
-export const VEHICLE_LENGTH: Record<VehicleKind, number> = { car: 4.5, truck: 8 };
+export const VEHICLE_LENGTH: Record<VehicleKind, number> = { car: 4.5, truck: 8, bus: 12 };
 
 export interface Vehicle {
   id: number;
@@ -42,6 +42,20 @@ export interface Vehicle {
   tint: number;
   /** seconds spent stopped in a row */
   stuck: number;
+  /** buses: the line they run on, the index of the stop they are heading to, and seconds left at a stop */
+  line?: number;
+  next?: number;
+  dwell?: number;
+  /** buses: riders on board, by the stop they get off at */
+  load?: Map<number, number>;
+}
+
+/** Called when a bus reaches the stop it was heading to, and when it is ready to leave. */
+export interface BusHooks {
+  /** unloads and boards riders; returns seconds to wait at the stop */
+  arrive(v: Vehicle): number;
+  /** sets the route to the next stop; false takes the bus off the road */
+  depart(v: Vehicle): boolean;
 }
 
 /** A place on the road network: a segment and a distance from its `a` end. */
@@ -98,6 +112,7 @@ export class Traffic {
   nextId = 1;
   tripsCompleted = 0;
   tripsAbandoned = 0;
+  busHooks: BusHooks | null = null;
   /** vehicles currently on each lane, sorted back to front */
   private lanes = new Map<number, Vehicle[]>();
 
@@ -123,13 +138,17 @@ export class Traffic {
     return seg.length / (SPEED_LIMIT * (1 - 0.8 * this.congestion(seg, dir)));
   }
 
-  /** Fastest route between two road points (A* over junctions, weighted by current traffic). */
-  findRoute(from: RoadPoint, to: RoadPoint): { first: LaneRef; route: LaneRef[]; startPos: number; dest: number } | null {
+  /**
+   * Fastest route between two road points (A* over junctions, weighted by current traffic).
+   * `startDir` forces the first lane's direction, for a vehicle already driving along it.
+   */
+  findRoute(from: RoadPoint, to: RoadPoint, startDir?: Dir): { first: LaneRef; route: LaneRef[]; startPos: number; dest: number } | null {
     const s0 = this.net.segments.get(from.seg);
     const s1 = this.net.segments.get(to.seg);
     if (!s0 || !s1) return null;
-    if (s0.id === s1.id && Math.abs(to.s - from.s) > 1) {
-      const dir: Dir = to.s > from.s ? 1 : -1;
+    const ahead: Dir = to.s > from.s ? 1 : -1;
+    if (s0.id === s1.id && Math.abs(to.s - from.s) > 1 && (startDir ?? ahead) === ahead) {
+      const dir = ahead;
       return {
         first: { seg: s0.id, dir },
         route: [],
@@ -149,8 +168,8 @@ export class Traffic {
         heap.push(node, c + h(node));
       }
     };
-    start(s0.b, (s0.length - from.s) / SPEED_LIMIT, { seg: s0.id, dir: 1 });
-    start(s0.a, from.s / SPEED_LIMIT, { seg: s0.id, dir: -1 });
+    if (startDir !== -1) start(s0.b, (s0.length - from.s) / SPEED_LIMIT, { seg: s0.id, dir: 1 });
+    if (startDir !== 1) start(s0.a, from.s / SPEED_LIMIT, { seg: s0.id, dir: -1 });
 
     const adj = this.adjacency();
     const done = new Set<number>();
@@ -239,6 +258,18 @@ export class Traffic {
     return v;
   }
 
+  /** Sends a vehicle on from where it is now to a new destination, without turning around on the spot. */
+  retarget(v: Vehicle, to: RoadPoint): boolean {
+    const seg = this.net.segments.get(v.seg);
+    if (!seg) return false;
+    const here = { seg: v.seg, s: v.dir === 1 ? v.pos : seg.length - v.pos };
+    const r = this.findRoute(here, to, v.dir);
+    if (!r) return false;
+    v.route = r.route;
+    v.dest = r.dest;
+    return true;
+  }
+
   private index(): void {
     this.lanes.clear();
     for (const v of this.vehicles) {
@@ -272,6 +303,14 @@ export class Traffic {
           arrived.add(v.id);
           continue;
         }
+        // A bus at a stop waits for riders, holding up the lane behind it
+        if (v.dwell !== undefined && v.dwell > 0) {
+          v.speed = 0;
+          v.stuck = 0;
+          v.dwell -= dt;
+          if (v.dwell <= 0 && !this.busHooks?.depart(v)) gaveUp.add(v.id);
+          continue;
+        }
         const len = VEHICLE_LENGTH[v.kind];
         let gap: number;
         let leadSpeed = 0;
@@ -301,7 +340,12 @@ export class Traffic {
         }
 
         if (!v.route.length) {
-          if (v.pos >= v.dest - 0.5) arrived.add(v.id);
+          if (v.pos < v.dest - 0.5) continue;
+          if (v.kind === 'bus' && this.busHooks) {
+            v.pos = Math.min(v.pos, v.dest);
+            v.speed = 0;
+            v.dwell = Math.max(0.01, this.busHooks.arrive(v));
+          } else arrived.add(v.id);
           continue;
         }
         if (v.pos >= seg.length) {
@@ -330,8 +374,8 @@ export class Traffic {
     }
   }
 
-  /** World position and heading of a vehicle (sim coordinates). */
-  pose(v: Vehicle): { p: Vec2; heading: Vec2 } | null {
+  /** World position, height and heading of a vehicle (sim coordinates). */
+  pose(v: Vehicle): { p: Vec2; h: number; heading: Vec2 } | null {
     const seg = this.net.segments.get(v.seg);
     if (!seg) return null;
     const s = v.dir === 1 ? v.pos : seg.length - v.pos;
@@ -351,6 +395,7 @@ export class Traffic {
     const ry = hx;
     return {
       p: { x: a.x + (b.x - a.x) * f + rx * LANE_OFFSET, y: a.y + (b.y - a.y) * f + ry * LANE_OFFSET },
+      h: this.net.heightAt(seg, a.t + (b.t - a.t) * f),
       heading: { x: hx, y: hy },
     };
   }

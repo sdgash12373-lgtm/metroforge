@@ -10,6 +10,8 @@ export class CameraRig {
   pitch = 0.85;
   /** Build mode: rotation and tilt are frozen so gestures can't swing the view while drawing. */
   locked = false;
+  /** Height of the plane taps land on: raised while drawing elevated roads so the pointer sits on the deck. */
+  pickHeight = 0;
   readonly minDistance = 40;
   readonly maxDistance = 1600;
   private readonly ray = new THREE.Raycaster();
@@ -41,8 +43,16 @@ export class CameraRig {
   groundAt(sx: number, sy: number, w: number, h: number): Vec2 | null {
     this.ndc.set((sx / w) * 2 - 1, -(sy / h) * 2 + 1);
     this.ray.setFromCamera(this.ndc, this.camera);
+    this.ground.constant = -this.pickHeight;
     const p = this.ray.ray.intersectPlane(this.ground, this.hit);
     return p ? { x: p.x, y: p.z } : null;
+  }
+
+  /** The ground point seen behind a point at height h (same screen position). */
+  toGround(p: Vec2, h: number): Vec2 {
+    const c = this.camera.position;
+    const k = c.y / Math.max(0.01, c.y - h);
+    return { x: c.x + (p.x - c.x) * k, y: c.z + (p.y - c.z) * k };
   }
 
   /** Rotates and tilts the view unless it is locked. */

@@ -2,11 +2,12 @@ import { angleGuides } from '../sim/angles';
 import type { City } from '../sim/city';
 import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, lerp } from '../sim/geometry';
-import { ROAD_WIDTH, type Snap } from '../sim/roads';
+import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type Snap } from '../sim/roads';
+import { LINE_COLORS, type PathPiece, STOP_COST } from '../sim/transit';
 import { ZONES, Zone } from '../sim/zoning';
 import type { World } from '../render/world';
 
-export type Tool = 'pan' | 'road' | 'curve' | 'zone' | 'bulldoze' | 'traffic';
+export type Tool = 'pan' | 'road' | 'curve' | 'zone' | 'bulldoze' | 'traffic' | 'bus';
 
 /** Zoning brush radius range and default, in meters. */
 export const BRUSH_MIN = 6;
@@ -26,6 +27,13 @@ export class ToolController {
   draft: { start: Snap | null; control: Vec2 | null } = { start: null, control: null };
   hover: Vec2 | null = null;
   brushRadius = BRUSH_DEFAULT;
+  /** road tools build elevated roads instead of streets */
+  elevated = false;
+  /** stops of the bus line being planned */
+  lineDraft: number[] = [];
+  private draftPath: PathPiece[] = [];
+  /** bus line picked in the dock, e.g. to delete it */
+  selectedLine: number | null = null;
 
   constructor(
     private city: City,
@@ -41,9 +49,32 @@ export class ToolController {
   setTool(tool: Tool): void {
     this.tool = tool;
     this.cancel();
+    this.selectedLine = null;
     this.world.setShowEmptyCells(tool === 'zone');
     this.world.setTrafficOverlay(tool === 'traffic');
+    this.world.setLineOverlay(tool === 'bus');
+    this.updatePickHeight();
     this.refresh();
+  }
+
+  setElevated(on: boolean): void {
+    this.elevated = on;
+    this.updatePickHeight();
+    this.events.changed();
+    this.refresh();
+  }
+
+  private get isRoadTool(): boolean {
+    return this.tool === 'road' || this.tool === 'curve';
+  }
+
+  /** Height new road ends are built at. */
+  private get level(): number {
+    return this.elevated ? ELEVATED_HEIGHT : 0;
+  }
+
+  private updatePickHeight(): void {
+    this.world.rig.pickHeight = this.isRoadTool ? this.level : 0;
   }
 
   setZone(zone: Zone): void {
@@ -61,6 +92,11 @@ export class ToolController {
 
   cancel(): void {
     this.draft = { start: null, control: null };
+    if (this.lineDraft.length) {
+      this.lineDraft = [];
+      this.draftPath = [];
+      this.city.transit.pruneStops();
+    }
     this.events.changed();
     this.refresh();
   }
@@ -69,13 +105,47 @@ export class ToolController {
     return this.draft.start !== null;
   }
 
+  /** Opens the planned bus line. */
+  finishLine(): void {
+    const r = this.city.createBusLine(this.lineDraft);
+    if (!r.ok) {
+      if (r.reason) this.events.toast(r.reason);
+      return;
+    }
+    this.events.toast(`公車路線開通！${this.lineDraft.length} 站，花費 $${r.cost.toLocaleString()}`);
+    this.lineDraft = [];
+    this.draftPath = [];
+    this.events.changed();
+    this.refresh();
+  }
+
+  deleteLine(id: number): void {
+    this.city.transit.removeLine(id);
+    this.selectedLine = null;
+    this.events.toast('路線已刪除');
+    this.events.changed();
+    this.refresh();
+  }
+
+  selectLine(id: number | null): void {
+    this.selectedLine = id;
+    this.events.changed();
+  }
+
   /** Painting tools take one-finger drags; the others use drags to move the camera. */
   get paintsOnDrag(): boolean {
     return this.tool === 'zone';
   }
 
   private snap(p: Vec2): Snap {
-    return this.city.net.snap(p, this.world.rig.snapRadius);
+    const net = this.city.net;
+    const r = this.world.rig.snapRadius;
+    if (!this.elevated) return net.snap(p, r, 0);
+    // Taps land on the deck plane; roads on the deck win, then streets seen under the finger (to start ramps)
+    const deck = net.snap(p, r, ELEVATED_HEIGHT);
+    if (deck.kind !== 'free' && Math.abs(net.snapHeight(deck, 0) - ELEVATED_HEIGHT) < LEVEL_TOLERANCE) return deck;
+    const street = net.snap(this.world.rig.toGround(p, ELEVATED_HEIGHT), r, 0);
+    return street.kind !== 'free' ? street : deck;
   }
 
   /** Road-tool snap: existing roads first, then alignment with other road ends. */
@@ -92,14 +162,22 @@ export class ToolController {
         return '拖曳移動地圖；雙指縮放、旋轉；滑鼠右鍵旋轉視角、滾輪縮放。';
       case 'road':
       case 'curve': {
-        if (this.draft.start && this.hover && (this.tool === 'road' || this.draft.control)) {
+        const { start, control } = this.draft;
+        if (start && this.hover && (this.tool === 'road' || control)) {
           const end = this.snapRoad(this.hover).snap;
-          const len = Math.round(Math.hypot(end.p.x - this.draft.start.p.x, end.p.y - this.draft.start.p.y));
-          const cost = this.city.roadCost(this.draft.start.p, this.draft.control, end.p);
-          return `約 ${len} 公尺 · $${cost.toLocaleString()}　點一下完成，再點起點結束拉路`;
+          const steep = this.city.gradeProblem(start, control, end, this.level);
+          if (steep) return steep;
+          const len = Math.round(Math.hypot(end.p.x - start.p.x, end.p.y - start.p.y));
+          const [ha, hb] = this.city.roadHeights(start, end, this.level);
+          const cost = this.city.roadCost(start.p, control, end.p, ha, hb);
+          const kind = ha === hb ? (ha > 0 ? '高架 ' : '') : '匝道 ';
+          return `${kind}約 ${len} 公尺 · $${cost.toLocaleString()}　點一下完成，再點起點結束拉路`;
         }
-        if (this.tool === 'curve') return this.draft.start ? '點一下決定彎曲的方向（控制點）' : '曲線道路：點起點 → 控制點 → 終點';
-        return this.draft.start ? '點終點；交叉處會自動變成路口' : '直線道路：點起點，再點終點，可連續拉路';
+        if (this.elevated && !start) {
+          return `高架道路：從地面道路接出會自動做成匝道（至少 ${Math.ceil(ELEVATED_HEIGHT / MAX_GRADE)} 公尺），跨過地面道路不會形成路口`;
+        }
+        if (this.tool === 'curve') return start ? '點一下決定彎曲的方向（控制點）' : '曲線道路：點起點 → 控制點 → 終點';
+        return start ? '點終點；交叉處會自動變成路口' : '直線道路：點起點，再點終點，可連續拉路';
       }
       case 'zone':
         return this.zone === Zone.None ? '在格子上塗抹以清除分區' : `塗抹道路旁的格子設為「${ZONES[this.zone].name}」；雙指移動地圖`;
@@ -109,6 +187,22 @@ export class ToolController {
         const v = this.city.traffic.vehicles;
         const avg = v.length ? (v.reduce((sum, x) => sum + x.speed, 0) / v.length) * 3.6 : 0;
         return `車輛 ${v.length} 台 · 平均 ${Math.round(avg)} km/h · 已完成 ${this.city.traffic.tripsCompleted.toLocaleString()} 趟　綠 = 順暢、紅 = 塞車`;
+      }
+      case 'bus': {
+        const n = this.lineDraft.length;
+        if (n === 1) return `已設 1 站（每站 $${STOP_COST}）；沿著路線點下一站`;
+        if (n > 1) return `已設 ${n} 站；點第一站或「完成路線」讓公車繞回起點`;
+        const t = this.city.transit;
+        const picked = this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
+        if (picked) {
+          return `${picked.id} 號線：公車 ${t.buses(picked.id).length} 台 · 全長 ${Math.round(picked.length).toLocaleString()} 公尺 · 累計載客 ${picked.riders.toLocaleString()} 人`;
+        }
+        if (!t.lines.size) return '公車：點地面道路設第一個站，依序點下一站，最後點回第一站完成路線';
+        let riders = 0;
+        let waiting = 0;
+        for (const l of t.lines.values()) riders += l.riders;
+        for (const st of t.stops.values()) waiting += t.waitingAt(st);
+        return `公車 ${t.buses().length} 台 · 累計載客 ${riders.toLocaleString()} 人 · 候車 ${waiting.toLocaleString()} 人　點道路開始新路線`;
       }
     }
   }
@@ -120,7 +214,8 @@ export class ToolController {
 
   onTap(p: Vec2): void {
     this.hover = p;
-    if (this.tool === 'road' || this.tool === 'curve') this.tapRoad(p);
+    if (this.isRoadTool) this.tapRoad(p);
+    else if (this.tool === 'bus') this.tapBus(p);
     else if (this.tool === 'bulldoze') {
       const r = this.city.bulldoze(p, Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6));
       if (r.ok) this.events.toast(`道路已拆除，退還 $${r.refund.toLocaleString()}`);
@@ -151,7 +246,7 @@ export class ToolController {
       this.draft.control = { x: p.x, y: p.y };
       return;
     }
-    const r = this.city.buildRoad(start, this.draft.control, s);
+    const r = this.city.buildRoad(start, this.draft.control, s, false, this.level);
     if (!r.ok) {
       if (r.reason) this.events.toast(r.reason);
       return;
@@ -161,23 +256,51 @@ export class ToolController {
     this.draft = { start: { kind: 'node', node: end, p: end.p }, control: null };
   }
 
+  private tapBus(p: Vec2): void {
+    const transit = this.city.transit;
+    const r = this.world.rig.snapRadius;
+    const first = this.lineDraft[0];
+    // Tapping the first stop again closes the loop
+    if (this.lineDraft.length >= 2 && transit.stopNear(p, r)?.id === first) {
+      this.finishLine();
+      return;
+    }
+    const stop = transit.stopAt(p, r);
+    if (!stop) {
+      this.events.toast('公車站要設在地面道路旁（高架道路不能設站）');
+      return;
+    }
+    if (stop.id === this.lineDraft[this.lineDraft.length - 1]) return;
+    this.lineDraft.push(stop.id);
+    this.draftPath = transit.plan(this.lineDraft, false).path;
+  }
+
   /** Pushes the current previews (ghost road, snap ring, brush) to the 3D view. */
   refresh(): void {
     const w = this.world;
-    const isRoad = this.tool === 'road' || this.tool === 'curve';
+    const isRoad = this.isRoadTool;
     const road = this.hover && isRoad ? this.snapRoad(this.hover) : null;
     const hoverSnap = road?.snap ?? null;
     w.setGuideLines(road?.guides ?? []);
     // Without hover (touch), keep marking where the road being drawn starts
     const marker = hoverSnap?.p ?? (isRoad ? (this.draft.start?.p ?? null) : this.tool === 'bulldoze' ? this.hover : null);
-    w.setCursor(marker, hoverSnap ? hoverSnap.kind !== 'free' || !!road?.guides.length : isRoad);
+    const markerHeight = hoverSnap ? this.city.net.snapHeight(hoverSnap, this.level) : this.draft.start ? this.city.net.snapHeight(this.draft.start, this.level) : 0;
+    w.setCursor(marker, hoverSnap ? hoverSnap.kind !== 'free' || !!road?.guides.length : isRoad, isRoad ? markerHeight : 0);
+    if (this.tool === 'bus') {
+      const t = this.city.transit;
+      const near = this.hover && (t.stopNear(this.hover, this.world.rig.snapRadius)?.p ?? t.locate(this.hover, this.world.rig.snapRadius)?.p);
+      w.setCursor(near ?? null, true);
+    }
+    w.setDraftLine(this.tool === 'bus' ? this.draftPath : null, LINE_COLORS[(this.city.transit.nextLine - 1) % LINE_COLORS.length]);
     w.setBrush(this.tool === 'zone' ? this.hover : null, this.brushRadius, this.zone === Zone.None ? 0xffffff : ZONES[this.zone].color);
     const { start, control } = this.draft;
     if (isRoad && start && hoverSnap) {
       const ctrl = this.tool === 'curve' ? (control ?? lerp(start.p, hoverSnap.p, 0.5)) : null;
       const end = hoverSnap.p;
-      const cost = this.city.roadCost(start.p, ctrl, end);
-      w.setPreview({ a: start.p, c: ctrl ?? lerp(start.p, end, 0.5), b: end }, cost <= this.city.money);
+      const [ha, hb] = this.city.roadHeights(start, hoverSnap, this.level);
+      const cost = this.city.roadCost(start.p, ctrl, end, ha, hb);
+      const ok = cost <= this.city.money && !this.city.gradeProblem(start, ctrl, hoverSnap, this.level);
+      w.setPreview({ a: start.p, c: ctrl ?? lerp(start.p, end, 0.5), b: end }, ok, ha, hb);
       w.setAngleGuides(angleGuides(this.city.net, start, ctrl, hoverSnap));
     } else {
       w.setPreview(null, true);
