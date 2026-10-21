@@ -7,7 +7,8 @@ import { ROAD_WIDTH } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { BuildingLayer } from './buildings';
 import { CameraRig } from './cameraRig';
-import { buildDashedLines, buildPreviewGeometry, buildRoadGeometries } from './roadMesh';
+import { buildDashedLines, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay } from './roadMesh';
+import { VehicleLayer } from './vehicles';
 
 const MAP_SIZE = 4000;
 const TREE_COUNT = 6000;
@@ -20,6 +21,9 @@ export class World {
   private readonly sun: THREE.DirectionalLight;
   private readonly roadGroup = new THREE.Group();
   private readonly buildings: BuildingLayer;
+  private readonly vehicles: VehicleLayer;
+  private readonly overlay: THREE.Mesh;
+  private overlayAge = Infinity;
   private readonly trees: { trunks: THREE.InstancedMesh; crowns: THREE.InstancedMesh; spots: { x: number; y: number; s: number; color: THREE.Color }[] };
   private readonly preview: THREE.Mesh;
   private readonly cursor: THREE.Mesh;
@@ -63,6 +67,15 @@ export class World {
     this.buildings = new BuildingLayer(shadows);
     this.scene.add(this.buildings.group);
     this.trees = this.makeTrees(shadows);
+    this.vehicles = new VehicleLayer(shadows);
+    this.scene.add(this.vehicles.group);
+    this.overlay = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3 }),
+    );
+    this.overlay.visible = false;
+    this.overlay.renderOrder = 1;
+    this.scene.add(this.overlay);
 
     this.preview = new THREE.Mesh(new THREE.BufferGeometry(), this.materials.preview);
     this.preview.visible = false;
@@ -178,6 +191,12 @@ export class World {
     this.lotsVersion = -1;
   }
 
+  /** Colours roads by congestion (the traffic view). */
+  setTrafficOverlay(on: boolean): void {
+    this.overlay.visible = on;
+    this.overlayAge = Infinity;
+  }
+
   setShowEmptyCells(on: boolean): void {
     if (on === this.showEmpty) return;
     this.showEmpty = on;
@@ -253,6 +272,17 @@ export class World {
     this.brush.position.set(p.x, 0.3, p.y);
     this.brush.scale.setScalar(radius);
     (this.brush.material as THREE.MeshBasicMaterial).color.setHex(color);
+  }
+
+  /** Per-frame updates: vehicles always, the traffic colours a few times a second. */
+  animate(city: City, dt: number): void {
+    this.vehicles.update(city.traffic);
+    if (!this.overlay.visible) return;
+    this.overlayAge += dt;
+    if (this.overlayAge < 0.5) return;
+    this.overlayAge = 0;
+    this.overlay.geometry.dispose();
+    this.overlay.geometry = buildTrafficOverlay(city.net, (seg, dir) => city.traffic.congestion(seg, dir));
   }
 
   sync(city: City): void {

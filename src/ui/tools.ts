@@ -6,7 +6,7 @@ import { ROAD_WIDTH, type Snap } from '../sim/roads';
 import { ZONES, Zone } from '../sim/zoning';
 import type { World } from '../render/world';
 
-export type Tool = 'pan' | 'road' | 'curve' | 'zone' | 'bulldoze';
+export type Tool = 'pan' | 'road' | 'curve' | 'zone' | 'bulldoze' | 'traffic';
 
 export const BRUSH_RADIUS = 18;
 
@@ -38,6 +38,7 @@ export class ToolController {
     this.tool = tool;
     this.cancel();
     this.world.setShowEmptyCells(tool === 'zone');
+    this.world.setTrafficOverlay(tool === 'traffic');
     this.refresh();
   }
 
@@ -93,6 +94,11 @@ export class ToolController {
         return this.zone === Zone.None ? '在格子上塗抹以清除分區' : `塗抹道路旁的格子設為「${ZONES[this.zone].name}」；雙指移動地圖`;
       case 'bulldoze':
         return '點一條道路拆除，退還一半費用';
+      case 'traffic': {
+        const v = this.city.traffic.vehicles;
+        const avg = v.length ? (v.reduce((sum, x) => sum + x.speed, 0) / v.length) * 3.6 : 0;
+        return `車輛 ${v.length} 台 · 平均 ${Math.round(avg)} km/h · 已完成 ${this.city.traffic.tripsCompleted.toLocaleString()} 趟　綠 = 順暢、紅 = 塞車`;
+      }
     }
   }
 
@@ -107,6 +113,7 @@ export class ToolController {
     else if (this.tool === 'bulldoze') {
       const r = this.city.bulldoze(p, Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6));
       if (r.ok) this.events.toast(`道路已拆除，退還 $${r.refund.toLocaleString()}`);
+      else if (r.reason) this.events.toast(r.reason);
     } else if (this.tool === 'zone') this.onPaint(p);
     this.events.changed();
     this.refresh();

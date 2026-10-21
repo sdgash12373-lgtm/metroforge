@@ -3,6 +3,8 @@ import type { CameraRig } from '../render/cameraRig';
 import type { ToolController } from './tools';
 
 const TAP_SLOP = 8;
+/** Twist needed before a two-finger gesture starts rotating (~9°), so pinches don't turn the view by accident. */
+const TWIST_DEADZONE = 0.16;
 
 interface Pointer {
   x: number;
@@ -17,7 +19,7 @@ type Gesture =
   | { kind: 'pan' }
   | { kind: 'orbit' }
   | { kind: 'paint' }
-  | { kind: 'pinch'; dist: number; angle: number; mid: { x: number; y: number } }
+  | { kind: 'pinch'; dist: number; angle: number; mid: { x: number; y: number }; twist: number; rotating: boolean }
   | { kind: 'idle' };
 
 /**
@@ -47,7 +49,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
     el.setPointerCapture(e.pointerId);
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, button: e.button });
     if (ptrs.size === 2) {
-      gesture = { kind: 'pinch', ...pinch() };
+      gesture = { kind: 'pinch', ...pinch(), twist: 0, rotating: false };
       return;
     }
     if (ptrs.size > 2) return;
@@ -75,9 +77,12 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
         const now = pinch();
         rig.pan(ground(gesture.mid.x, gesture.mid.y), ground(now.mid.x, now.mid.y));
         rig.zoomAt(gesture.dist / now.dist, ground(now.mid.x, now.mid.y));
-        rig.yaw += now.angle - gesture.angle;
-        rig.apply();
-        gesture = { kind: 'pinch', ...now };
+        let d = now.angle - gesture.angle;
+        d = Math.atan2(Math.sin(d), Math.cos(d));
+        const twist = gesture.twist + d;
+        const rotating = gesture.rotating || Math.abs(twist) > TWIST_DEADZONE;
+        if (rotating) rig.orbit(d, 0);
+        gesture = { kind: 'pinch', ...now, twist, rotating };
         return;
       }
       case 'pending':
@@ -89,9 +94,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
         rig.pan(ground(prev.x, prev.y), ground(p.x, p.y));
         break;
       case 'orbit':
-        rig.yaw -= (p.x - prev.x) * 0.005;
-        rig.pitch += (p.y - prev.y) * 0.004;
-        rig.apply();
+        rig.orbit(-(p.x - prev.x) * 0.005, (p.y - prev.y) * 0.004);
         break;
       case 'paint': {
         const g = ground(p.x, p.y);
@@ -156,9 +159,9 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
       const s = Math.sin(rig.yaw);
       rig.target.x += (fx * c + fy * s) * speed;
       rig.target.y += (-fx * s + fy * c) * speed;
-      if (keys.has('q')) rig.yaw += 1.5 * dt;
-      if (keys.has('e')) rig.yaw -= 1.5 * dt;
       rig.apply();
+      if (keys.has('q')) rig.orbit(1.5 * dt, 0);
+      if (keys.has('e')) rig.orbit(-1.5 * dt, 0);
     }
     requestAnimationFrame(step);
   };

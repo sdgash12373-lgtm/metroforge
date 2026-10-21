@@ -1,4 +1,4 @@
-import type { City } from '../sim/city';
+import { type City, MAX_TAX } from '../sim/city';
 import { ZONES, Zone } from '../sim/zoning';
 import type { Tool, ToolController } from './tools';
 
@@ -8,12 +8,15 @@ const TOOLS: { id: Tool; label: string; key: string }[] = [
   { id: 'curve', label: '曲線道路', key: '3' },
   { id: 'zone', label: '分區', key: '4' },
   { id: 'bulldoze', label: '拆除', key: '5' },
+  { id: 'traffic', label: '交通', key: '6' },
 ];
 
 export const SPEEDS = [0, 1, 3] as const;
 
 export interface HudActions {
   setSpeed(i: number): void;
+  /** returns the new state */
+  toggleBuildMode(): boolean;
   newCity(): void;
 }
 
@@ -34,6 +37,13 @@ export class Hud {
   private toolButtons = new Map<Tool, HTMLButtonElement>();
   private speedButtons: HTMLButtonElement[] = [];
   private toastTimer = 0;
+  private warning: HTMLElement;
+  private budgetPanel: HTMLElement;
+  private budgetRows: Record<'res' | 'biz' | 'roads' | 'net', HTMLElement>;
+  private taxInputs: { res: HTMLInputElement; biz: HTMLInputElement; resLabel: HTMLElement; bizLabel: HTMLElement };
+  private city: City | null = null;
+  private topBar: HTMLElement;
+  lockButton: HTMLButtonElement;
   speed = 1;
 
   constructor(
@@ -42,6 +52,7 @@ export class Hud {
     actions: HudActions,
   ) {
     const top = el('header', 'hud panel');
+    this.topBar = top;
     top.append(el('div', 'brand', '天際線'));
     const stat = (label: string) => {
       const box = el('div', 'stat');
@@ -75,6 +86,25 @@ export class Hud {
     });
     top.append(speeds);
 
+    const lock = el('button', 'chip', '建造模式');
+    lock.type = 'button';
+    lock.title = '鎖住視角的旋轉與傾斜，拉路時不會被手勢轉動（仍可移動、縮放）';
+    lock.onclick = () => {
+      const on = actions.toggleBuildMode();
+      lock.setAttribute('aria-pressed', String(on));
+      this.toast(on ? '建造模式：視角已鎖定，只能移動與縮放' : '已解除視角鎖定');
+    };
+    this.lockButton = lock;
+    top.append(lock);
+
+    const budgetBtn = el('button', 'chip', '預算');
+    budgetBtn.type = 'button';
+    budgetBtn.onclick = () => {
+      this.budgetPanel.hidden = !this.budgetPanel.hidden;
+      budgetBtn.setAttribute('aria-pressed', String(!this.budgetPanel.hidden));
+    };
+    top.append(budgetBtn);
+
     const reset = el('button', 'chip ghost', '新城市');
     reset.type = 'button';
     let armed = 0;
@@ -94,6 +124,44 @@ export class Hud {
     };
     top.append(reset);
 
+    this.warning = el('div', 'warning panel');
+    this.warning.hidden = true;
+
+    // Budget: last day's income and spending, and the two tax sliders
+    this.budgetPanel = el('section', 'budget panel');
+    this.budgetPanel.hidden = true;
+    this.budgetPanel.append(el('h2', '', '每日收支'));
+    const row = (label: string) => {
+      const r = el('div', 'brow');
+      const v = el('b');
+      r.append(el('span', '', label), v);
+      this.budgetPanel.append(r);
+      return v;
+    };
+    this.budgetRows = { res: row('住宅稅'), biz: row('商業稅'), roads: row('道路維護'), net: row('每日淨額') };
+    this.budgetRows.net.parentElement!.classList.add('total');
+    const slider = (id: string, label: string, onInput: (v: number) => void) => {
+      const wrap = el('label', 'tax');
+      wrap.htmlFor = id;
+      const value = el('b');
+      const input = el('input');
+      input.id = id;
+      input.type = 'range';
+      input.min = '0';
+      input.max = String(MAX_TAX);
+      input.step = '1';
+      input.oninput = () => onInput(Number(input.value));
+      const head = el('div', 'brow');
+      head.append(el('span', '', label), value);
+      wrap.append(head, input);
+      this.budgetPanel.append(wrap);
+      return { input, value };
+    };
+    const res = slider('tax-res', '住宅稅率', (v) => this.city && (this.city.taxes.residential = v));
+    const biz = slider('tax-biz', '商業稅率', (v) => this.city && (this.city.taxes.business = v));
+    this.taxInputs = { res: res.input, biz: biz.input, resLabel: res.value, bizLabel: biz.value };
+    this.budgetPanel.append(el('p', 'note', '稅率越高收入越多，但需求會下降；預設 9%。'));
+
     this.toastEl = el('div', 'toast panel');
     this.toastEl.setAttribute('role', 'status');
 
@@ -110,7 +178,7 @@ export class Hud {
       this.toolButtons.set(t.id, b);
     }
     bottom.append(this.hint, this.sub, dock);
-    root.append(top, this.toastEl, bottom);
+    root.append(top, this.warning, this.budgetPanel, this.toastEl, bottom);
 
     addEventListener('keydown', (e) => {
       const t = TOOLS.find((x) => x.key === e.key);
@@ -179,6 +247,33 @@ export class Hud {
   }
 
   update(city: City): void {
+    this.city = city;
+    const b = city.budget;
+    const money = (v: number) => `${v < 0 ? '−' : ''}$${Math.abs(Math.round(v)).toLocaleString()}`;
+    if (!this.budgetPanel.hidden) {
+      this.budgetRows.res.textContent = money(b.residentialTax);
+      this.budgetRows.biz.textContent = money(b.businessTax);
+      this.budgetRows.roads.textContent = money(-b.roadUpkeep);
+      const net = b.residentialTax + b.businessTax - b.roadUpkeep;
+      this.budgetRows.net.textContent = money(net);
+      this.budgetRows.net.classList.toggle('neg', net < 0);
+      for (const [input, label, v] of [
+        [this.taxInputs.res, this.taxInputs.resLabel, city.taxes.residential],
+        [this.taxInputs.biz, this.taxInputs.bizLabel, city.taxes.business],
+      ] as const) {
+        if (document.activeElement !== input) input.value = String(v);
+        label.textContent = `${v}%`;
+      }
+    }
+    // The top bar wraps to more rows on narrow screens; keep the panels just below it
+    const below = `${this.topBar.offsetTop + this.topBar.offsetHeight + 8}px`;
+    const lost = city.stats.disconnected;
+    this.warning.hidden = lost === 0;
+    if (lost) this.warning.textContent = `${lost} 格分區沒有道路連到高速公路，不會發展`;
+    const shift = `calc(${below} + ${this.warning.hidden ? 0 : this.warning.offsetHeight + 8}px)`;
+    this.warning.style.top = below;
+    this.budgetPanel.style.top = shift;
+    this.toastEl.style.top = shift;
     this.stats.pop.textContent = city.stats.population.toLocaleString();
     this.stats.jobs.textContent = city.stats.jobs.toLocaleString();
     this.stats.money.textContent = `$${Math.floor(city.money).toLocaleString()}`;
