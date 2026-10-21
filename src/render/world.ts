@@ -7,7 +7,9 @@ import { ROAD_WIDTH } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { BuildingLayer } from './buildings';
 import { CameraRig } from './cameraRig';
-import { buildDashedLines, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay } from './roadMesh';
+import type { PathPiece } from '../sim/transit';
+import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay } from './roadMesh';
+import { StopLayer } from './transit';
 import { VehicleLayer } from './vehicles';
 
 const MAP_SIZE = 4000;
@@ -22,6 +24,16 @@ export class World {
   private readonly roadGroup = new THREE.Group();
   private readonly buildings: BuildingLayer;
   private readonly vehicles: VehicleLayer;
+  private readonly stops: StopLayer;
+  /** bus routes, shown while the bus tool is active */
+  private readonly linePaths: THREE.Mesh;
+  /** route of the bus line being drawn */
+  private readonly draftLine: THREE.Mesh;
+  private transitVersion = -1;
+  private readonly ground: THREE.Mesh;
+  /** tunnels shown on the surface while building underground */
+  private readonly tunnels: THREE.Mesh;
+  private peopleAge = 0;
   private readonly overlay: THREE.Mesh;
   private overlayAge = Infinity;
   private readonly trees: { trunks: THREE.InstancedMesh; crowns: THREE.InstancedMesh; spots: { x: number; y: number; s: number; color: THREE.Color }[] };
@@ -41,13 +53,15 @@ export class World {
     asphalt: new THREE.MeshLambertMaterial({ color: 0x5f646b, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }),
     markings: new THREE.MeshBasicMaterial({ color: 0xf2e6b0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
     preview: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }),
+    concrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
+    tunnel: new THREE.MeshBasicMaterial({ color: 0x1c1f24, side: THREE.DoubleSide }),
   };
 
   constructor(container: HTMLElement, shadows: boolean) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = shadows;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     container.appendChild(this.renderer.domElement);
 
     this.rig = new CameraRig(1);
@@ -62,7 +76,8 @@ export class World {
     this.sun.shadow.bias = -0.0005;
     this.scene.add(this.sun, this.sun.target);
 
-    this.scene.add(this.makeGround());
+    this.ground = this.makeGround();
+    this.scene.add(this.ground);
     this.scene.add(this.roadGroup);
     this.buildings = new BuildingLayer(shadows);
     this.scene.add(this.buildings.group);
@@ -76,6 +91,24 @@ export class World {
     this.overlay.visible = false;
     this.overlay.renderOrder = 1;
     this.scene.add(this.overlay);
+    this.stops = new StopLayer(shadows);
+    this.scene.add(this.stops.group);
+    const pathMaterial = () =>
+      new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4 });
+    this.linePaths = new THREE.Mesh(new THREE.BufferGeometry(), pathMaterial());
+    this.linePaths.visible = false;
+    this.linePaths.renderOrder = 1;
+    this.draftLine = new THREE.Mesh(new THREE.BufferGeometry(), pathMaterial());
+    this.draftLine.visible = false;
+    this.draftLine.renderOrder = 2;
+    this.scene.add(this.linePaths, this.draftLine);
+    this.tunnels = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({ color: 0x3f8fd8, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    this.tunnels.visible = false;
+    this.tunnels.renderOrder = 2;
+    this.scene.add(this.tunnels);
 
     this.preview = new THREE.Mesh(new THREE.BufferGeometry(), this.materials.preview);
     this.preview.visible = false;
@@ -189,6 +222,7 @@ export class World {
   invalidate(): void {
     this.roadsVersion = -1;
     this.lotsVersion = -1;
+    this.transitVersion = -1;
   }
 
   /** Colours roads by congestion (the traffic view). */
@@ -204,13 +238,45 @@ export class World {
     this.lotsVersion = -1;
   }
 
-  setPreview(q: Quad | null, ok: boolean): void {
+  /** See-through ground, so tunnels and the one being drawn show beneath it. */
+  setXray(on: boolean): void {
+    const m = this.ground.material as THREE.MeshLambertMaterial;
+    if (m.transparent === on) return;
+    m.transparent = on;
+    m.opacity = on ? 0.3 : 1;
+    m.depthWrite = !on;
+    m.needsUpdate = true;
+    // The ghost road may be under the ground: draw it over everything
+    this.materials.preview.depthTest = !on;
+    this.materials.preview.needsUpdate = true;
+    this.scene.background = new THREE.Color(on ? 0x5d6b62 : 0xbcd8ea);
+  }
+
+  /** Shows tunnels on the surface above them. */
+  setUndergroundView(on: boolean): void {
+    this.tunnels.visible = on;
+  }
+
+  /** Shows the bus routes on the roads (the bus tool's view). */
+  setLineOverlay(on: boolean): void {
+    this.linePaths.visible = on;
+  }
+
+  /** Route of a bus line being planned, or null. */
+  setDraftLine(path: PathPiece[] | null, color: number): void {
+    this.draftLine.visible = !!path?.length;
+    if (!path?.length) return;
+    this.draftLine.geometry.dispose();
+    this.draftLine.geometry = buildLinePaths(this.cityRef!.net, [{ color, path }], 2.2);
+  }
+
+  setPreview(q: Quad | null, ok: boolean, ha = 0, hb = 0): void {
     if (!q) {
       this.preview.visible = false;
       return;
     }
     this.preview.geometry.dispose();
-    this.preview.geometry = buildPreviewGeometry(q);
+    this.preview.geometry = buildPreviewGeometry(q, ha, hb);
     this.materials.preview.color.setHex(ok ? 0xffffff : 0xff6b5b);
     this.preview.visible = true;
   }
@@ -258,10 +324,10 @@ export class World {
     this.guideLines.geometry = buildDashedLines(lines, Math.max(0.6, this.rig.distance * 0.004));
   }
 
-  setCursor(p: Vec2 | null, snapped: boolean): void {
+  setCursor(p: Vec2 | null, snapped: boolean, h = 0): void {
     this.cursor.visible = !!p;
     if (!p) return;
-    this.cursor.position.set(p.x, 0.3, p.y);
+    this.cursor.position.set(p.x, h + 0.3, p.y);
     const k = snapped ? 1.4 : 1;
     this.cursor.scale.setScalar(k);
   }
@@ -276,7 +342,12 @@ export class World {
 
   /** Per-frame updates: vehicles always, the traffic colours a few times a second. */
   animate(city: City, dt: number): void {
-    this.vehicles.update(city.traffic);
+    this.vehicles.update(city.traffic, (v) => city.transit.lines.get(v.line ?? -1)?.color ?? 0xf2b134);
+    this.peopleAge += dt;
+    if (this.peopleAge > 0.5) {
+      this.peopleAge = 0;
+      this.stops.updatePeople(city);
+    }
     if (!this.overlay.visible) return;
     this.overlayAge += dt;
     if (this.overlayAge < 0.5) return;
@@ -285,7 +356,16 @@ export class World {
     this.overlay.geometry = buildTrafficOverlay(city.net, (seg, dir) => city.traffic.congestion(seg, dir));
   }
 
+  private cityRef: City | null = null;
+
   sync(city: City): void {
+    this.cityRef = city;
+    if (city.transit.version !== this.transitVersion || city.roadsVersion !== this.roadsVersion) {
+      this.transitVersion = city.transit.version;
+      this.stops.rebuild(city);
+      this.linePaths.geometry.dispose();
+      this.linePaths.geometry = buildLinePaths(city.net, [...city.transit.lines.values()]);
+    }
     if (city.roadsVersion !== this.roadsVersion) {
       this.roadsVersion = city.roadsVersion;
       for (const child of [...this.roadGroup.children]) {
@@ -297,7 +377,13 @@ export class World {
       walk.receiveShadow = true;
       const asphalt = new THREE.Mesh(g.asphalt, this.materials.asphalt);
       asphalt.receiveShadow = true;
-      this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings));
+      this.tunnels.geometry.dispose();
+      this.tunnels.geometry = buildTunnelOverlay(city.net);
+      const concrete = new THREE.Mesh(g.concrete, this.materials.concrete);
+      concrete.castShadow = true;
+      concrete.receiveShadow = true;
+      const mouths = new THREE.Mesh(g.dark, this.materials.tunnel);
+      this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings), concrete, mouths);
       this.updateTrees(city);
     }
     if (city.lotsVersion !== this.lotsVersion) {

@@ -20,10 +20,23 @@ import type { Lot } from './zoning';
 export const ROAD_WIDTH = 10;
 /** Shortest road piece we keep; anything shorter is folded into a junction. */
 export const MIN_SEGMENT = 4;
+/** Deck height of elevated roads, enough for traffic to pass underneath. */
+export const ELEVATED_HEIGHT = 8;
+/** Depth of tunnels (negative height). */
+export const TUNNEL_DEPTH = -8;
+/** Roads closer in height than this at a crossing meet in a junction; otherwise one passes over the other. */
+export const LEVEL_TOLERANCE = 4;
+/** Steepest average slope a ramp may have (18 %). */
+export const MAX_GRADE = 0.18;
+
+/** Eases height along a segment so ramps start and end flat. */
+const ease = (t: number) => t * t * (3 - 2 * t);
 
 export interface RoadNode {
   id: number;
   p: Vec2;
+  /** height above ground; 0 for street level */
+  h: number;
 }
 
 export interface RoadSegment {
@@ -36,6 +49,8 @@ export interface RoadSegment {
   length: number;
   bbox: BBox;
   lots: Lot[];
+  /** traffic only drives a → b (roundabouts) */
+  oneway: boolean;
 }
 
 export type Snap =
@@ -66,15 +81,17 @@ export class RoadNetwork {
     return n;
   }
 
-  addNode(p: Vec2, id?: number): RoadNode {
-    const n = { id: id ?? this.nextNode++, p: { x: p.x, y: p.y } };
+  addNode(p: Vec2, id?: number, h = 0): RoadNode {
+    const n = { id: id ?? this.nextNode++, p: { x: p.x, y: p.y }, h };
     this.nextNode = Math.max(this.nextNode, n.id + 1);
     this.nodes.set(n.id, n);
     return n;
   }
 
-  createSegment(a: number, b: number, c: Vec2, from?: RoadSegment, id?: number): RoadSegment {
+  /** New segment a → b. Pieces of a split segment keep its one-way setting. */
+  createSegment(a: number, b: number, c: Vec2, from?: RoadSegment, id?: number, oneway = from?.oneway ?? false): RoadSegment {
     const seg: RoadSegment = {
+      oneway,
       id: id ?? this.nextSeg++,
       a,
       b,
@@ -94,6 +111,30 @@ export class RoadNetwork {
     return seg;
   }
 
+  /** Road height at curve parameter t. */
+  heightAt(seg: RoadSegment, t: number): number {
+    const ha = this.node(seg.a).h;
+    const hb = this.node(seg.b).h;
+    return ha + (hb - ha) * ease(t);
+  }
+
+  /** True when any part of the segment is off the ground (elevated road or ramp). */
+  isRaised(seg: RoadSegment): boolean {
+    return this.node(seg.a).h > 0 || this.node(seg.b).h > 0;
+  }
+
+  /** An ordinary two-way road at ground level: the kind buildings and bus stops can front onto. */
+  isStreet(seg: RoadSegment): boolean {
+    return !seg.oneway && this.node(seg.a).h === 0 && this.node(seg.b).h === 0;
+  }
+
+  /** Height a snap would join the network at (free points take `free`). */
+  snapHeight(s: Snap, free: number): number {
+    if (s.kind === 'node') return s.node.h;
+    if (s.kind === 'segment') return this.heightAt(s.seg, s.t);
+    return free;
+  }
+
   degree(nodeId: number): number {
     let d = 0;
     for (const s of this.segments.values()) if (s.a === nodeId || s.b === nodeId) d++;
@@ -105,10 +146,23 @@ export class RoadNetwork {
     return null;
   }
 
-  snap(p: Vec2, radius: number): Snap {
+  /**
+   * Nearest node, else nearest road, within radius. With a height, roads on that level win;
+   * other levels are only used when nothing on the level is in reach.
+   */
+  snap(p: Vec2, radius: number, h?: number): Snap {
+    if (h !== undefined) {
+      const level = this.snapLevel(p, radius, h);
+      if (level.kind !== 'free') return level;
+    }
+    return this.snapLevel(p, radius);
+  }
+
+  private snapLevel(p: Vec2, radius: number, h?: number): Snap {
     let bestNode: RoadNode | null = null;
     let bd = radius;
     for (const n of this.nodes.values()) {
+      if (h !== undefined && Math.abs(n.h - h) >= LEVEL_TOLERANCE) continue;
       const d = dist(n.p, p);
       if (d < bd) {
         bd = d;
@@ -116,29 +170,31 @@ export class RoadNetwork {
       }
     }
     if (bestNode) return { kind: 'node', node: bestNode, p: bestNode.p };
-    const hit = this.segmentAt(p, radius);
+    const hit = this.segmentAt(p, radius, h);
     if (hit) return { kind: 'segment', seg: hit.seg, t: hit.t, p: quadPoint(this.quad(hit.seg), hit.t) };
     return { kind: 'free', p: { x: p.x, y: p.y } };
   }
 
-  segmentAt(p: Vec2, radius: number): { seg: RoadSegment; t: number; d: number } | null {
+  /** Nearest road within radius; with a height, only roads at that level there. */
+  segmentAt(p: Vec2, radius: number, h?: number): { seg: RoadSegment; t: number; d: number } | null {
     let best: { seg: RoadSegment; t: number; d: number } | null = null;
     for (const seg of this.segments.values()) {
       if (!bboxNear(seg.bbox, p, radius)) continue;
       const r = closestOnSamples(seg.samples, p);
+      if (h !== undefined && Math.abs(this.heightAt(seg, r.t) - h) >= LEVEL_TOLERANCE) continue;
       if (r.d < radius && (!best || r.d < best.d)) best = { seg, t: r.t, d: r.d };
     }
     return best;
   }
 
-  /** Turns a snap into a node, splitting a segment if needed. */
-  resolve(s: Snap): RoadNode {
+  /** Turns a snap into a node, splitting a segment if needed. New free nodes sit at height h. */
+  resolve(s: Snap, h = 0): RoadNode {
     if (s.kind === 'node') return s.node;
     if (s.kind === 'segment') return this.split(s.seg, s.t);
-    // A free point exactly on an existing road still joins it
-    const exact = this.snap(s.p, 0.5);
+    // A free point exactly on an existing road at the same level still joins it
+    const exact = this.snapLevel(s.p, 0.5, h);
     if (exact.kind !== 'free') return this.resolve(exact);
-    return this.addNode(s.p);
+    return this.addNode(s.p, undefined, h);
   }
 
   /** Splits a segment at t. Returns the existing end node when t is too close to an end. */
@@ -148,7 +204,7 @@ export class RoadNetwork {
     if (dist(p, q.a) < MIN_SEGMENT) return this.node(seg.a);
     if (dist(p, q.b) < MIN_SEGMENT) return this.node(seg.b);
     const [q1, q2] = splitQuad(q, t);
-    const n = this.addNode(p);
+    const n = this.addNode(p, undefined, this.heightAt(seg, t));
     this.segments.delete(seg.id);
     this.createSegment(seg.a, n.id, q1.c, seg);
     this.createSegment(n.id, seg.b, q2.c, seg);
@@ -157,26 +213,30 @@ export class RoadNetwork {
   }
 
   /**
-   * Builds a road from start to end (control = null for straight). Snaps both ends,
-   * and splits wherever the new road crosses an existing one so every crossing is a junction.
+   * Builds a road from start to end (control = null for straight). Snaps both ends, and splits
+   * wherever the new road crosses an existing one at the same level so those crossings are junctions.
+   * Free ends are placed at `height`; an end on an existing road takes that road's height, which makes ramps.
    */
-  addRoad(start: Snap, control: Vec2 | null, end: Snap): RoadSegment[] {
-    const A = this.resolve(start);
+  addRoad(start: Snap, control: Vec2 | null, end: Snap, height = 0, oneway = false): RoadSegment[] {
+    const A = this.resolve(start, height);
     // Resolving the start may have split the segment the end was snapped to
-    const B = this.resolve(end.kind === 'segment' ? this.snap(end.p, 0.5) : end);
+    const B = this.resolve(end.kind === 'segment' ? this.snap(end.p, 0.5, this.heightAt(end.seg, end.t)) : end, height);
     if (A.id === B.id) return [];
     const quad: Quad = { a: A.p, c: control ?? lerp(A.p, B.p, 0.5), b: B.p };
     const samples = sampleQuad(quad, 48);
     const box = bboxOf(samples);
 
     // Collect crossings with existing roads, away from the two ends
-    const hits: { ta: number; p: Vec2 }[] = [];
+    const hits: { ta: number; p: Vec2; h: number }[] = [];
     for (const seg of this.segments.values()) {
       if (!bboxOverlap(box, seg.bbox, 1)) continue;
       for (const x of curveIntersections(samples, seg.samples)) {
         const p = quadPoint(quad, x.ta);
         if (dist(p, A.p) < MIN_SEGMENT || dist(p, B.p) < MIN_SEGMENT) continue;
-        hits.push({ ta: x.ta, p });
+        const h = A.h + (B.h - A.h) * ease(x.ta);
+        // Grade-separated: one road passes over the other
+        if (Math.abs(h - this.heightAt(seg, x.tb)) >= LEVEL_TOLERANCE) continue;
+        hits.push({ ta: x.ta, p, h });
       }
     }
     hits.sort((x, y) => x.ta - y.ta);
@@ -184,7 +244,7 @@ export class RoadNetwork {
     // Turn crossings into junction nodes (each may split an existing segment)
     const chain: { node: RoadNode; t: number }[] = [{ node: A, t: 0 }];
     for (const h of hits) {
-      const node = this.resolve(this.snap(h.p, 1));
+      const node = this.resolve(this.snap(h.p, 1, h.h), h.h);
       const last = chain[chain.length - 1];
       if (node.id !== last.node.id && dist(node.p, last.node.p) >= MIN_SEGMENT) chain.push({ node, t: h.ta });
     }
@@ -208,7 +268,7 @@ export class RoadNetwork {
       const from = chain[i - 1].node;
       const existing = this.connected(from.id, node.id);
       if (existing && control === null) continue;
-      created.push(this.createSegment(from.id, node.id, piece.c));
+      created.push(this.createSegment(from.id, node.id, piece.c, undefined, undefined, oneway));
     }
     return created;
   }

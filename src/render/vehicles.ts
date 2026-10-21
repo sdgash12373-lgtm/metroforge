@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { Traffic } from '../sim/traffic';
+import type { Traffic, Vehicle } from '../sim/traffic';
+import { PORTAL_DEPTH } from './roadMesh';
 
 const MAX = 1200;
 const CAR_COLORS = [0xe4572e, 0x2e86ab, 0xf2f2f2, 0x3b3b3b, 0xf2b134, 0x6a994e, 0xa23b72, 0x9aa5b1];
@@ -19,11 +20,22 @@ function truck(): THREE.BufferGeometry {
   return mergeGeometries([cab, box])!;
 }
 
+function bus(): THREE.BufferGeometry {
+  return new THREE.BoxGeometry(11.6, 2.5, 2.5).translate(0, 1.65, 0);
+}
+
+/** Dark glass band around the bus, slightly proud of the body. */
+function busWindows(): THREE.BufferGeometry {
+  return new THREE.BoxGeometry(11, 0.9, 2.56).translate(0.1, 2.1, 0);
+}
+
 /** Draws every vehicle as an instance, re-posed each frame. */
 export class VehicleLayer {
   readonly group = new THREE.Group();
   private cars: THREE.InstancedMesh;
   private trucks: THREE.InstancedMesh;
+  private buses: THREE.InstancedMesh;
+  private windows: THREE.InstancedMesh;
   private m = new THREE.Matrix4();
   private q = new THREE.Quaternion();
   private p = new THREE.Vector3();
@@ -35,7 +47,9 @@ export class VehicleLayer {
     const mat = new THREE.MeshLambertMaterial({ flatShading: true });
     this.cars = new THREE.InstancedMesh(car(), mat, MAX);
     this.trucks = new THREE.InstancedMesh(truck(), mat, MAX / 4);
-    for (const m of [this.cars, this.trucks]) {
+    this.buses = new THREE.InstancedMesh(bus(), mat, MAX / 8);
+    this.windows = new THREE.InstancedMesh(busWindows(), new THREE.MeshLambertMaterial({ color: 0x2b3a46 }), MAX / 8);
+    for (const m of [this.cars, this.trucks, this.buses, this.windows]) {
       m.count = 0;
       m.frustumCulled = false;
       m.castShadow = shadows;
@@ -43,19 +57,28 @@ export class VehicleLayer {
     }
   }
 
-  update(traffic: Traffic): void {
+  /** `busColor` gives each bus its line colour. */
+  update(traffic: Traffic, busColor: (v: Vehicle) => number): void {
     let c = 0;
     let t = 0;
+    let b = 0;
     for (const v of traffic.vehicles) {
       const pose = traffic.pose(v);
       if (!pose) continue;
-      const mesh = v.kind === 'truck' ? this.trucks : this.cars;
-      const i = v.kind === 'truck' ? t : c;
+      const mesh = v.kind === 'truck' ? this.trucks : v.kind === 'bus' ? this.buses : this.cars;
+      const i = v.kind === 'truck' ? t : v.kind === 'bus' ? b : c;
       if (i >= mesh.instanceMatrix.count) continue;
       this.q.setFromAxisAngle(this.up, Math.atan2(-pose.heading.y, pose.heading.x));
-      this.p.set(pose.p.x, 0.1, pose.p.y);
+      // Ramps into tunnels are drawn at street level up to the portal
+      this.p.set(pose.p.x, (pose.h > PORTAL_DEPTH ? Math.max(0, pose.h) : pose.h) + 0.1, pose.p.y);
       this.m.compose(this.p, this.q, this.one);
       mesh.setMatrixAt(i, this.m);
+      if (v.kind === 'bus') {
+        this.windows.setMatrixAt(i, this.m);
+        mesh.setColorAt(i, this.c.setHex(busColor(v)));
+        b++;
+        continue;
+      }
       const palette = v.kind === 'truck' ? TRUCK_COLORS : CAR_COLORS;
       mesh.setColorAt(i, this.c.setHex(palette[Math.floor(v.tint * palette.length) % palette.length]));
       if (v.kind === 'truck') t++;
@@ -63,7 +86,9 @@ export class VehicleLayer {
     }
     this.cars.count = c;
     this.trucks.count = t;
-    for (const m of [this.cars, this.trucks]) {
+    this.buses.count = b;
+    this.windows.count = b;
+    for (const m of [this.cars, this.trucks, this.buses, this.windows]) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
     }

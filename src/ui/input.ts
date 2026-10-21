@@ -19,12 +19,15 @@ type Gesture =
   | { kind: 'pan' }
   | { kind: 'orbit' }
   | { kind: 'paint' }
+  /** a finger placing the end of the road being drawn: the ghost road follows it, lifting builds */
+  | { kind: 'aim' }
   | { kind: 'pinch'; dist: number; angle: number; mid: { x: number; y: number }; twist: number; rotating: boolean }
   | { kind: 'idle' };
 
 /**
  * Mouse and touch on the map.
- * One finger / left button: the active tool (tap), or move the map on drag.
+ * One finger / left button: the active tool (tap), or move the map on drag. While a road is being
+ * drawn, a finger drag moves the road's end instead and lifting the finger builds it.
  * Two fingers: pinch zoom, twist rotate, drag to move. Right button: orbit. Wheel: zoom.
  */
 export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolController): void {
@@ -55,7 +58,10 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
     if (ptrs.size > 2) return;
     if (e.button === 2) gesture = { kind: 'orbit' };
     else if (e.button === 1 || tools.tool === 'pan') gesture = { kind: 'pan' };
-    else if (tools.paintsOnDrag) {
+    else if (e.pointerType !== 'mouse' && tools.aimsOnDrag) {
+      gesture = { kind: 'aim' };
+      tools.onHover(ground(e.clientX, e.clientY));
+    } else if (tools.paintsOnDrag) {
       gesture = { kind: 'paint' };
       const p = ground(e.clientX, e.clientY);
       if (p) tools.onPaint(p);
@@ -101,6 +107,8 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
         if (g) tools.onPaint(g);
         return;
       }
+      case 'aim':
+        break;
     }
     tools.onHover(ground(p.x, p.y));
   });
@@ -108,7 +116,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
   const end = (e: PointerEvent) => {
     const p = ptrs.get(e.pointerId);
     if (!p) return;
-    if (gesture.kind === 'pending' && ptrs.size === 1 && e.type === 'pointerup') {
+    if ((gesture.kind === 'pending' || gesture.kind === 'aim') && ptrs.size === 1 && e.type === 'pointerup') {
       const g = ground(e.clientX, e.clientY);
       if (g) tools.onTap(g);
     }
