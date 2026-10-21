@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { type Quad, type Sample, normalize, sampleQuad } from '../sim/geometry';
+import { type Quad, type Sample, type Vec2, normalize, sampleQuad } from '../sim/geometry';
 import { ROAD_WIDTH, type RoadNetwork } from '../sim/roads';
 
 const ASPHALT_WIDTH = 7;
@@ -61,7 +61,7 @@ function ribbon(b: Builder, s: Sample[], width: number): void {
   }
 }
 
-function dashes(b: Builder, s: Sample[], skip: number): void {
+function dashes(b: Builder, s: Sample[], skip: number, width = MARK_WIDTH): void {
   const len = s[s.length - 1].s;
   let j = 1;
   for (let start = skip; start + DASH < len - skip; start += DASH + GAP) {
@@ -73,7 +73,7 @@ function dashes(b: Builder, s: Sample[], skip: number): void {
       const f = (d - a.s) / (c.s - a.s || 1);
       pts.push({ x: a.x + (c.x - a.x) * f, y: a.y + (c.y - a.y) * f, t: 0, s: d });
     }
-    ribbon(b, pts, MARK_WIDTH);
+    ribbon(b, pts, width);
   }
 }
 
@@ -106,5 +106,15 @@ export function buildPreviewGeometry(q: Quad): THREE.BufferGeometry {
   ribbon(b, s, ROAD_WIDTH);
   b.disc(q.a.x, q.a.y, ROAD_WIDTH / 2);
   b.disc(q.b.x, q.b.y, ROAD_WIDTH / 2);
+  return b.geometry();
+}
+
+/** Dashed straight lines on the ground, e.g. alignment guides. */
+export function buildDashedLines(lines: { from: Vec2; to: Vec2 }[], width: number): THREE.BufferGeometry {
+  const b = new Builder(0.4);
+  for (const l of lines) {
+    const len = Math.hypot(l.to.x - l.from.x, l.to.y - l.from.y);
+    dashes(b, [{ ...l.from, t: 0, s: 0 }, { ...l.to, t: 1, s: len }], 0, width);
+  }
   return b.geometry();
 }

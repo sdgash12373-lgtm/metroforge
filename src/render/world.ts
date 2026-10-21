@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import type { AngleGuide } from '../sim/angles';
 import type { City } from '../sim/city';
+import type { GuideLine } from '../sim/guides';
 import { type Quad, type Vec2, closestOnSamples, bboxNear, hash01 } from '../sim/geometry';
 import { ROAD_WIDTH } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { BuildingLayer } from './buildings';
 import { CameraRig } from './cameraRig';
-import { buildPreviewGeometry, buildRoadGeometries } from './roadMesh';
+import { buildDashedLines, buildPreviewGeometry, buildRoadGeometries } from './roadMesh';
 
 const MAP_SIZE = 4000;
 const TREE_COUNT = 6000;
@@ -24,6 +25,7 @@ export class World {
   private readonly cursor: THREE.Mesh;
   private readonly brush: THREE.Mesh;
   private readonly angleGroup = new THREE.Group();
+  private readonly guideLines: THREE.Mesh;
   private readonly angleLabels: HTMLElement;
   private guides: { at: THREE.Vector3; label: HTMLElement }[] = [];
   private readonly projected = new THREE.Vector3();
@@ -77,7 +79,13 @@ export class World {
     );
     this.brush.renderOrder = 3;
     this.brush.visible = false;
-    this.scene.add(this.preview, this.cursor, this.brush, this.angleGroup);
+    this.guideLines = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9, side: THREE.DoubleSide }),
+    );
+    this.guideLines.renderOrder = 4;
+    this.guideLines.visible = false;
+    this.scene.add(this.preview, this.cursor, this.brush, this.angleGroup, this.guideLines);
     this.angleLabels = document.createElement('div');
     this.angleLabels.className = 'angle-labels';
     container.after(this.angleLabels);
@@ -221,6 +229,14 @@ export class World {
       this.angleLabels.append(label);
       this.guides.push({ at, label });
     }
+  }
+
+  /** Dashed alignment lines from existing road ends to the snapped point. */
+  setGuideLines(lines: GuideLine[]): void {
+    this.guideLines.visible = lines.length > 0;
+    if (!lines.length) return;
+    this.guideLines.geometry.dispose();
+    this.guideLines.geometry = buildDashedLines(lines, Math.max(0.6, this.rig.distance * 0.004));
   }
 
   setCursor(p: Vec2 | null, snapped: boolean): void {

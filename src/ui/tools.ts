@@ -1,5 +1,6 @@
 import { angleGuides } from '../sim/angles';
 import type { City } from '../sim/city';
+import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, lerp } from '../sim/geometry';
 import { ROAD_WIDTH, type Snap } from '../sim/roads';
 import { ZONES, Zone } from '../sim/zoning';
@@ -65,6 +66,14 @@ export class ToolController {
     return this.city.net.snap(p, this.world.rig.snapRadius);
   }
 
+  /** Road-tool snap: existing roads first, then alignment with other road ends. */
+  private snapRoad(p: Vec2): { snap: Snap; guides: GuideLine[] } {
+    const s = this.snap(p);
+    if (s.kind !== 'free') return { snap: s, guides: [] };
+    const a = alignToGuides(this.city.net, p, this.world.rig.snapRadius * 0.6);
+    return { snap: { kind: 'free', p: a.p }, guides: a.lines };
+  }
+
   hint(): string {
     switch (this.tool) {
       case 'pan':
@@ -72,7 +81,7 @@ export class ToolController {
       case 'road':
       case 'curve': {
         if (this.draft.start && this.hover && (this.tool === 'road' || this.draft.control)) {
-          const end = this.snap(this.hover);
+          const end = this.snapRoad(this.hover).snap;
           const len = Math.round(Math.hypot(end.p.x - this.draft.start.p.x, end.p.y - this.draft.start.p.y));
           const cost = this.city.roadCost(this.draft.start.p, this.draft.control, end.p);
           return `約 ${len} 公尺 · $${cost.toLocaleString()}　點一下完成，再點起點結束拉路`;
@@ -110,7 +119,7 @@ export class ToolController {
   }
 
   private tapRoad(p: Vec2): void {
-    const s = this.snap(p);
+    const s = this.snapRoad(p).snap;
     const { start } = this.draft;
     if (!start) {
       this.draft.start = s;
@@ -138,10 +147,12 @@ export class ToolController {
   refresh(): void {
     const w = this.world;
     const isRoad = this.tool === 'road' || this.tool === 'curve';
-    const hoverSnap = this.hover && isRoad ? this.snap(this.hover) : null;
+    const road = this.hover && isRoad ? this.snapRoad(this.hover) : null;
+    const hoverSnap = road?.snap ?? null;
+    w.setGuideLines(road?.guides ?? []);
     // Without hover (touch), keep marking where the road being drawn starts
     const marker = hoverSnap?.p ?? (isRoad ? (this.draft.start?.p ?? null) : this.tool === 'bulldoze' ? this.hover : null);
-    w.setCursor(marker, hoverSnap ? hoverSnap.kind !== 'free' : isRoad);
+    w.setCursor(marker, hoverSnap ? hoverSnap.kind !== 'free' || !!road?.guides.length : isRoad);
     w.setBrush(this.tool === 'zone' ? this.hover : null, BRUSH_RADIUS, this.zone === Zone.None ? 0xffffff : ZONES[this.zone].color);
     const { start, control } = this.draft;
     if (isRoad && start && hoverSnap) {

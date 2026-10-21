@@ -3,6 +3,7 @@ import { City } from '../src/sim/city';
 import { curveIntersections, quadPoint, sampleQuad, splitQuad } from '../src/sim/geometry';
 import { Zone } from '../src/sim/zoning';
 import { angleGuides } from '../src/sim/angles';
+import { alignToGuides } from '../src/sim/guides';
 
 const free = (x: number, y: number) => ({ kind: 'free' as const, p: { x, y } });
 const snap = (city: City, x: number, y: number) => city.net.snap({ x, y }, 6);
@@ -160,5 +161,36 @@ describe('angle guides', () => {
   it('has no guide where the road starts on empty ground', () => {
     const city = new City();
     expect(angleGuides(city.net, free(0, 0), null, free(50, 0))).toHaveLength(0);
+  });
+});
+
+describe('alignment guides', () => {
+  it('lines a new road end up with the end of a parallel road', () => {
+    const city = new City();
+    city.buildRoad(free(0, 0), null, free(100, 0), true);
+    // Drawing a parallel road 60 m away; the cursor stops 2 m short of the first road's end
+    const r = alignToGuides(city.net, { x: 98, y: 60 }, 5);
+    expect(r.p.x).toBeCloseTo(100, 6);
+    expect(r.p.y).toBeCloseTo(60, 6);
+    expect(r.lines).toHaveLength(1);
+    expect(r.lines[0].from).toEqual({ x: 100, y: 0 });
+  });
+
+  it('snaps to where two guides cross', () => {
+    const city = new City();
+    city.buildRoad(free(0, 0), null, free(100, 0), true);
+    city.buildRoad(free(200, 100), null, free(200, 200), true);
+    // Extension of road 1 (y = 0) meets the extension of road 2 (x = 200) at (200, 0)
+    const r = alignToGuides(city.net, { x: 197, y: 3 }, 6);
+    expect(r.p.x).toBeCloseTo(200, 6);
+    expect(r.p.y).toBeCloseTo(0, 6);
+    expect(r.lines).toHaveLength(2);
+  });
+
+  it('leaves points far from every guide alone', () => {
+    const city = new City();
+    city.buildRoad(free(0, 0), null, free(100, 0), true);
+    const p = { x: 140, y: 47 };
+    expect(alignToGuides(city.net, p, 5)).toEqual({ p, lines: [] });
   });
 });
