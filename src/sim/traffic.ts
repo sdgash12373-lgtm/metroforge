@@ -14,7 +14,7 @@ const MIN_GAP = 2.0;
 export const GIVE_UP_AFTER = 40;
 
 export type Dir = 1 | -1;
-export type VehicleKind = 'car' | 'truck' | 'bus';
+export type VehicleKind = 'car' | 'truck' | 'bus' | 'metro' | 'train' | 'hsr';
 
 /** One travel direction of one segment. */
 export interface LaneRef {
@@ -24,7 +24,28 @@ export interface LaneRef {
 
 export const laneKey = (seg: number, dir: Dir): number => seg * 2 + (dir === 1 ? 0 : 1);
 
-export const VEHICLE_LENGTH: Record<VehicleKind, number> = { car: 4.5, truck: 8, bus: 12 };
+/** Trains are drawn as a row of cars of this length. */
+export const TRAIN_CARS: Partial<Record<VehicleKind, { cars: number; length: number }>> = {
+  metro: { cars: 3, length: 18 },
+  train: { cars: 4, length: 20 },
+  hsr: { cars: 6, length: 20 },
+};
+
+export const VEHICLE_LENGTH: Record<VehicleKind, number> = { car: 4.5, truck: 8, bus: 12, metro: 54, train: 80, hsr: 120 };
+
+/** How vehicles drive on one network: roads, or the tracks of one kind of train. */
+export interface DrivingRules {
+  /** top speed, m/s */
+  speed: number;
+  accel: number;
+  brake: number;
+  /** lane (or track) centre offset from the centre line */
+  laneOffset: number;
+  /** vehicles on a line may turn back at a stop instead of driving on */
+  reverses: boolean;
+}
+
+export const ROAD_RULES: DrivingRules = { speed: SPEED_LIMIT, accel: ACCEL, brake: BRAKE, laneOffset: LANE_OFFSET, reverses: false };
 
 export interface Vehicle {
   id: number;
@@ -42,7 +63,7 @@ export interface Vehicle {
   tint: number;
   /** seconds spent stopped in a row */
   stuck: number;
-  /** buses: the line they run on, the index of the stop they are heading to, and seconds left at a stop */
+  /** buses and trains: the line they run on, the index of the stop they are heading to, and seconds left at a stop */
   line?: number;
   next?: number;
   dwell?: number;
@@ -50,8 +71,8 @@ export interface Vehicle {
   load?: Map<number, number>;
 }
 
-/** Called when a bus reaches the stop it was heading to, and when it is ready to leave. */
-export interface BusHooks {
+/** Called when a bus or train reaches the stop it was heading to, and when it is ready to leave. */
+export interface LineHooks {
   /** unloads and boards riders; returns seconds to wait at the stop */
   arrive(v: Vehicle): number;
   /** sets the route to the next stop; false takes the bus off the road */
@@ -112,11 +133,14 @@ export class Traffic {
   nextId = 1;
   tripsCompleted = 0;
   tripsAbandoned = 0;
-  busHooks: BusHooks | null = null;
+  lineHooks: LineHooks | null = null;
   /** vehicles currently on each lane, sorted back to front */
   private lanes = new Map<number, Vehicle[]>();
 
-  constructor(private net: RoadNetwork) {}
+  constructor(
+    private net: RoadNetwork,
+    readonly rules: DrivingRules = ROAD_RULES,
+  ) {}
 
   setNetwork(net: RoadNetwork): void {
     this.net = net;
@@ -135,7 +159,7 @@ export class Traffic {
 
   /** Expected seconds to drive a lane, slower when it is busy. */
   private laneTime(seg: RoadSegment, dir: Dir): number {
-    return seg.length / (SPEED_LIMIT * (1 - 0.8 * this.congestion(seg, dir)));
+    return seg.length / (this.rules.speed * (1 - 0.8 * this.congestion(seg, dir)));
   }
 
   /**
@@ -159,7 +183,8 @@ export class Traffic {
       };
     }
     const goal = this.net.node(s1.a).p;
-    const h = (n: number) => dist(this.net.node(n).p, goal) / SPEED_LIMIT;
+    const speed = this.rules.speed;
+    const h = (n: number) => dist(this.net.node(n).p, goal) / speed;
     const cost = new Map<number, number>();
     const prev = new Map<number, { node: number; lane: LaneRef } | null>();
     const heap = new MinHeap();
@@ -170,8 +195,8 @@ export class Traffic {
         heap.push(node, c + h(node));
       }
     };
-    if (startDir !== -1) start(s0.b, (s0.length - from.s) / SPEED_LIMIT, { seg: s0.id, dir: 1 });
-    if (startDir !== 1) start(s0.a, from.s / SPEED_LIMIT, { seg: s0.id, dir: -1 });
+    if (startDir !== -1) start(s0.b, (s0.length - from.s) / speed, { seg: s0.id, dir: 1 });
+    if (startDir !== 1) start(s0.a, from.s / speed, { seg: s0.id, dir: -1 });
 
     const adj = this.adjacency();
     const done = new Set<number>();
@@ -190,8 +215,8 @@ export class Traffic {
       }
     }
     // Enter the destination segment from whichever end is cheaper
-    const viaA = (cost.get(s1.a) ?? Infinity) + to.s / SPEED_LIMIT;
-    const viaB = s1.oneway ? Infinity : (cost.get(s1.b) ?? Infinity) + (s1.length - to.s) / SPEED_LIMIT;
+    const viaA = (cost.get(s1.a) ?? Infinity) + to.s / speed;
+    const viaB = s1.oneway ? Infinity : (cost.get(s1.b) ?? Infinity) + (s1.length - to.s) / speed;
     if (!Number.isFinite(Math.min(viaA, viaB))) return null;
     const endNode = viaA <= viaB ? s1.a : s1.b;
     const lastLane: LaneRef = { seg: s1.id, dir: viaA <= viaB ? 1 : -1 };
@@ -260,13 +285,20 @@ export class Traffic {
     return v;
   }
 
-  /** Sends a vehicle on from where it is now to a new destination, without turning around on the spot. */
+  /**
+   * Sends a vehicle on from where it is now to a new destination. Road vehicles never turn around on
+   * the spot; trains (rules.reverses) may set off the other way.
+   */
   retarget(v: Vehicle, to: RoadPoint): boolean {
     const seg = this.net.segments.get(v.seg);
     if (!seg) return false;
     const here = { seg: v.seg, s: v.dir === 1 ? v.pos : seg.length - v.pos };
-    const r = this.findRoute(here, to, v.dir);
+    const r = this.findRoute(here, to, this.rules.reverses ? undefined : v.dir);
     if (!r) return false;
+    if (r.first.dir !== v.dir) {
+      v.dir = r.first.dir;
+      v.pos = r.startPos;
+    }
     v.route = r.route;
     v.dest = r.dest;
     return true;
@@ -310,7 +342,7 @@ export class Traffic {
           v.speed = 0;
           v.stuck = 0;
           v.dwell -= dt;
-          if (v.dwell <= 0 && !this.busHooks?.depart(v)) gaveUp.add(v.id);
+          if (v.dwell <= 0 && !this.lineHooks?.depart(v)) gaveUp.add(v.id);
           continue;
         }
         const len = VEHICLE_LENGTH[v.kind];
@@ -328,12 +360,13 @@ export class Traffic {
           const room = this.entryRoom(v.route[0]);
           gap = seg.length - v.pos + (room === Infinity ? 200 : room);
           if (room < len + MIN_GAP) gap = Math.min(gap, seg.length - v.pos + MIN_GAP * 0.5);
-          leadSpeed = room === Infinity ? SPEED_LIMIT : 0;
+          leadSpeed = room === Infinity ? this.rules.speed : 0;
         }
         gap = Math.max(gap, 0.01);
-        const sStar = MIN_GAP + v.speed * HEADWAY + (v.speed * (v.speed - leadSpeed)) / (2 * Math.sqrt(ACCEL * BRAKE));
-        const acc = ACCEL * (1 - (v.speed / SPEED_LIMIT) ** 4 - (Math.max(sStar, 0) / gap) ** 2);
-        v.speed = Math.max(0, Math.min(SPEED_LIMIT, v.speed + acc * dt));
+        const { speed: top, accel, brake } = this.rules;
+        const sStar = MIN_GAP + v.speed * HEADWAY + (v.speed * (v.speed - leadSpeed)) / (2 * Math.sqrt(accel * brake));
+        const acc = accel * (1 - (v.speed / top) ** 4 - (Math.max(sStar, 0) / gap) ** 2);
+        v.speed = Math.max(0, Math.min(top, v.speed + acc * dt));
         v.pos += v.speed * dt;
         v.stuck = v.speed < 0.2 ? v.stuck + dt : 0;
         if (v.stuck > GIVE_UP_AFTER) {
@@ -343,10 +376,10 @@ export class Traffic {
 
         if (!v.route.length) {
           if (v.pos < v.dest - 0.5) continue;
-          if (v.kind === 'bus' && this.busHooks) {
+          if (v.line !== undefined && this.lineHooks) {
             v.pos = Math.min(v.pos, v.dest);
             v.speed = 0;
-            v.dwell = Math.max(0.01, this.busHooks.arrive(v));
+            v.dwell = Math.max(0.01, this.lineHooks.arrive(v));
           } else arrived.add(v.id);
           continue;
         }
@@ -378,25 +411,64 @@ export class Traffic {
 
   /** World position, height and heading of a vehicle (sim coordinates). */
   pose(v: Vehicle): { p: Vec2; h: number; heading: Vec2 } | null {
-    const seg = this.net.segments.get(v.seg);
+    return this.poseBack(v, 0);
+  }
+
+  /**
+   * Pose of a point `back` meters behind the front of a vehicle, for the cars of a train. Behind the
+   * start of its lane it follows the straightest track leading into that lane.
+   */
+  poseBack(v: Vehicle, back: number): { p: Vec2; h: number; heading: Vec2 } | null {
+    let seg = this.net.segments.get(v.seg);
     if (!seg) return null;
-    const s = v.dir === 1 ? v.pos : seg.length - v.pos;
+    let dir = v.dir;
+    let along = v.pos - back;
+    for (let hop = 0; along < 0 && hop < 6; hop++) {
+      // Node the lane starts at, and the way the vehicle was heading there
+      const node: number = dir === 1 ? seg.a : seg.b;
+      const out = this.headingAt(seg, dir, 0);
+      let best: { seg: RoadSegment; dir: Dir; score: number } | null = null;
+      for (const o of this.net.segments.values()) {
+        if (o.id === seg.id || (o.a !== node && o.b !== node)) continue;
+        // Driving into `node` along o
+        const d: Dir = o.b === node ? 1 : -1;
+        const into = this.headingAt(o, d, o.length);
+        const score = into.x * out.x + into.y * out.y;
+        if (!best || score > best.score) best = { seg: o, dir: d, score };
+      }
+      if (!best) {
+        along = 0;
+        break;
+      }
+      seg = best.seg;
+      dir = best.dir;
+      along += seg.length;
+    }
+    return this.laneSample(seg, dir, Math.max(0, along));
+  }
+
+  private headingAt(seg: RoadSegment, dir: Dir, along: number): Vec2 {
+    return this.laneSample(seg, dir, along).heading;
+  }
+
+  /** Point on a lane, `along` meters from where the lane starts. */
+  private laneSample(seg: RoadSegment, dir: Dir, along: number): { p: Vec2; h: number; heading: Vec2 } {
+    const s = dir === 1 ? along : seg.length - along;
     const S = seg.samples;
     let i = 1;
     while (i < S.length - 1 && S[i].s < s) i++;
     const a = S[i - 1];
     const b = S[i];
     const f = Math.max(0, Math.min(1, (s - a.s) / (b.s - a.s || 1)));
-    let hx = (b.x - a.x) * v.dir;
-    let hy = (b.y - a.y) * v.dir;
+    let hx = (b.x - a.x) * dir;
+    let hy = (b.y - a.y) * dir;
     const hl = Math.hypot(hx, hy) || 1;
     hx /= hl;
     hy /= hl;
     // Right of travel direction (x east, y south)
-    const rx = -hy;
-    const ry = hx;
+    const off = this.rules.laneOffset;
     return {
-      p: { x: a.x + (b.x - a.x) * f + rx * LANE_OFFSET, y: a.y + (b.y - a.y) * f + ry * LANE_OFFSET },
+      p: { x: a.x + (b.x - a.x) * f - hy * off, y: a.y + (b.y - a.y) * f + hx * off },
       h: this.net.heightAt(seg, a.t + (b.t - a.t) * f),
       heading: { x: hx, y: hy },
     };

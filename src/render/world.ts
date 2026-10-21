@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { AngleGuide } from '../sim/angles';
-import type { City } from '../sim/city';
+import type { City, District } from '../sim/city';
 import type { GuideLine } from '../sim/guides';
 import { type Quad, type Vec2, closestOnSamples, bboxNear, hash01 } from '../sim/geometry';
 import { ROAD_WIDTH } from '../sim/roads';
@@ -11,6 +11,25 @@ import type { PathPiece } from '../sim/transit';
 import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay } from './roadMesh';
 import { StopLayer } from './transit';
 import { VehicleLayer } from './vehicles';
+import { RAIL_KINDS, type RailKind, TRACK_OFFSET } from '../sim/rail';
+import type { RoadNetwork } from '../sim/roads';
+import { buildAirportGeometry, PlaneLayer } from './airport';
+import { buildTrackGeometries } from './railMesh';
+import { StationLayer } from './stations';
+import { TrainLayer } from './trains';
+
+/** Everything drawn for one kind of train. */
+interface RailLayer {
+  tracks: THREE.Group;
+  stations: StationLayer;
+  trains: TrainLayer;
+  /** line routes, shown while that kind's tool is active */
+  lines: THREE.Mesh;
+  /** underground track marked on the surface */
+  tunnels: THREE.Mesh;
+  version: number;
+  transitVersion: number;
+}
 
 const MAP_SIZE = 4000;
 const TREE_COUNT = 6000;
@@ -34,6 +53,12 @@ export class World {
   /** tunnels shown on the surface while building underground */
   private readonly tunnels: THREE.Mesh;
   private peopleAge = 0;
+  private readonly rails: Record<RailKind, RailLayer>;
+  private readonly airports: THREE.Mesh;
+  private readonly planes: PlaneLayer;
+  private aviationVersion = -1;
+  /** which kind of transport's lines are shown, if any */
+  private lineView: 'bus' | RailKind | null = null;
   private readonly overlay: THREE.Mesh;
   private overlayAge = Infinity;
   private readonly trees: { trunks: THREE.InstancedMesh; crowns: THREE.InstancedMesh; spots: { x: number; y: number; s: number; color: THREE.Color }[] };
@@ -42,6 +67,14 @@ export class World {
   private readonly brush: THREE.Mesh;
   private readonly angleGroup = new THREE.Group();
   private readonly guideLines: THREE.Mesh;
+  /** outline of an airport about to be placed */
+  private readonly footprint: THREE.Mesh;
+  private readonly districtRings = new THREE.Group();
+  /** street and district names over the map */
+  private readonly nameLayer: HTMLElement;
+  private names: { at: THREE.Vector3; dir: THREE.Vector3 | null; el: HTMLElement; street: boolean }[] = [];
+  private labelsVersion = -1;
+  private readonly projected2 = new THREE.Vector3();
   private readonly angleLabels: HTMLElement;
   private guides: { at: THREE.Vector3; label: HTMLElement }[] = [];
   private readonly projected = new THREE.Vector3();
@@ -55,6 +88,9 @@ export class World {
     preview: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }),
     concrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
     tunnel: new THREE.MeshBasicMaterial({ color: 0x1c1f24, side: THREE.DoubleSide }),
+    ballast: new THREE.MeshLambertMaterial({ color: 0x968d82, side: THREE.DoubleSide }),
+    sleepers: new THREE.MeshLambertMaterial({ color: 0x6b5a48, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }),
+    steel: new THREE.MeshLambertMaterial({ color: 0xa7adb3, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
   };
 
   constructor(container: HTMLElement, shadows: boolean) {
@@ -110,6 +146,30 @@ export class World {
     this.tunnels.renderOrder = 2;
     this.scene.add(this.tunnels);
 
+    const rail = (kind: RailKind): RailLayer => {
+      const layer: RailLayer = {
+        tracks: new THREE.Group(),
+        stations: new StationLayer(shadows),
+        trains: new TrainLayer(kind, shadows),
+        lines: new THREE.Mesh(new THREE.BufferGeometry(), pathMaterial()),
+        tunnels: new THREE.Mesh(new THREE.BufferGeometry(), this.tunnels.material),
+        version: -1,
+        transitVersion: -1,
+      };
+      layer.lines.visible = false;
+      layer.lines.renderOrder = 1;
+      layer.tunnels.visible = false;
+      layer.tunnels.renderOrder = 2;
+      this.scene.add(layer.tracks, layer.stations.mesh, layer.trains.group, layer.lines, layer.tunnels);
+      return layer;
+    };
+    this.rails = { metro: rail('metro'), train: rail('train'), hsr: rail('hsr') };
+    this.airports = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
+    this.airports.receiveShadow = true;
+    this.airports.castShadow = false;
+    this.planes = new PlaneLayer(shadows);
+    this.scene.add(this.airports, this.planes.group);
+
     this.preview = new THREE.Mesh(new THREE.BufferGeometry(), this.materials.preview);
     this.preview.visible = false;
     this.preview.renderOrder = 2;
@@ -131,10 +191,19 @@ export class World {
     );
     this.guideLines.renderOrder = 4;
     this.guideLines.visible = false;
-    this.scene.add(this.preview, this.cursor, this.brush, this.angleGroup, this.guideLines);
+    this.footprint = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.95, side: THREE.DoubleSide }),
+    );
+    this.footprint.renderOrder = 4;
+    this.footprint.visible = false;
+    this.scene.add(this.preview, this.cursor, this.brush, this.angleGroup, this.guideLines, this.footprint);
     this.angleLabels = document.createElement('div');
     this.angleLabels.className = 'angle-labels';
-    container.after(this.angleLabels);
+    this.nameLayer = document.createElement('div');
+    this.nameLayer.className = 'angle-labels map-names';
+    container.after(this.nameLayer, this.angleLabels);
+    this.scene.add(this.districtRings);
   }
 
   private makeGround(): THREE.Mesh {
@@ -203,7 +272,7 @@ export class World {
     const m = new THREE.Matrix4();
     let n = 0;
     for (const t of this.trees.spots) {
-      if (near(t.x, t.y)) continue;
+      if (near(t.x, t.y) || city.occupied(t)) continue;
       if (segs.some((s) => bboxNear(s.bbox, t, clear) && closestOnSamples(s.samples, t).d < clear)) continue;
       m.makeScale(t.s, t.s, t.s).setPosition(t.x, 0, t.y);
       this.trees.trunks.setMatrixAt(n, m);
@@ -223,6 +292,12 @@ export class World {
     this.roadsVersion = -1;
     this.lotsVersion = -1;
     this.transitVersion = -1;
+    this.aviationVersion = -1;
+    this.labelsVersion = -1;
+    for (const k of RAIL_KINDS) {
+      this.rails[k].version = -1;
+      this.rails[k].transitVersion = -1;
+    }
   }
 
   /** Colours roads by congestion (the traffic view). */
@@ -252,22 +327,81 @@ export class World {
     this.scene.background = new THREE.Color(on ? 0x5d6b62 : 0xbcd8ea);
   }
 
-  /** Shows tunnels on the surface above them. */
+  /** Shows road and track tunnels on the surface above them. */
   setUndergroundView(on: boolean): void {
     this.tunnels.visible = on;
+    for (const k of RAIL_KINDS) this.rails[k].tunnels.visible = on;
   }
 
-  /** Shows the bus routes on the roads (the bus tool's view). */
-  setLineOverlay(on: boolean): void {
-    this.linePaths.visible = on;
+  /** Shows one kind of transport's routes (that tool's view), or none. */
+  setLineOverlay(kind: 'bus' | RailKind | null): void {
+    this.lineView = kind;
+    this.linePaths.visible = kind === 'bus';
+    for (const k of RAIL_KINDS) this.rails[k].lines.visible = kind === k;
   }
 
-  /** Route of a bus line being planned, or null. */
-  setDraftLine(path: PathPiece[] | null, color: number): void {
+  /** Route of a line being planned (or a street being named), or null. */
+  setDraftLine(path: PathPiece[] | null, color: number, net?: RoadNetwork, offset?: number, width = 2.2): void {
     this.draftLine.visible = !!path?.length;
     if (!path?.length) return;
     this.draftLine.geometry.dispose();
-    this.draftLine.geometry = buildLinePaths(this.cityRef!.net, [{ color, path }], 2.2);
+    const rail = this.lineView !== 'bus' && this.lineView !== null;
+    this.draftLine.geometry = buildLinePaths(net ?? this.cityRef!.net, [{ color, path }], width, offset ?? (rail ? TRACK_OFFSET : undefined));
+  }
+
+  /** Outlines of the districts (the district tool's view); the selected one is drawn bolder. */
+  setDistrictRings(list: District[] | null, selected: number | null): void {
+    for (const c of [...this.districtRings.children]) {
+      (c as THREE.Mesh).geometry.dispose();
+      this.districtRings.remove(c);
+    }
+    for (const d of list ?? []) {
+      const k = d.id === selected ? 0.985 : 0.993;
+      const ring = new THREE.Mesh(new THREE.RingGeometry(d.r * k, d.r, 96).rotateX(-Math.PI / 2), this.ringMaterial(d.color));
+      ring.position.set(d.p.x, 0.4, d.p.y);
+      ring.renderOrder = 3;
+      this.districtRings.add(ring);
+    }
+  }
+
+  private ringMaterials = new Map<number, THREE.MeshBasicMaterial>();
+  private ringMaterial(color: number): THREE.MeshBasicMaterial {
+    let m = this.ringMaterials.get(color);
+    if (!m) this.ringMaterials.set(color, (m = new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.85 })));
+    return m;
+  }
+
+  /** Street names along their roads and district names, as text over the map. */
+  private rebuildNames(city: City): void {
+    this.nameLayer.replaceChildren();
+    this.names = [];
+    const add = (text: string, x: number, y: number, h: number, cls: string, dir?: Vec2, color?: number) => {
+      const el = document.createElement('div');
+      el.className = cls;
+      el.textContent = text;
+      if (color !== undefined) el.style.color = `#${color.toString(16).padStart(6, '0')}`;
+      this.nameLayer.append(el);
+      this.names.push({ at: new THREE.Vector3(x, h + 0.5, y), dir: dir ? new THREE.Vector3(x + dir.x * 10, h + 0.5, y + dir.y * 10) : null, el, street: !!dir });
+    };
+    for (const d of city.districts.values()) add(d.name, d.p.x, d.p.y, 0, 'map-name district', undefined, d.color);
+    // Street labels: at the middle of the longer pieces, never two of one name within 220 m
+    const placed: { name: string; x: number; y: number }[] = [];
+    const segs = [...city.net.segments.values()].filter((s) => s.name).sort((a, b) => b.length - a.length);
+    for (const seg of segs) {
+      const S = seg.samples;
+      const steps = Math.max(1, Math.floor(seg.length / 260));
+      for (let k = 0; k < steps; k++) {
+        const target = (seg.length * (k + 0.5)) / steps;
+        let i = 1;
+        while (i < S.length - 1 && S[i].s < target) i++;
+        const a = S[i - 1];
+        const b = S[i];
+        if (placed.some((p) => p.name === seg.name && Math.hypot(p.x - a.x, p.y - a.y) < 220)) continue;
+        placed.push({ name: seg.name!, x: a.x, y: a.y });
+        const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        add(seg.name!, a.x, a.y, Math.max(0, city.net.heightAt(seg, a.t)), 'map-name street', { x: (b.x - a.x) / l, y: (b.y - a.y) / l });
+      }
+    }
   }
 
   setPreview(q: Quad | null, ok: boolean, ha = 0, hb = 0): void {
@@ -324,6 +458,16 @@ export class World {
     this.guideLines.geometry = buildDashedLines(lines, Math.max(0.6, this.rig.distance * 0.004));
   }
 
+  /** Dashed outline of land about to be built on (an airport), red when it can't be afforded. */
+  setFootprint(corners: Vec2[] | null, ok: boolean): void {
+    this.footprint.visible = !!corners;
+    if (!corners) return;
+    this.footprint.geometry.dispose();
+    const lines = corners.map((from, i) => ({ from, to: corners[(i + 1) % corners.length] }));
+    this.footprint.geometry = buildDashedLines(lines, Math.max(1.2, this.rig.distance * 0.006));
+    (this.footprint.material as THREE.MeshBasicMaterial).color.setHex(ok ? 0xffffff : 0xff6b5b);
+  }
+
   setCursor(p: Vec2 | null, snapped: boolean, h = 0): void {
     this.cursor.visible = !!p;
     if (!p) return;
@@ -343,6 +487,8 @@ export class World {
   /** Per-frame updates: vehicles always, the traffic colours a few times a second. */
   animate(city: City, dt: number): void {
     this.vehicles.update(city.traffic, (v) => city.transit.lines.get(v.line ?? -1)?.color ?? 0xf2b134);
+    for (const k of RAIL_KINDS) this.rails[k].trains.update(city.rails[k]);
+    this.planes.update(city.aviation);
     this.peopleAge += dt;
     if (this.peopleAge > 0.5) {
       this.peopleAge = 0;
@@ -386,11 +532,75 @@ export class World {
       this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings), concrete, mouths);
       this.updateTrees(city);
     }
+    for (const k of RAIL_KINDS) this.syncRail(city, k);
+    if (city.labelsVersion + city.roadsVersion * 1e6 !== this.labelsVersion) {
+      this.labelsVersion = city.labelsVersion + city.roadsVersion * 1e6;
+      this.rebuildNames(city);
+    }
+    if (city.aviation.version !== this.aviationVersion) {
+      this.aviationVersion = city.aviation.version;
+      this.airports.geometry.dispose();
+      this.airports.geometry = buildAirportGeometry(city.aviation.airports.values());
+    }
     if (city.lotsVersion !== this.lotsVersion) {
       const zoningChanged = this.lotsVersion !== -1;
       this.lotsVersion = city.lotsVersion;
       this.buildings.update(city);
       if (zoningChanged) this.updateTrees(city);
+    }
+  }
+
+  private syncRail(city: City, kind: RailKind): void {
+    const sys = city.rails[kind];
+    const layer = this.rails[kind];
+    const tracks = sys.version !== layer.version;
+    if (tracks) {
+      layer.version = sys.version;
+      for (const child of [...layer.tracks.children]) {
+        (child as THREE.Mesh).geometry.dispose();
+        layer.tracks.remove(child);
+      }
+      const g = buildTrackGeometries(sys.net, kind !== 'metro');
+      const ballast = new THREE.Mesh(g.ballast, this.materials.ballast);
+      ballast.receiveShadow = true;
+      const concrete = new THREE.Mesh(g.concrete, this.materials.concrete);
+      concrete.castShadow = true;
+      concrete.receiveShadow = true;
+      layer.tracks.add(ballast, new THREE.Mesh(g.sleepers, this.materials.sleepers), new THREE.Mesh(g.steel, this.materials.steel), concrete, new THREE.Mesh(g.dark, this.materials.tunnel));
+      layer.tunnels.geometry.dispose();
+      layer.tunnels.geometry = buildTunnelOverlay(sys.net);
+    }
+    if (tracks || sys.transit.version !== layer.transitVersion) {
+      layer.transitVersion = sys.transit.version;
+      layer.stations.rebuild(sys);
+      layer.lines.geometry.dispose();
+      layer.lines.geometry = buildLinePaths(sys.net, [...sys.transit.lines.values()], 1.4, TRACK_OFFSET);
+    }
+  }
+
+  /** Moves the name labels to where their spot is on screen, turning street names along the road. */
+  private placeNames(): void {
+    if (!this.names.length) return;
+    const el = this.renderer.domElement;
+    const W = el.clientWidth;
+    const H = el.clientHeight;
+    const streets = this.rig.distance < 1500;
+    for (const n of this.names) {
+      this.projected.copy(n.at).project(this.rig.camera);
+      const hidden = this.projected.z > 1 || Math.abs(this.projected.x) > 1.2 || Math.abs(this.projected.y) > 1.2 || (n.street && !streets);
+      n.el.hidden = hidden;
+      if (hidden) continue;
+      const x = ((this.projected.x + 1) / 2) * W;
+      const y = ((1 - this.projected.y) / 2) * H;
+      let turn = 0;
+      if (n.dir) {
+        this.projected2.copy(n.dir).project(this.rig.camera);
+        turn = Math.atan2(-(this.projected2.y - this.projected.y) * H, (this.projected2.x - this.projected.x) * W);
+        // Keep the text the right way up
+        if (turn > Math.PI / 2) turn -= Math.PI;
+        if (turn < -Math.PI / 2) turn += Math.PI;
+      }
+      n.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%) rotate(${turn}rad)`;
     }
   }
 
@@ -415,6 +625,7 @@ export class World {
     this.sun.position.set(t.x + 300, 600, t.y + 200);
     this.sun.target.position.set(t.x, 0, t.y);
     this.renderer.render(this.scene, this.rig.camera);
+    this.placeNames();
     if (this.guides.length) {
       const el = this.renderer.domElement;
       for (const g of this.guides) {

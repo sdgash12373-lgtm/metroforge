@@ -17,11 +17,11 @@ export const PORTAL_DEPTH = -5;
 const PORTAL_HEIGHT = 5.6;
 
 /** Height along a curve, by curve parameter t. */
-type Height = (t: number) => number;
-const FLAT: Height = () => 0;
+export type Height = (t: number) => number;
+export const FLAT: Height = () => 0;
 
 /** Accumulates triangles in sim coordinates, `y` above the given heights. */
-class Builder {
+export class Builder {
   pos: number[] = [];
   idx: number[] = [];
   col: number[] = [];
@@ -59,7 +59,7 @@ class Builder {
   }
 }
 
-function normalAt(s: Sample[], i: number): { x: number; y: number } {
+export function normalAt(s: Sample[], i: number): { x: number; y: number } {
   const a = s[Math.max(0, i - 1)];
   const b = s[Math.min(s.length - 1, i + 1)];
   const t = normalize({ x: b.x - a.x, y: b.y - a.y });
@@ -67,7 +67,7 @@ function normalAt(s: Sample[], i: number): { x: number; y: number } {
 }
 
 /** Strip along a curve between two signed offsets from its centre line. */
-function strip(b: Builder, s: Sample[], from: number, to: number, h: Height = FLAT): void {
+export function strip(b: Builder, s: Sample[], from: number, to: number, h: Height = FLAT): void {
   for (let i = 1; i < s.length; i++) {
     const n0 = normalAt(s, i - 1);
     const n1 = normalAt(s, i);
@@ -84,12 +84,12 @@ function strip(b: Builder, s: Sample[], from: number, to: number, h: Height = FL
   }
 }
 
-function ribbon(b: Builder, s: Sample[], width: number, h: Height = FLAT): void {
+export function ribbon(b: Builder, s: Sample[], width: number, h: Height = FLAT): void {
   strip(b, s, -width / 2, width / 2, h);
 }
 
 /** Vertical wall hanging under a curve at a signed offset, from its height down by `depth`. */
-function wall(b: Builder, s: Sample[], offset: number, depth: number, h: Height): void {
+export function wall(b: Builder, s: Sample[], offset: number, depth: number, h: Height): void {
   for (let i = 1; i < s.length; i++) {
     const n0 = normalAt(s, i - 1);
     const n1 = normalAt(s, i);
@@ -107,7 +107,7 @@ function wall(b: Builder, s: Sample[], offset: number, depth: number, h: Height)
 }
 
 /** Upright box from the ground to `top`, centred on (x, z), turned to face along (dx, dz). */
-function pillar(b: Builder, x: number, z: number, dx: number, dz: number, w: number, d: number, top: number, bottom = 0): void {
+export function pillar(b: Builder, x: number, z: number, dx: number, dz: number, w: number, d: number, top: number, bottom = 0): void {
   const nx = -dz;
   const nz = dx;
   const c = (u: number, v: number) => [x + dx * u + nx * v, z + dz * u + nz * v];
@@ -121,7 +121,7 @@ function pillar(b: Builder, x: number, z: number, dx: number, dz: number, w: num
   b.quad([k0[0], k0[1], top], [k1[0], k1[1], top], [k3[0], k3[1], top], [k2[0], k2[1], top]);
 }
 
-function dashes(b: Builder, s: Sample[], skip: number, width = MARK_WIDTH, h: Height = FLAT): void {
+export function dashes(b: Builder, s: Sample[], skip: number, width = MARK_WIDTH, h: Height = FLAT): void {
   const len = s[s.length - 1].s;
   let j = 1;
   for (let start = skip; start + DASH < len - skip; start += DASH + GAP) {
@@ -147,7 +147,7 @@ export interface RoadGeometries {
   dark: THREE.BufferGeometry;
 }
 
-const isTunnelRamp = (net: RoadNetwork, seg: RoadSegment): boolean => {
+export const isTunnelRamp = (net: RoadNetwork, seg: RoadSegment): boolean => {
   const ha = net.node(seg.a).h;
   const hb = net.node(seg.b).h;
   return Math.min(ha, hb) < 0 && Math.max(ha, hb) === 0;
@@ -171,7 +171,7 @@ export function shownHeight(net: RoadNetwork, seg: RoadSegment): Height {
 const segHeight = shownHeight;
 
 /** Low walls along a tunnel ramp up to its portal: two posts, a beam, and the dark opening between them. */
-function portal(b: Builder, dark: Builder, s: Sample[], depth: Height): void {
+export function portal(b: Builder, dark: Builder, s: Sample[], depth: Height): void {
   for (const side of [-1, 1]) {
     const off = side * (ROAD_WIDTH / 2 + 0.2);
     for (let i = 1; i < s.length; i++) {
@@ -205,7 +205,7 @@ function portal(b: Builder, dark: Builder, s: Sample[], depth: Height): void {
 }
 
 /** Girders along both edges and a pillar every so often where the deck is high enough to need one. */
-function supports(b: Builder, s: Sample[], h: Height): void {
+export function supports(b: Builder, s: Sample[], h: Height): void {
   wall(b, s, ROAD_WIDTH / 2, GIRDER, h);
   wall(b, s, -ROAD_WIDTH / 2, GIRDER, h);
   const len = s[s.length - 1].s;
@@ -324,14 +324,14 @@ function lanePiece(seg: RoadSegment, piece: PathPiece): Sample[] {
 }
 
 /** Bus routes drawn on the lanes they use, one colour per line. */
-export function buildLinePaths(net: RoadNetwork, lines: { color: number; path: PathPiece[] }[], width = 1.4): THREE.BufferGeometry {
+export function buildLinePaths(net: RoadNetwork, lines: { color: number; path: PathPiece[] }[], width = 1.4, offset = LANE_OFFSET): THREE.BufferGeometry {
   const b = new Builder(0.2);
   for (const line of lines) {
     b.color = new THREE.Color(line.color);
     for (const piece of line.path) {
       const seg = net.segments.get(piece.seg);
       if (!seg || piece.to - piece.from < 0.1) continue;
-      strip(b, lanePiece(seg, piece), LANE_OFFSET - width / 2, LANE_OFFSET + width / 2, segHeight(net, seg));
+      strip(b, lanePiece(seg, piece), offset - width / 2, offset + width / 2, segHeight(net, seg));
     }
   }
   return b.geometry();

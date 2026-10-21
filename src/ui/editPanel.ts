@@ -1,6 +1,7 @@
 /** Colours offered for lines and planes; any other colour can be picked with the colour well. */
 export const PALETTE = [
   0xe4572e, 0xd62828, 0xf2b134, 0xf4d35e, 0x6a994e, 0x2a9d8f, 0x2e86ab, 0x3d5a80, 0x8a6fd1, 0xa23b72, 0x8d6e63, 0x5f6b77,
+  0xffffff,
 ];
 
 /** Something the player can rename and recolour: a transit line or a flight. */
@@ -8,11 +9,16 @@ export interface EditTarget {
   /** what kind of thing it is, e.g. 公車路線 */
   title: string;
   name: string;
-  color: number;
+  /** shown in an empty name box */
+  placeholder?: string;
+  /** leave out for things that only have a name (streets) */
+  color?: number;
+  /** what the colour is of, e.g. 機身顏色 (default 路線顏色) */
+  colorLabel?: string;
   /** one line of live figures */
   info: string;
   rename(name: string): void;
-  recolor(color: number): void;
+  recolor?(color: number): void;
   remove?: { label: string; run(): void };
 }
 
@@ -49,6 +55,7 @@ export class EditPanel {
     const name = document.createElement('input');
     name.type = 'text';
     name.value = t.name;
+    if (t.placeholder) name.placeholder = t.placeholder;
     name.maxLength = 20;
     name.enterKeyHint = 'done';
     name.onchange = () => t.rename(name.value);
@@ -70,7 +77,7 @@ export class EditPanel {
       b.style.background = hex(c);
       b.setAttribute('aria-label', hex(c));
       b.onclick = () => {
-        t.recolor(c);
+        t.recolor?.(c);
         mark(c);
       };
       swatches.append(b);
@@ -80,13 +87,16 @@ export class EditPanel {
     well.setAttribute('aria-label', '自訂顏色');
     well.oninput = () => {
       const c = parseInt(well.value.slice(1), 16);
-      t.recolor(c);
+      t.recolor?.(c);
       mark(c);
     };
     swatches.append(well);
-    mark(t.color);
+    if (t.color !== undefined) mark(t.color);
 
-    const parts: HTMLElement[] = [title, nameRow, swatches];
+    const colorHead = document.createElement('p');
+    colorHead.className = 'note';
+    colorHead.textContent = t.colorLabel ?? '路線顏色';
+    const parts: HTMLElement[] = t.color === undefined ? [title, nameRow] : [title, nameRow, colorHead, swatches];
     if (t.remove) {
       const del = document.createElement('button');
       del.type = 'button';
