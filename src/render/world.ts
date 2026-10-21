@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { AngleGuide } from '../sim/angles';
 import type { City } from '../sim/city';
 import { type Quad, type Vec2, closestOnSamples, bboxNear, hash01 } from '../sim/geometry';
 import { ROAD_WIDTH } from '../sim/roads';
@@ -22,6 +23,10 @@ export class World {
   private readonly preview: THREE.Mesh;
   private readonly cursor: THREE.Mesh;
   private readonly brush: THREE.Mesh;
+  private readonly angleGroup = new THREE.Group();
+  private readonly angleLabels: HTMLElement;
+  private guides: { at: THREE.Vector3; label: HTMLElement }[] = [];
+  private readonly projected = new THREE.Vector3();
   private roadsVersion = -1;
   private lotsVersion = -1;
   private showEmpty = false;
@@ -72,7 +77,10 @@ export class World {
     );
     this.brush.renderOrder = 3;
     this.brush.visible = false;
-    this.scene.add(this.preview, this.cursor, this.brush);
+    this.scene.add(this.preview, this.cursor, this.brush, this.angleGroup);
+    this.angleLabels = document.createElement('div');
+    this.angleLabels.className = 'angle-labels';
+    container.after(this.angleLabels);
   }
 
   private makeGround(): THREE.Mesh {
@@ -180,6 +188,41 @@ export class World {
     this.preview.visible = true;
   }
 
+  /** Arcs on the ground plus degree labels between the road being drawn and the roads it meets. */
+  setAngleGuides(list: AngleGuide[]): void {
+    for (const child of [...this.angleGroup.children]) {
+      (child as THREE.Mesh).geometry.dispose();
+      this.angleGroup.remove(child);
+    }
+    this.angleLabels.replaceChildren();
+    this.guides = [];
+    const radius = Math.max(10, this.rig.snapRadius * 2.2);
+    for (const g of list) {
+      // RingGeometry lies in XY; after rotateX(-90°) the angle θ points along (cos θ, -sin θ) in sim space
+      const t1 = Math.atan2(-g.road.y, g.road.x);
+      let delta = Math.atan2(-g.other.y, g.other.x) - t1;
+      delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+      const start = delta < 0 ? t1 + delta : t1;
+      const color = angleColor(g.degrees);
+      const arc = new THREE.Mesh(
+        new THREE.RingGeometry(radius * 0.9, radius, 32, 1, start, Math.abs(delta)).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.9, side: THREE.DoubleSide }),
+      );
+      arc.position.set(g.at.x, 0.35, g.at.y);
+      arc.renderOrder = 4;
+      this.angleGroup.add(arc);
+      // Label sits on the bisector, just outside the arc
+      const mid = start + Math.abs(delta) / 2;
+      const at = new THREE.Vector3(g.at.x + Math.cos(mid) * radius * 1.45, 0.4, g.at.y - Math.sin(mid) * radius * 1.45);
+      const label = document.createElement('div');
+      label.className = 'angle-label';
+      label.textContent = `${Math.round(g.degrees)}°`;
+      label.style.borderColor = `#${color.toString(16).padStart(6, '0')}`;
+      this.angleLabels.append(label);
+      this.guides.push({ at, label });
+    }
+  }
+
   setCursor(p: Vec2 | null, snapped: boolean): void {
     this.cursor.visible = !!p;
     if (!p) return;
@@ -240,5 +283,21 @@ export class World {
     this.sun.position.set(t.x + 300, 600, t.y + 200);
     this.sun.target.position.set(t.x, 0, t.y);
     this.renderer.render(this.scene, this.rig.camera);
+    if (this.guides.length) {
+      const el = this.renderer.domElement;
+      for (const g of this.guides) {
+        this.projected.copy(g.at).project(this.rig.camera);
+        const x = ((this.projected.x + 1) / 2) * el.clientWidth;
+        const y = ((1 - this.projected.y) / 2) * el.clientHeight;
+        g.label.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
+      }
+    }
   }
+}
+
+/** Sharp junctions are hard to drive through: warn under 30°, mark right angles. */
+function angleColor(deg: number): number {
+  if (deg < 30) return 0xff6b5b;
+  if (Math.abs(deg - 90) < 1) return 0x7ee08a;
+  return 0xf2b134;
 }

@@ -1,3 +1,4 @@
+import { angleGuides } from '../sim/angles';
 import type { City } from '../sim/city';
 import { type Vec2, lerp } from '../sim/geometry';
 import { ROAD_WIDTH, type Snap } from '../sim/roads';
@@ -148,6 +149,10 @@ export class ToolController {
       const end = hoverSnap.p;
       const cost = this.city.roadCost(start.p, ctrl, end);
       w.setPreview({ a: start.p, c: ctrl ?? lerp(start.p, end, 0.5), b: end }, cost <= this.city.money);
-    } else w.setPreview(null, true);
+      w.setAngleGuides(angleGuides(this.city.net, start, ctrl, hoverSnap));
+    } else {
+      w.setPreview(null, true);
+      w.setAngleGuides([]);
+    }
   }
 }

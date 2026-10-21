@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { City } from '../src/sim/city';
 import { curveIntersections, quadPoint, sampleQuad, splitQuad } from '../src/sim/geometry';
 import { Zone } from '../src/sim/zoning';
+import { angleGuides } from '../src/sim/angles';
 
 const free = (x: number, y: number) => ({ kind: 'free' as const, p: { x, y } });
 const snap = (city: City, x: number, y: number) => city.net.snap({ x, y }, 6);
@@ -133,5 +134,31 @@ describe('save', () => {
     expect(copy.net.segments.size).toBe(city.net.segments.size);
     expect(copy.stats.buildings).toBe(city.measure().length && city.stats.buildings);
     expect(copy.serialize()).toEqual(city.serialize());
+  });
+});
+
+describe('angle guides', () => {
+  it('reports 90° for a road leaving a straight road at a right angle', () => {
+    const city = new City();
+    city.buildRoad(free(-100, 0), null, free(100, 0), true);
+    const g = angleGuides(city.net, snap(city, 0, 1), null, free(0, 80));
+    expect(g).toHaveLength(1);
+    expect(g[0].degrees).toBeCloseTo(90, 0);
+  });
+
+  it('reports the smaller angle against a road end and measures both ends', () => {
+    const city = new City();
+    city.buildRoad(free(0, 0), null, free(100, 0), true);
+    city.buildRoad(free(0, 100), null, free(100, 100), true);
+    // From the end of the first road to the start of the second, at 45° to the first
+    const g = angleGuides(city.net, snap(city, 100, 0), null, snap(city, 0, 100));
+    expect(g).toHaveLength(2);
+    expect(g[0].degrees).toBeCloseTo(45, 0);
+    expect(g[1].degrees).toBeCloseTo(45, 0);
+  });
+
+  it('has no guide where the road starts on empty ground', () => {
+    const city = new City();
+    expect(angleGuides(city.net, free(0, 0), null, free(50, 0))).toHaveLength(0);
   });
 });
