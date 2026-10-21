@@ -196,6 +196,27 @@ body {
   font-size: 10px;
   opacity: 0.55;
 }
+.brush-size {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.brush-size span {
+  color: var(--muted);
+}
+.brush-size input {
+  width: 120px;
+  accent-color: var(--accent);
+  touch-action: pan-x;
+}
+.brush-size b {
+  min-width: 44px;
+  text-align: right;
+}
 .swatch {
   width: 12px;
   height: 12px;

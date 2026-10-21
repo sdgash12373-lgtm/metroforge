@@ -1,6 +1,6 @@
 import { type City, MAX_TAX } from '../sim/city';
 import { ZONES, Zone } from '../sim/zoning';
-import type { Tool, ToolController } from './tools';
+import { BRUSH_MAX, BRUSH_MIN, type Tool, type ToolController } from './tools';
 
 const TOOLS: { id: Tool; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
@@ -232,6 +232,24 @@ export class Hud {
         this.tools.setZone(Zone.None);
         this.render();
       });
+      // Brush size: the dock is rebuilt on every render, so the slider is too
+      const size = el('label', 'brush-size');
+      size.htmlFor = 'brush-size';
+      const value = el('b', '', `${this.tools.brushRadius * 2} m`);
+      const range = el('input');
+      range.id = 'brush-size';
+      range.type = 'range';
+      range.min = String(BRUSH_MIN);
+      range.max = String(BRUSH_MAX);
+      range.step = '2';
+      range.value = String(this.tools.brushRadius);
+      range.setAttribute('aria-label', '塗抹範圍');
+      range.oninput = () => {
+        this.tools.setBrushRadius(Number(range.value));
+        value.textContent = `${this.tools.brushRadius * 2} m`;
+      };
+      size.append(el('span', '', '範圍'), range, value);
+      this.sub.append(size);
     } else if (this.tools.drawing) {
       option('結束拉路', false, () => {
         this.tools.cancel();

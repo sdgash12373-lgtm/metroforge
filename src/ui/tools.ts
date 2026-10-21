@@ -8,7 +8,10 @@ import type { World } from '../render/world';
 
 export type Tool = 'pan' | 'road' | 'curve' | 'zone' | 'bulldoze' | 'traffic';
 
-export const BRUSH_RADIUS = 18;
+/** Zoning brush radius range and default, in meters. */
+export const BRUSH_MIN = 6;
+export const BRUSH_MAX = 60;
+export const BRUSH_DEFAULT = 18;
 
 export interface ToolEvents {
   toast(msg: string): void;
@@ -22,6 +25,7 @@ export class ToolController {
   /** road being drawn: start point, then (curve tool) the bend control point */
   draft: { start: Snap | null; control: Vec2 | null } = { start: null, control: null };
   hover: Vec2 | null = null;
+  brushRadius = BRUSH_DEFAULT;
 
   constructor(
     private city: City,
@@ -45,6 +49,13 @@ export class ToolController {
   setZone(zone: Zone): void {
     this.zone = zone;
     this.events.changed();
+    this.refresh();
+  }
+
+  /** Resizes the zoning brush and shows it at the middle of the view so the size can be judged. */
+  setBrushRadius(r: number): void {
+    this.brushRadius = Math.max(BRUSH_MIN, Math.min(BRUSH_MAX, r));
+    this.hover = { ...this.world.rig.target };
     this.refresh();
   }
 
@@ -121,7 +132,7 @@ export class ToolController {
 
   onPaint(p: Vec2): void {
     this.hover = p;
-    this.city.paint(p, BRUSH_RADIUS, this.zone);
+    this.city.paint(p, this.brushRadius, this.zone);
     this.refresh();
   }
 
@@ -160,7 +171,7 @@ export class ToolController {
     // Without hover (touch), keep marking where the road being drawn starts
     const marker = hoverSnap?.p ?? (isRoad ? (this.draft.start?.p ?? null) : this.tool === 'bulldoze' ? this.hover : null);
     w.setCursor(marker, hoverSnap ? hoverSnap.kind !== 'free' || !!road?.guides.length : isRoad);
-    w.setBrush(this.tool === 'zone' ? this.hover : null, BRUSH_RADIUS, this.zone === Zone.None ? 0xffffff : ZONES[this.zone].color);
+    w.setBrush(this.tool === 'zone' ? this.hover : null, this.brushRadius, this.zone === Zone.None ? 0xffffff : ZONES[this.zone].color);
     const { start, control } = this.draft;
     if (isRoad && start && hoverSnap) {
       const ctrl = this.tool === 'curve' ? (control ?? lerp(start.p, hoverSnap.p, 0.5)) : null;
