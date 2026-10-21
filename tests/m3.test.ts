@@ -119,11 +119,11 @@ describe('bus lines', () => {
       city.tick(r);
       for (let k = 0; k < 5; k++) city.traffic.step(0.1);
       riders += city.stats.riders;
-      fares += city.budget.busFares;
+      fares += city.budget.transitFares;
     }
     expect(riders).toBeGreaterThan(0);
     expect(fares).toBeGreaterThan(0);
-    expect(city.budget.busUpkeep).toBeGreaterThan(0);
+    expect(city.budget.transitUpkeep).toBeGreaterThan(0);
   });
 
   it('follow their stops when a road is split, and close when a stop loses its street', () => {

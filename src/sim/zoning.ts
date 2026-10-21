@@ -95,16 +95,16 @@ export function inheritLots(target: Lot[], source: Lot[]): void {
 }
 
 /**
- * A cell is unusable if a road runs through it, it overlaps an older cell
+ * A cell is unusable if a road runs through it, it is taken by track or an airport, it overlaps an older cell
  * (inside of curves, junction corners), or the cell in front of it is unusable.
  */
-export function recomputeBlocked(net: RoadNetwork): void {
+export function recomputeBlocked(net: RoadNetwork, occupied?: (p: Vec2) => boolean): void {
   const grid = new Map<string, Lot[]>();
   const clearance = ROAD_WIDTH / 2 + CELL * 0.45;
   const segs = [...net.segments.values()];
   for (const seg of segs) {
     for (const lot of seg.lots) {
-      let blocked = lot.front !== null && lot.front.blocked;
+      let blocked = (lot.front !== null && lot.front.blocked) || !!occupied?.(lot);
       if (!blocked) {
         for (const other of segs) {
           if (!bboxNear(other.bbox, lot, clearance)) continue;

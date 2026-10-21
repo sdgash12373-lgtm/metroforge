@@ -51,6 +51,8 @@ export interface RoadSegment {
   lots: Lot[];
   /** traffic only drives a → b (roundabouts) */
   oneway: boolean;
+  /** street name the player gave it */
+  name?: string;
 }
 
 export type Snap =
@@ -92,6 +94,7 @@ export class RoadNetwork {
   createSegment(a: number, b: number, c: Vec2, from?: RoadSegment, id?: number, oneway = from?.oneway ?? false): RoadSegment {
     const seg: RoadSegment = {
       oneway,
+      name: from?.name,
       id: id ?? this.nextSeg++,
       a,
       b,
@@ -279,6 +282,44 @@ export class RoadNetwork {
     this.segments.delete(id);
     this.listener?.removed(seg);
     for (const n of [seg.a, seg.b]) if (this.degree(n) === 0) this.nodes.delete(n);
+  }
+
+  /**
+   * The street a segment belongs to: it and the segments that carry straight on from it through
+   * junctions (turning less than 35°), at the same level. Roundabouts are left out.
+   */
+  street(seg: RoadSegment): RoadSegment[] {
+    const out = [seg];
+    const seen = new Set([seg.id]);
+    const level = (s: RoadSegment) => this.node(s.a).h + this.node(s.b).h;
+    // Unit direction leaving `node` along s
+    const away = (s: RoadSegment, node: number) => {
+      const S = s.samples;
+      const [p, q] = s.a === node ? [S[0], S[Math.min(2, S.length - 1)]] : [S[S.length - 1], S[Math.max(0, S.length - 3)]];
+      const l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+      return { x: (q.x - p.x) / l, y: (q.y - p.y) / l };
+    };
+    for (const start of [seg.a, seg.b]) {
+      let cur = seg;
+      let node = start;
+      for (let guard = 0; guard < 500; guard++) {
+        const back = away(cur, node);
+        let best: { s: RoadSegment; dot: number } | null = null;
+        for (const o of this.segments.values()) {
+          if (seen.has(o.id) || o.oneway || (o.a !== node && o.b !== node) || Math.abs(level(o) - level(cur)) > LEVEL_TOLERANCE) continue;
+          const d = away(o, node);
+          // Straight on means leaving opposite to where we came in
+          const dot = -(d.x * back.x + d.y * back.y);
+          if (dot > Math.cos((35 * Math.PI) / 180) && (!best || dot > best.dot)) best = { s: o, dot };
+        }
+        if (!best) break;
+        seen.add(best.s.id);
+        out.push(best.s);
+        node = best.s.a === node ? best.s.b : best.s.a;
+        cur = best.s;
+      }
+    }
+    return out;
   }
 
   /** Approximate cost-relevant length of a prospective road. */

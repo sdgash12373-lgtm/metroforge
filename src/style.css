@@ -390,3 +390,35 @@ button:focus-visible {
   border-color: var(--danger);
   color: var(--danger);
 }
+
+.dock .divider {
+  flex: none;
+  align-self: stretch;
+  width: 1px;
+  margin: 6px 2px;
+  background: var(--panel-line);
+}
+
+.map-name {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.map-name.street {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(28, 34, 31, 0.72);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.map-name.district {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.75),
+    0 0 10px rgba(0, 0, 0, 0.45);
+}

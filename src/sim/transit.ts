@@ -1,25 +1,140 @@
 import { type Vec2, bboxNear, clamp, closestOnSamples, dist, lengthAt, quadPoint, tAtLength } from './geometry';
-import type { RoadNetwork } from './roads';
-import type { Dir, RoadPoint, Traffic, Vehicle } from './traffic';
+import type { RoadNetwork, RoadSegment } from './roads';
+import type { Dir, RoadPoint, Traffic, Vehicle, VehicleKind } from './traffic';
 
-export const BUS_CAPACITY = 30;
-/** Default ticket price per boarding, and the most a player can charge. */
-export const BUS_FARE = 1;
-export const MAX_FARE = 5;
-/** Running cost per bus per day. */
-export const BUS_UPKEEP = 3;
-/** Building cost per stop on a new line. */
-export const STOP_COST = 300;
-/** How far people will walk to and from a stop. */
-export const WALK_RADIUS = 180;
-/** Share of commuters with a usable line who ride it at a free fare; each dollar of fare puts some back in their cars. */
-const SHARE_AT_FREE = 0.75;
-const SHARE_LOST_PER_DOLLAR = 0.12;
-const STOP_DWELL = 3;
+export type TransitKind = 'bus' | 'metro' | 'train' | 'hsr';
+
+/** What sets one kind of public transport apart: vehicles, prices, and where stops may go. */
+export interface TransitMode {
+  kind: TransitKind & VehicleKind;
+  /** shown in the UI, e.g. 捷運 */
+  label: string;
+  /** what a stop is called: 站牌 or 車站 */
+  stopLabel: string;
+  capacity: number;
+  /** default ticket price per boarding, and the most a player can charge */
+  fare: number;
+  maxFare: number;
+  /** running cost per vehicle per day */
+  upkeep: number;
+  /** building cost per stop or station */
+  stopCost: number;
+  /** how far people will walk to and from a stop */
+  walk: number;
+  /** one vehicle per this many meters of route, up to maxVehicles */
+  metersPerVehicle: number;
+  maxVehicles: number;
+  /** seconds at a stop before boarding time is added */
+  dwell: number;
+  /** stops keep this far from the ends of their segment (platform length) */
+  margin: number;
+  /** stops only on two-way ground streets (buses) */
+  streetsOnly: boolean;
+  /** vehicles can change direction at a stop (trains drive from either end) */
+  reverses: boolean;
+  /** share of commuters with a usable line who ride at a free fare, and how much each dollar costs */
+  shareAtFree: number;
+  sharePerDollar: number;
+  /** how attractive the mode is against the others, in meters of walking it is worth */
+  appeal: number;
+}
+
+export const BUS: TransitMode = {
+  kind: 'bus',
+  label: '公車',
+  stopLabel: '站',
+  capacity: 30,
+  fare: 1,
+  maxFare: 5,
+  upkeep: 3,
+  stopCost: 300,
+  walk: 180,
+  metersPerVehicle: 500,
+  maxVehicles: 8,
+  dwell: 3,
+  margin: 6,
+  streetsOnly: true,
+  reverses: false,
+  shareAtFree: 0.75,
+  sharePerDollar: 0.12,
+  appeal: 0,
+};
+
+export const METRO: TransitMode = {
+  kind: 'metro',
+  label: '捷運',
+  stopLabel: '站',
+  capacity: 240,
+  fare: 2,
+  maxFare: 10,
+  upkeep: 25,
+  stopCost: 4000,
+  walk: 320,
+  metersPerVehicle: 1200,
+  maxVehicles: 6,
+  dwell: 10,
+  margin: 30,
+  streetsOnly: false,
+  reverses: true,
+  shareAtFree: 0.85,
+  sharePerDollar: 0.05,
+  appeal: 150,
+};
+
+export const TRAIN: TransitMode = {
+  kind: 'train',
+  label: '火車',
+  stopLabel: '站',
+  capacity: 320,
+  fare: 3,
+  maxFare: 15,
+  upkeep: 30,
+  stopCost: 3500,
+  walk: 400,
+  metersPerVehicle: 1800,
+  maxVehicles: 5,
+  dwell: 14,
+  margin: 42,
+  streetsOnly: false,
+  reverses: true,
+  shareAtFree: 0.8,
+  sharePerDollar: 0.035,
+  appeal: 100,
+};
+
+export const HSR: TransitMode = {
+  kind: 'hsr',
+  label: '高鐵',
+  stopLabel: '站',
+  capacity: 400,
+  fare: 8,
+  maxFare: 40,
+  upkeep: 60,
+  stopCost: 8000,
+  walk: 500,
+  metersPerVehicle: 3000,
+  maxVehicles: 4,
+  dwell: 16,
+  margin: 62,
+  streetsOnly: false,
+  reverses: true,
+  shareAtFree: 0.7,
+  sharePerDollar: 0.012,
+  appeal: 80,
+};
+
+export const MODES: Record<TransitKind, TransitMode> = { bus: BUS, metro: METRO, train: TRAIN, hsr: HSR };
+
 const STOP_REACH = 10;
-const METERS_PER_BUS = 500;
-const MAX_BUSES_PER_LINE = 8;
 const WAITING_CAP = 150;
+
+/** A trip's best line: board at stop `a` and get off at stop `b`, walking `walk` meters in all. */
+export interface TransitOption {
+  line: number;
+  a: BusStop;
+  b: number;
+  walk: number;
+}
 
 export const LINE_COLORS = [0xe4572e, 0x2e86ab, 0x6a994e, 0xa23b72, 0xf2b134, 0x3d5a80, 0xd62828, 0x2a9d8f];
 
@@ -54,7 +169,7 @@ export interface BusLine {
   riders: number;
 }
 
-/** Bus stops, lines, and the riders that use them. Buses themselves drive in Traffic. */
+/** Stops, lines, and the riders that use them, for one kind of transport. The vehicles drive in Traffic. */
 export class Transit {
   stops = new Map<number, BusStop>();
   lines = new Map<number, BusLine>();
@@ -65,26 +180,39 @@ export class Transit {
   faresToday = 0;
   ridersToday = 0;
   /** ticket price per boarding */
-  fare = BUS_FARE;
+  fare: number;
 
   constructor(
-    private net: RoadNetwork,
-    private traffic: Traffic,
+    readonly net: RoadNetwork,
+    readonly traffic: Traffic,
+    readonly mode: TransitMode = BUS,
   ) {
-    traffic.busHooks = { arrive: (v) => this.arrive(v), depart: (v) => this.depart(v) };
+    this.fare = mode.fare;
+    traffic.lineHooks = { arrive: (v) => this.arrive(v), depart: (v) => this.depart(v) };
   }
 
-  /** The street point a stop at p would use: the nearest road at ground level, away from junctions. */
+  /** Segments a stop may sit on: streets for buses; any level stretch of track for trains. */
+  private canStop(seg: RoadSegment): boolean {
+    if (this.mode.streetsOnly) return this.net.isStreet(seg);
+    return this.net.node(seg.a).h === this.net.node(seg.b).h;
+  }
+
+  /** Default name of a new line. */
+  defaultName(id: number): string {
+    return this.mode.kind === 'bus' ? `${id} 號線` : `${this.mode.label} ${id} 號線`;
+  }
+
+  /** The point a stop at p would use: the nearest road or track it may sit on, away from junctions. */
   locate(p: Vec2, reach = STOP_REACH): { at: RoadPoint; p: Vec2 } | null {
     let best: { seg: number; t: number; d: number } | null = null;
     for (const seg of this.net.segments.values()) {
-      if (!this.net.isStreet(seg) || !bboxNear(seg.bbox, p, reach)) continue;
+      if (!this.canStop(seg) || !bboxNear(seg.bbox, p, reach)) continue;
       const r = closestOnSamples(seg.samples, p);
       if (r.d < reach && (!best || r.d < best.d)) best = { seg: seg.id, t: r.t, d: r.d };
     }
     if (!best) return null;
     const seg = this.net.segments.get(best.seg)!;
-    const margin = Math.min(6, seg.length / 2);
+    const margin = Math.min(this.mode.margin, seg.length / 2);
     const s = clamp(lengthAt(seg.samples, best.t), margin, seg.length - margin);
     return { at: { seg: seg.id, s }, p: quadPoint(this.net.quad(seg), tAtLength(seg.samples, s)) };
   }
@@ -134,7 +262,7 @@ export class Transit {
     this.nextLine = Math.max(this.nextLine, lineId + 1);
     const line: BusLine = {
       id: lineId,
-      name: name ?? `${lineId} 號線`,
+      name: name ?? this.defaultName(lineId),
       color: color ?? LINE_COLORS[(lineId - 1) % LINE_COLORS.length],
       stops: [...stops],
       path: [],
@@ -150,14 +278,14 @@ export class Transit {
 
   /** Share of commuters with a usable line who take it at the current fare. */
   share(): number {
-    return clamp(SHARE_AT_FREE - SHARE_LOST_PER_DOLLAR * this.fare, 0.1, 0.9);
+    return clamp(this.mode.shareAtFree - this.mode.sharePerDollar * this.fare, 0.1, 0.9);
   }
 
   /** Renames or recolours a line (blank names fall back to the default). */
   editLine(id: number, change: { name?: string; color?: number }): void {
     const line = this.lines.get(id);
     if (!line) return;
-    if (change.name !== undefined) line.name = change.name.trim().slice(0, 20) || `${line.id} 號線`;
+    if (change.name !== undefined) line.name = change.name.trim().slice(0, 20) || this.defaultName(line.id);
     if (change.color !== undefined) line.color = change.color;
     this.version++;
   }
@@ -175,7 +303,7 @@ export class Transit {
   }
 
   /**
-   * Route of a list of stops, leg by leg, each leg leaving in the direction the last one arrived.
+   * Route of a list of stops, leg by leg. Buses leave each stop in the direction they arrived; trains may reverse.
    * `loop` adds the leg from the last stop back to the first.
    */
   plan(stopIds: number[], loop: boolean): { path: PathPiece[]; length: number; ok: boolean } {
@@ -201,7 +329,7 @@ export class Transit {
         path.push({ seg: l.seg, dir: l.dir, from, to });
         length += Math.max(0, to - from);
       });
-      dir = lanes[lanes.length - 1].dir;
+      dir = this.mode.reverses ? undefined : lanes[lanes.length - 1].dir;
     }
     return { path, length, ok };
   }
@@ -225,13 +353,14 @@ export class Transit {
     this.version++;
   }
 
+  /** Vehicles running on a line, or on every line of this mode. */
   buses(lineId?: number): Vehicle[] {
-    return this.traffic.vehicles.filter((v) => v.kind === 'bus' && (lineId === undefined || v.line === lineId));
+    return this.traffic.vehicles.filter((v) => v.kind === this.mode.kind && v.line !== undefined && (lineId === undefined || v.line === lineId));
   }
 
-  /** Buses a line runs: one per 500 m of route. */
+  /** Vehicles a line runs: one per so many meters of route. */
   fleetSize(line: BusLine): number {
-    return line.ok ? clamp(Math.ceil(line.length / METERS_PER_BUS), 1, MAX_BUSES_PER_LINE) : 0;
+    return line.ok ? clamp(Math.ceil(line.length / this.mode.metersPerVehicle), 1, this.mode.maxVehicles) : 0;
   }
 
   /** Puts at most one missing bus per line on the road, spread out along the loop. */
@@ -247,7 +376,7 @@ export class Transit {
         const i = (first + k) % n;
         const a = this.stops.get(line.stops[i])?.at;
         const b = this.stops.get(line.stops[(i + 1) % n])?.at;
-        const v = a && b ? this.traffic.spawn(a, b, 'bus', 0) : null;
+        const v = a && b ? this.traffic.spawn(a, b, this.mode.kind, 0) : null;
         if (!v) continue;
         v.line = line.id;
         v.next = (i + 1) % n;
@@ -257,18 +386,16 @@ export class Transit {
     }
   }
 
-  /**
-   * A commuter from `from` to `to` takes the bus when one line has stops within walking
-   * distance of both ends. Returns true when they joined the queue at a stop.
-   */
-  board(from: Vec2, to: Vec2): boolean {
-    let best: { line: number; a: BusStop; b: number; walk: number } | null = null;
+  /** The line with stops in walking distance of both ends of a trip, walking the least; null if none. */
+  option(from: Vec2, to: Vec2): TransitOption | null {
+    let best: TransitOption | null = null;
+    const walk = this.mode.walk;
     for (const line of this.lines.values()) {
       if (!line.ok) continue;
       let a: BusStop | null = null;
-      let da = WALK_RADIUS;
+      let da = walk;
       let b: BusStop | null = null;
-      let db = WALK_RADIUS;
+      let db = walk;
       for (const id of line.stops) {
         const s = this.stops.get(id)!;
         const d1 = dist(s.p, from);
@@ -284,15 +411,38 @@ export class Transit {
       }
       if (a && b && a !== b && (!best || da + db < best.walk)) best = { line: line.id, a, b: b.id, walk: da + db };
     }
-    if (!best) return false;
-    let byLine = best.a.waiting.get(best.line);
-    if (!byLine) best.a.waiting.set(best.line, (byLine = new Map()));
+    return best;
+  }
+
+  /** Puts a rider in the queue at a stop. False when the stop is too crowded to wait at. */
+  enqueue(o: TransitOption, riders = 1): boolean {
+    let byLine = o.a.waiting.get(o.line);
+    if (!byLine) o.a.waiting.set(o.line, (byLine = new Map()));
     let total = 0;
     for (const n of byLine.values()) total += n;
     // A crowded stop sends people back to their cars
-    if (total >= WAITING_CAP) return false;
-    byLine.set(best.b, (byLine.get(best.b) ?? 0) + 1);
+    if (total >= WAITING_CAP * (this.mode.capacity / BUS.capacity) ** 0.5) return false;
+    byLine.set(o.b, (byLine.get(o.b) ?? 0) + riders);
     return true;
+  }
+
+  /** A commuter takes this mode when one line has stops within walking distance of both ends. */
+  board(from: Vec2, to: Vec2): boolean {
+    const o = this.option(from, to);
+    return !!o && this.enqueue(o);
+  }
+
+  /** Travellers from out of town, between two random stations of a random line. */
+  visitors(count: number, rng: () => number): void {
+    const lines = [...this.lines.values()].filter((l) => l.ok && l.stops.length >= 2);
+    for (let i = 0; i < count && lines.length; i++) {
+      const line = lines[Math.floor(rng() * lines.length) % lines.length];
+      const n = line.stops.length;
+      const from = Math.floor(rng() * n) % n;
+      const to = (from + 1 + (Math.floor(rng() * (n - 1)) % (n - 1))) % n;
+      const a = this.stops.get(line.stops[from]);
+      if (a) this.enqueue({ line: line.id, a, b: line.stops[to], walk: 0 });
+    }
   }
 
   waitingAt(stop: BusStop): number {
@@ -304,7 +454,8 @@ export class Transit {
   /** Riders get off and on; the bus then heads for the following stop. */
   private arrive(v: Vehicle): number {
     const line = v.line !== undefined ? this.lines.get(v.line) : undefined;
-    if (!line || v.next === undefined || !v.load) return STOP_DWELL;
+    const dwell = this.mode.dwell;
+    if (!line || v.next === undefined || !v.load) return dwell;
     const stopId = line.stops[v.next % line.stops.length];
     const stop = this.stops.get(stopId);
     const off = v.load.get(stopId) ?? 0;
@@ -315,7 +466,7 @@ export class Transit {
     const queue = stop?.waiting.get(line.id);
     if (queue) {
       for (const [dest, n] of queue) {
-        const take = Math.min(n, BUS_CAPACITY - onBoard - on);
+        const take = Math.min(n, this.mode.capacity - onBoard - on);
         if (take <= 0) break;
         on += take;
         v.load.set(dest, (v.load.get(dest) ?? 0) + take);
@@ -327,7 +478,7 @@ export class Transit {
     this.ridersToday += on;
     line.riders += on;
     v.next = (v.next + 1) % line.stops.length;
-    return Math.min(8, STOP_DWELL + (on + off) * 0.05);
+    return Math.min(dwell * 2.5, dwell + (on + off) * 0.05);
   }
 
   private depart(v: Vehicle): boolean {

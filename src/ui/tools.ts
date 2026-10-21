@@ -1,14 +1,28 @@
 import { angleGuides } from '../sim/angles';
+import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
 import type { City } from '../sim/city';
 import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, lerp, quadPoint } from '../sim/geometry';
 import { ROUNDABOUT_RADIUS, type RoundaboutSize } from '../sim/city';
-import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type Snap, TUNNEL_DEPTH } from '../sim/roads';
-import { LINE_COLORS, type PathPiece, STOP_COST } from '../sim/transit';
+import { RAIL_SPECS, type RailKind } from '../sim/rail';
+import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type RoadNetwork, type Snap, TUNNEL_DEPTH } from '../sim/roads';
+import { LINE_COLORS, type PathPiece, type Transit } from '../sim/transit';
 import { ZONES, Zone } from '../sim/zoning';
 import type { World } from '../render/world';
 
-export type Tool = 'pan' | 'road' | 'curve' | 'roundabout' | 'zone' | 'bulldoze' | 'traffic' | 'bus';
+export type Tool = 'pan' | 'road' | 'curve' | 'roundabout' | 'zone' | 'bulldoze' | 'traffic' | 'bus' | RailKind | 'airport' | 'streetName' | 'district';
+
+/** Train tools either lay track or plan lines through stations. */
+export type RailAction = 'track' | 'line';
+
+export const isRail = (t: Tool): t is RailKind => t === 'metro' || t === 'train' || t === 'hsr';
+
+/** District size range and default, in meters. */
+export const DISTRICT_MIN = 80;
+export const DISTRICT_MAX = 600;
+
+/** Airports turn in steps of this many degrees. */
+const AIRPORT_TURN = 15;
 
 /** Which level the road tools build on. */
 export type RoadLevel = 'ground' | 'elevated' | 'tunnel';
@@ -34,11 +48,27 @@ export class ToolController {
   brushRadius = BRUSH_DEFAULT;
   roadLevel: RoadLevel = 'ground';
   roundaboutSize: RoundaboutSize = 4;
-  /** stops of the bus line being planned */
+  /** stops of the bus or train line being planned */
   lineDraft: number[] = [];
   private draftPath: PathPiece[] = [];
-  /** bus line picked in the dock, e.g. to delete it */
+  /** line picked in the dock, to rename, recolour or delete it */
   selectedLine: number | null = null;
+  railAction: RailAction = 'track';
+  /** track tools draw curves instead of straight track */
+  trackCurve = false;
+  trackLevel: Record<RailKind, RoadLevel> = {
+    metro: RAIL_SPECS.metro.defaultLevel,
+    train: RAIL_SPECS.train.defaultLevel,
+    hsr: RAIL_SPECS.hsr.defaultLevel,
+  };
+  runways: RunwayCount = 2;
+  /** airport heading, degrees */
+  airportAngle = 0;
+  selectedFlight: number | null = null;
+  /** a segment of the street picked for naming */
+  selectedStreet: number | null = null;
+  selectedDistrict: number | null = null;
+  districtRadius = 250;
 
   constructor(
     private city: City,
@@ -55,20 +85,113 @@ export class ToolController {
     this.tool = tool;
     this.cancel();
     this.selectedLine = null;
+    this.selectedFlight = null;
+    this.selectedStreet = null;
+    this.selectedDistrict = null;
+    // A train system without track starts with laying track; one with lines, with the lines
+    if (isRail(tool)) this.railAction = this.city.rails[tool].transit.lines.size ? 'line' : this.city.rails[tool].net.segments.size ? this.railAction : 'track';
     this.world.setShowEmptyCells(tool === 'zone');
     this.world.setTrafficOverlay(tool === 'traffic');
-    this.world.setLineOverlay(tool === 'bus');
+    this.world.setLineOverlay(tool === 'bus' ? 'bus' : isRail(tool) ? tool : null);
     this.updateUnderground();
     this.updatePickHeight();
     this.refresh();
   }
 
   setRoadLevel(level: RoadLevel): void {
-    this.roadLevel = level;
+    if (isRail(this.tool)) this.trackLevel[this.tool] = level;
+    else this.roadLevel = level;
     this.updatePickHeight();
     this.updateUnderground();
     this.events.changed();
     this.refresh();
+  }
+
+  /** Level the active drawing tool builds on. */
+  get level(): RoadLevel {
+    return isRail(this.tool) ? this.trackLevel[this.tool] : this.roadLevel;
+  }
+
+  setRailAction(action: RailAction): void {
+    this.cancel();
+    this.railAction = action;
+    this.selectedLine = null;
+    this.updatePickHeight();
+    this.updateUnderground();
+    this.events.changed();
+    this.refresh();
+  }
+
+  setDistrictRadius(r: number): void {
+    this.districtRadius = Math.max(DISTRICT_MIN, Math.min(DISTRICT_MAX, r));
+    if (this.selectedDistrict !== null) this.city.editDistrict(this.selectedDistrict, { r: this.districtRadius });
+    else this.hover = { ...this.world.rig.target };
+    this.refresh();
+  }
+
+  selectStreet(id: number | null): void {
+    this.selectedStreet = id;
+    this.events.changed();
+    this.refresh();
+  }
+
+  selectDistrict(id: number | null): void {
+    this.selectedDistrict = id;
+    const d = id !== null ? this.city.districts.get(id) : undefined;
+    if (d) this.districtRadius = d.r;
+    this.events.changed();
+    this.refresh();
+  }
+
+  deleteDistrict(id: number): void {
+    this.city.removeDistrict(id);
+    this.selectedDistrict = null;
+    this.events.toast('區域已刪除');
+    this.events.changed();
+    this.refresh();
+  }
+
+  setTrackCurve(on: boolean): void {
+    this.trackCurve = on;
+    this.draft = { start: null, control: null };
+    this.events.changed();
+    this.refresh();
+  }
+
+  setRunways(n: RunwayCount): void {
+    this.runways = n;
+    this.events.changed();
+    this.refresh();
+  }
+
+  turnAirport(): void {
+    this.airportAngle = (this.airportAngle + AIRPORT_TURN) % 180;
+    this.events.changed();
+    this.refresh();
+  }
+
+  /** Adds a flight at the airport and opens it for editing. */
+  addFlight(): void {
+    const f = this.city.aviation.addFlight();
+    if (!f) {
+      this.events.toast('先蓋一座機場才能開航班');
+      return;
+    }
+    this.selectedFlight = f.id;
+    this.events.toast(`航班 ${f.name} 已開航`);
+    this.events.changed();
+  }
+
+  selectFlight(id: number | null): void {
+    this.selectedFlight = id;
+    this.events.changed();
+  }
+
+  deleteFlight(id: number): void {
+    this.city.aviation.removeFlight(id);
+    this.selectedFlight = null;
+    this.events.toast('航班已取消');
+    this.events.changed();
   }
 
   setRoundaboutSize(size: RoundaboutSize): void {
@@ -77,23 +200,49 @@ export class ToolController {
     this.refresh();
   }
 
+  /** Tools that draw roads or track by tapping a start and an end. */
   private get isRoadTool(): boolean {
-    return this.tool === 'road' || this.tool === 'curve';
+    return this.tool === 'road' || this.tool === 'curve' || this.drawsTrack;
   }
 
-  /** Height new road ends are built at. */
-  private get level(): number {
-    return LEVEL_HEIGHT[this.roadLevel];
+  private get drawsTrack(): boolean {
+    return isRail(this.tool) && this.railAction === 'track';
+  }
+
+  /** The drawing tool takes a bend control point. */
+  private get curved(): boolean {
+    return this.tool === 'curve' || (this.drawsTrack && this.trackCurve);
+  }
+
+  /** Network the drawing tool builds on. */
+  private get net(): RoadNetwork {
+    return isRail(this.tool) ? this.city.rails[this.tool].net : this.city.net;
+  }
+
+  /** Stops and lines of the active bus or train tool. */
+  get transit(): Transit | null {
+    if (this.tool === 'bus') return this.city.transit;
+    return isRail(this.tool) ? this.city.rails[this.tool].transit : null;
+  }
+
+  /** The tool plans bus or train lines. */
+  get plansLines(): boolean {
+    return this.tool === 'bus' || (isRail(this.tool) && this.railAction === 'line');
+  }
+
+  /** Height new road or track ends are built at. */
+  private get height(): number {
+    return LEVEL_HEIGHT[this.level];
   }
 
   /** Taps land on the plane being built on, so the finger sits on the deck or tunnel being drawn. */
   private updatePickHeight(): void {
-    this.world.rig.pickHeight = this.isRoadTool ? this.level : 0;
+    this.world.rig.pickHeight = this.isRoadTool ? this.height : 0;
   }
 
-  /** See-through ground while building tunnels; tunnels marked on the surface while bulldozing. */
+  /** See-through ground while building tunnels or metro lines; tunnels marked on the surface while bulldozing. */
   private updateUnderground(): void {
-    this.world.setXray(this.isRoadTool && this.roadLevel === 'tunnel');
+    this.world.setXray((this.isRoadTool && this.level === 'tunnel') || (this.tool === 'metro' && this.railAction === 'line'));
     this.world.setUndergroundView(this.tool === 'bulldoze');
   }
 
@@ -115,7 +264,7 @@ export class ToolController {
     if (this.lineDraft.length) {
       this.lineDraft = [];
       this.draftPath = [];
-      this.city.transit.pruneStops();
+      for (const t of this.city.transits) t.pruneStops();
     }
     this.events.changed();
     this.refresh();
@@ -125,14 +274,16 @@ export class ToolController {
     return this.draft.start !== null;
   }
 
-  /** Opens the planned bus line. */
+  /** Opens the planned line. */
   finishLine(): void {
-    const r = this.city.createBusLine(this.lineDraft);
+    const t = this.transit;
+    if (!t) return;
+    const r = this.city.createLine(t, this.lineDraft);
     if (!r.ok) {
       if (r.reason) this.events.toast(r.reason);
       return;
     }
-    this.events.toast(`公車路線開通！${this.lineDraft.length} 站，花費 $${r.cost.toLocaleString()}`);
+    this.events.toast(`${t.mode.label}路線開通！${this.lineDraft.length} 站，花費 $${r.cost.toLocaleString()}`);
     this.lineDraft = [];
     this.draftPath = [];
     this.events.changed();
@@ -140,15 +291,18 @@ export class ToolController {
   }
 
   clearLines(): void {
-    this.city.transit.clearLines();
+    const t = this.transit;
+    if (!t) return;
+    t.clearLines();
+    t.pruneStops();
     this.selectedLine = null;
-    this.events.toast('所有公車路線已清除');
+    this.events.toast(`所有${t.mode.label}路線已清除`);
     this.events.changed();
     this.refresh();
   }
 
   deleteLine(id: number): void {
-    this.city.transit.removeLine(id);
+    this.transit?.removeLine(id);
     this.selectedLine = null;
     this.events.toast('路線已刪除');
     this.events.changed();
@@ -171,9 +325,9 @@ export class ToolController {
   }
 
   private snap(p: Vec2): Snap {
-    const net = this.city.net;
+    const net = this.net;
     const r = this.world.rig.snapRadius;
-    const h = this.level;
+    const h = this.height;
     if (h === 0) return net.snap(p, r, 0);
     // Roads on the level being drawn win, then streets at that spot (to start a ramp). Taps land on the
     // deck or tunnel plane, so the street is looked up where the finger points on the ground.
@@ -187,7 +341,7 @@ export class ToolController {
   private snapRoad(p: Vec2): { snap: Snap; guides: GuideLine[] } {
     const s = this.snap(p);
     if (s.kind !== 'free') return { snap: s, guides: [] };
-    const a = alignToGuides(this.city.net, p, this.world.rig.snapRadius * 0.6);
+    const a = alignToGuides(this.net, p, this.world.rig.snapRadius * 0.6);
     return { snap: { kind: 'free', p: a.p }, guides: a.lines };
   }
 
@@ -196,27 +350,8 @@ export class ToolController {
       case 'pan':
         return '拖曳移動地圖；雙指縮放、旋轉；滑鼠右鍵旋轉視角、滾輪縮放。';
       case 'road':
-      case 'curve': {
-        const { start, control } = this.draft;
-        if (start && this.hover && (this.tool === 'road' || control)) {
-          const end = this.snapRoad(this.hover).snap;
-          const steep = this.city.gradeProblem(start, control, end, this.level);
-          if (steep) return steep;
-          const len = Math.round(Math.hypot(end.p.x - start.p.x, end.p.y - start.p.y));
-          const [ha, hb] = this.city.roadHeights(start, end, this.level);
-          const cost = this.city.roadCost(start.p, control, end.p, ha, hb);
-          const kind = ha === hb ? (ha > 0 ? '高架 ' : ha < 0 ? '隧道 ' : '') : hb < 0 || ha < 0 ? '隧道入口 ' : '匝道 ';
-          return `${kind}約 ${len} 公尺 · $${cost.toLocaleString()}　點一下完成，再點起點結束拉路`;
-        }
-        if (this.roadLevel === 'elevated' && !start) {
-          return `高架道路：從地面道路接出會自動做成匝道（至少 ${Math.ceil(ELEVATED_HEIGHT / MAX_GRADE)} 公尺），跨過地面道路不會形成路口`;
-        }
-        if (this.roadLevel === 'tunnel' && !start) {
-          return `地下道路：地面變透明，看得到地底下的道路；從地面道路接出會自動做成隧道入口（至少 ${Math.ceil(-TUNNEL_DEPTH / MAX_GRADE)} 公尺）`;
-        }
-        if (this.tool === 'curve') return start ? '點一下決定彎曲的方向（控制點）' : '曲線道路：點起點 → 控制點 → 終點';
-        return start ? '點終點，或按住拖曳預覽路徑、放開完成；雙指移動地圖' : '直線道路：點起點，再點終點，可連續拉路';
-      }
+      case 'curve':
+        return this.drawHint('道路', '拉路');
       case 'zone':
         return this.zone === Zone.None ? '在格子上塗抹以清除分區' : `塗抹道路旁的格子設為「${ZONES[this.zone].name}」；雙指移動地圖`;
       case 'roundabout': {
@@ -224,29 +359,88 @@ export class ToolController {
         return `${this.roundaboutSize} 通圓環 · 約 $${cost.toLocaleString()}　靠近路口或道路會自動吸附（橘色圈），壓到的道路自動接上；車輛逆時針單向繞行`;
       }
       case 'bulldoze':
-        return '點一條道路拆除，退還一半費用';
+        return '點道路、軌道或機場拆除，退還一半費用；藍色是地下的隧道';
       case 'traffic': {
         const v = this.city.traffic.vehicles;
         const avg = v.length ? (v.reduce((sum, x) => sum + x.speed, 0) / v.length) * 3.6 : 0;
         return `車輛 ${v.length} 台 · 平均 ${Math.round(avg)} km/h · 已完成 ${this.city.traffic.tripsCompleted.toLocaleString()} 趟　綠 = 順暢、紅 = 塞車`;
       }
-      case 'bus': {
-        const n = this.lineDraft.length;
-        if (n === 1) return `已設 1 站（每站 $${STOP_COST}）；沿著路線點下一站`;
-        if (n > 1) return `已設 ${n} 站；點第一站或「完成路線」讓公車繞回起點`;
-        const t = this.city.transit;
-        const picked = this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
-        if (picked) {
-          return `${picked.name}：公車 ${t.buses(picked.id).length} 台 · 載客 ${picked.riders.toLocaleString()} 人`;
-        }
-        if (!t.lines.size) return '公車：點地面道路設第一個站，依序點下一站，最後點回第一站完成路線';
-        let riders = 0;
-        let waiting = 0;
-        for (const l of t.lines.values()) riders += l.riders;
-        for (const st of t.stops.values()) waiting += t.waitingAt(st);
-        return `公車 ${t.buses().length} 台 · 累計載客 ${riders.toLocaleString()} 人 · 候車 ${waiting.toLocaleString()} 人　點道路開始新路線；點下方路線可刪除`;
+      case 'bus':
+        return this.lineHint();
+      case 'metro':
+      case 'train':
+      case 'hsr':
+        return this.railAction === 'track' ? this.drawHint(`${RAIL_SPECS[this.tool].mode.label}軌道`, '拉軌道') : this.lineHint();
+      case 'airport':
+        return this.airportHint();
+      case 'streetName': {
+        const seg = this.selectedStreet !== null ? this.city.net.segments.get(this.selectedStreet) : undefined;
+        if (seg) return `${seg.name ?? '這條路'}：在上方輸入路名，整條路（直行穿過路口的部分）都會套用`;
+        return '點一條道路替它取路名；路名會沿著道路顯示在地圖上';
+      }
+      case 'district': {
+        const d = this.selectedDistrict !== null ? this.city.districts.get(this.selectedDistrict) : undefined;
+        if (d) return `${d.name}：在上方改名稱與顏色，拉桿調整範圍；點空地再新增一個區域`;
+        return '點地圖新增區域並命名，拉桿調整範圍；點區域中央可以修改';
       }
     }
+  }
+
+  /** Hint for drawing a road or track: length and price of the ghost, or how to start. */
+  private drawHint(what: string, verb: string): string {
+    const { start, control } = this.draft;
+    if (start && this.hover && (!this.curved || control)) {
+      const end = this.snapRoad(this.hover).snap;
+      const steep = this.city.gradeProblem(start, control, end, this.height, this.net);
+      if (steep) return steep;
+      const len = Math.round(Math.hypot(end.p.x - start.p.x, end.p.y - start.p.y));
+      const [ha, hb] = this.city.roadHeights(start, end, this.height, this.net);
+      const cost = this.cost(start.p, control, end.p, ha, hb);
+      const kind = ha === hb ? (ha > 0 ? '高架 ' : ha < 0 ? '隧道 ' : '') : hb < 0 || ha < 0 ? '隧道入口 ' : '匝道 ';
+      return `${kind}約 ${len} 公尺 · $${cost.toLocaleString()}　點一下完成，再點起點結束${verb}`;
+    }
+    if (this.level === 'elevated' && !start) {
+      return `高架${what}：從地面接出會自動做成匝道（至少 ${Math.ceil(ELEVATED_HEIGHT / MAX_GRADE)} 公尺），跨過地面不會形成路口`;
+    }
+    if (this.level === 'tunnel' && !start) {
+      return `地下${what}：地面變透明，看得到地底下；從地面接出會自動做成隧道入口（至少 ${Math.ceil(-TUNNEL_DEPTH / MAX_GRADE)} 公尺）`;
+    }
+    if (this.curved) return start ? '點一下決定彎曲的方向（控制點）' : `曲線${what}：點起點 → 控制點 → 終點`;
+    return start ? '點終點，或按住拖曳預覽路徑、放開完成；雙指移動地圖' : `直線${what}：點起點，再點終點，可連續${verb}`;
+  }
+
+  private cost(a: Vec2, c: Vec2 | null, b: Vec2, ha: number, hb: number): number {
+    return isRail(this.tool) ? this.city.trackCost(this.tool, a, c, b, ha, hb) : this.city.roadCost(a, c, b, ha, hb);
+  }
+
+  private lineHint(): string {
+    const t = this.transit!;
+    const { label } = t.mode;
+    const n = this.lineDraft.length;
+    if (n === 1) return `已設 1 站（每站 $${t.mode.stopCost.toLocaleString()}）；沿著路線點下一站`;
+    if (n > 1) return t.mode.reverses ? `已設 ${n} 站；點「完成路線」開通，列車在兩端折返` : `已設 ${n} 站；點第一站或「完成路線」讓公車繞回起點`;
+    const picked = this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
+    if (picked) return `${picked.name}：${label} ${t.buses(picked.id).length} 列 · 載客 ${picked.riders.toLocaleString()} 人`;
+    if (!t.lines.size) {
+      if (t.mode.streetsOnly) return '公車：點地面道路設第一個站，依序點下一站，最後點回第一站完成路線';
+      if (!t.net.segments.size) return `先用「軌道」拉${label}軌道，再到「路線」設車站`;
+      return `${label}：在軌道上點一下設車站（每站 $${t.mode.stopCost.toLocaleString()}），依序點下一站，再按「完成路線」`;
+    }
+    let riders = 0;
+    let waiting = 0;
+    for (const l of t.lines.values()) riders += l.riders;
+    for (const st of t.stops.values()) waiting += t.waitingAt(st);
+    return `${label} ${t.buses().length} ${t.mode.streetsOnly ? '台' : '列'} · 累計載客 ${riders.toLocaleString()} 人 · 候車 ${waiting.toLocaleString()} 人　點${t.mode.streetsOnly ? '道路' : '軌道'}開新路線`;
+  }
+
+  private airportHint(): string {
+    const air = this.city.aviation;
+    const f = this.selectedFlight !== null ? air.flights.get(this.selectedFlight) : undefined;
+    if (f) return `${f.name}：已載客 ${f.passengers.toLocaleString()} 人　每班約 ${air.passengersPerFlight(this.city.stats.population)} 人`;
+    const cost = AIRPORT_COST[this.runways];
+    const base = `${this.runways === 2 ? '雙' : '四'}跑道機場 · $${cost.toLocaleString()}　點空地蓋機場，「旋轉」調整方向`;
+    if (!air.airports.size) return base;
+    return `航班 ${air.flights.size} 班 · 每班約 ${air.passengersPerFlight(this.city.stats.population)} 人；按「新增航班」開航，點航班改名稱與機身顏色`;
   }
 
   onHover(p: Vec2 | null): void {
@@ -257,13 +451,32 @@ export class ToolController {
   onTap(p: Vec2): void {
     this.hover = p;
     if (this.isRoadTool) this.tapRoad(p);
-    else if (this.tool === 'bus') this.tapBus(p);
+    else if (this.plansLines) this.tapLine(p);
+    else if (this.tool === 'streetName') {
+      const net = this.city.net;
+      const r = Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6);
+      const hit = net.segmentAt(p, r, 0) ?? net.segmentAt(p, r);
+      if (!hit || hit.seg.oneway) this.events.toast(hit ? '圓環不能命名，請點其他道路' : '點一條道路來命名');
+      this.selectedStreet = hit && !hit.seg.oneway ? hit.seg.id : null;
+      this.events.changed();
+    } else if (this.tool === 'district') {
+      const d = this.city.districtAt(p, this.world.rig.snapRadius * 2);
+      if (d) this.selectDistrict(d.id);
+      else {
+        const nd = this.city.addDistrict(p, this.districtRadius);
+        this.selectedDistrict = nd.id;
+        this.events.toast(`已新增「${nd.name}」，可在上方改名稱`);
+      }
+    } else if (this.tool === 'airport') {
+      const r = this.city.buildAirport(p, this.radians, this.runways);
+      this.events.toast(r.ok ? `機場完成，花費 $${r.cost.toLocaleString()}；按「新增航班」開航` : (r.reason ?? '這裡不能蓋機場'));
+    }
     else if (this.tool === 'roundabout') {
       const r = this.city.buildRoundabout(this.roundaboutCenter(p).p, this.roundaboutSize);
       this.events.toast(r.ok ? `圓環完成，花費 $${r.cost.toLocaleString()}` : (r.reason ?? '這裡不能蓋圓環'));
     } else if (this.tool === 'bulldoze') {
       const r = this.city.bulldoze(p, Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6));
-      if (r.ok) this.events.toast(`道路已拆除，退還 $${r.refund.toLocaleString()}`);
+      if (r.ok) this.events.toast(`${r.what ?? '道路'}已拆除，退還 $${r.refund.toLocaleString()}`);
       else if (r.reason) this.events.toast(r.reason);
     } else if (this.tool === 'zone') this.onPaint(p);
     this.events.changed();
@@ -287,17 +500,19 @@ export class ToolController {
       this.cancel();
       return;
     }
-    if (this.tool === 'curve' && !this.draft.control) {
+    if (this.curved && !this.draft.control) {
       this.draft.control = { x: p.x, y: p.y };
       return;
     }
-    const r = this.city.buildRoad(start, this.draft.control, s, false, this.level);
+    const r = isRail(this.tool)
+      ? this.city.buildTrack(this.tool, start, this.draft.control, s, this.height)
+      : this.city.buildRoad(start, this.draft.control, s, false, this.height);
     if (!r.ok) {
       if (r.reason) this.events.toast(r.reason);
       return;
     }
     // Keep drawing from where this road ended
-    const end = this.city.net.nodes.get(r.endNode!)!;
+    const end = this.net.nodes.get(r.endNode!)!;
     this.draft = { start: { kind: 'node', node: end, p: end.p }, control: null };
   }
 
@@ -324,8 +539,13 @@ export class ToolController {
     return { p, snapped: false };
   }
 
-  private tapBus(p: Vec2): void {
-    const transit = this.city.transit;
+  /** Airport heading in radians. */
+  private get radians(): number {
+    return (this.airportAngle * Math.PI) / 180;
+  }
+
+  private tapLine(p: Vec2): void {
+    const transit = this.transit!;
     const r = this.world.rig.snapRadius;
     const first = this.lineDraft[0];
     // Tapping the first stop again closes the loop
@@ -335,7 +555,8 @@ export class ToolController {
     }
     const stop = transit.stopAt(p, r);
     if (!stop) {
-      this.events.toast('公車站要設在地面道路旁（高架道路不能設站）');
+      const { label } = transit.mode;
+      this.events.toast(transit.mode.streetsOnly ? '公車站要設在地面道路旁（高架道路不能設站）' : `${label}車站要設在${label}軌道上（坡道上不能設站）`);
       return;
     }
     if (stop.id === this.lineDraft[this.lineDraft.length - 1]) return;
@@ -352,14 +573,29 @@ export class ToolController {
     w.setGuideLines(road?.guides ?? []);
     // Without hover (touch), keep marking where the road being drawn starts
     const marker = hoverSnap?.p ?? (isRoad ? (this.draft.start?.p ?? null) : this.tool === 'bulldoze' ? this.hover : null);
-    const markerHeight = hoverSnap ? this.city.net.snapHeight(hoverSnap, this.level) : this.draft.start ? this.city.net.snapHeight(this.draft.start, this.level) : 0;
+    const net = this.net;
+    const markerHeight = hoverSnap ? net.snapHeight(hoverSnap, this.height) : this.draft.start ? net.snapHeight(this.draft.start, this.height) : 0;
     w.setCursor(marker, hoverSnap ? hoverSnap.kind !== 'free' || !!road?.guides.length : isRoad, isRoad ? markerHeight : 0);
-    if (this.tool === 'bus') {
-      const t = this.city.transit;
+    const t = this.transit;
+    if (this.plansLines && t) {
       const near = this.hover && (t.stopNear(this.hover, this.world.rig.snapRadius)?.p ?? t.locate(this.hover, this.world.rig.snapRadius)?.p);
       w.setCursor(near ?? null, true);
     }
-    w.setDraftLine(this.tool === 'bus' ? this.draftPath : null, LINE_COLORS[(this.city.transit.nextLine - 1) % LINE_COLORS.length]);
+    w.setDraftLine(this.plansLines && t ? this.draftPath : null, LINE_COLORS[((t?.nextLine ?? 1) - 1) % LINE_COLORS.length], t?.net);
+    if (this.tool === 'streetName') {
+      const seg = this.selectedStreet !== null ? this.city.net.segments.get(this.selectedStreet) : undefined;
+      const path = seg ? this.city.net.street(seg).map((x) => ({ seg: x.id, dir: 1 as const, from: 0, to: x.length })) : null;
+      w.setDraftLine(path, 0xf2b134, this.city.net, 0, 6);
+    }
+    w.setDistrictRings(this.tool === 'district' ? [...this.city.districts.values()] : null, this.selectedDistrict);
+    if (this.tool === 'district') {
+      const sel = this.selectedDistrict !== null ? this.city.districts.get(this.selectedDistrict) : undefined;
+      w.setBrush(sel ? null : this.hover, this.districtRadius, 0xffffff);
+    }
+    if (this.tool === 'airport' && this.hover) {
+      const plan: Airport = { id: -1, p: this.hover, angle: this.radians, runways: this.runways };
+      w.setFootprint(Aviation.corners(plan), this.city.money >= AIRPORT_COST[this.runways]);
+    } else w.setFootprint(null, true);
     if (this.tool === 'roundabout') {
       const c = this.hover && this.roundaboutCenter(this.hover);
       w.setBrush(c?.p ?? null, ROUNDABOUT_RADIUS[this.roundaboutSize], c?.snapped ? 0xf2b134 : 0xffffff);
@@ -367,13 +603,13 @@ export class ToolController {
     else w.setBrush(this.tool === 'zone' ? this.hover : null, this.brushRadius, this.zone === Zone.None ? 0xffffff : ZONES[this.zone].color);
     const { start, control } = this.draft;
     if (isRoad && start && hoverSnap) {
-      const ctrl = this.tool === 'curve' ? (control ?? lerp(start.p, hoverSnap.p, 0.5)) : null;
+      const ctrl = this.curved ? (control ?? lerp(start.p, hoverSnap.p, 0.5)) : null;
       const end = hoverSnap.p;
-      const [ha, hb] = this.city.roadHeights(start, hoverSnap, this.level);
-      const cost = this.city.roadCost(start.p, ctrl, end, ha, hb);
-      const ok = cost <= this.city.money && !this.city.gradeProblem(start, ctrl, hoverSnap, this.level);
+      const [ha, hb] = this.city.roadHeights(start, hoverSnap, this.height, net);
+      const cost = this.cost(start.p, ctrl, end, ha, hb);
+      const ok = cost <= this.city.money && !this.city.gradeProblem(start, ctrl, hoverSnap, this.height, net);
       w.setPreview({ a: start.p, c: ctrl ?? lerp(start.p, end, 0.5), b: end }, ok, ha, hb);
-      w.setAngleGuides(angleGuides(this.city.net, start, ctrl, hoverSnap));
+      w.setAngleGuides(angleGuides(net, start, ctrl, hoverSnap));
     } else {
       w.setPreview(null, true);
       w.setAngleGuides([]);

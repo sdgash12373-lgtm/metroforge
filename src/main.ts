@@ -113,7 +113,7 @@ function frame(now: number): void {
   // Vehicles move in real seconds, sped up with the game; small steps keep queues stable
   const drive = dt * speed;
   const steps = Math.ceil(drive / 0.1);
-  for (let i = 0; i < steps; i++) city.traffic.step(drive / steps);
+  for (let i = 0; i < steps; i++) city.drive(drive / steps);
   saveAcc += dt;
   if (saveAcc > 10) {
     saveAcc = 0;
