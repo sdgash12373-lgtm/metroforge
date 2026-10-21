@@ -135,6 +135,9 @@ export class RoadNetwork {
   resolve(s: Snap): RoadNode {
     if (s.kind === 'node') return s.node;
     if (s.kind === 'segment') return this.split(s.seg, s.t);
+    // A free point exactly on an existing road still joins it
+    const exact = this.snap(s.p, 0.5);
+    if (exact.kind !== 'free') return this.resolve(exact);
     return this.addNode(s.p);
   }
 

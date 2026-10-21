@@ -8,6 +8,8 @@ export class CameraRig {
   distance = 260;
   yaw = Math.PI / 4;
   pitch = 0.85;
+  /** Build mode: rotation and tilt are frozen so gestures can't swing the view while drawing. */
+  locked = false;
   readonly minDistance = 40;
   readonly maxDistance = 1600;
   private readonly ray = new THREE.Raycaster();
@@ -41,6 +43,14 @@ export class CameraRig {
     this.ray.setFromCamera(this.ndc, this.camera);
     const p = this.ray.ray.intersectPlane(this.ground, this.hit);
     return p ? { x: p.x, y: p.z } : null;
+  }
+
+  /** Rotates and tilts the view unless it is locked. */
+  orbit(dYaw: number, dPitch: number): void {
+    if (this.locked) return;
+    this.yaw += dYaw;
+    this.pitch += dPitch;
+    this.apply();
   }
 
   /** Drags the ground so the point under `from` ends up under `to`. */

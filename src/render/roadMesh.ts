@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { type Quad, type Sample, type Vec2, normalize, sampleQuad } from '../sim/geometry';
-import { ROAD_WIDTH, type RoadNetwork } from '../sim/roads';
+import { ROAD_WIDTH, type RoadNetwork, type RoadSegment } from '../sim/roads';
 
 const ASPHALT_WIDTH = 7;
 const DASH = 3;
@@ -11,11 +11,17 @@ const MARK_WIDTH = 0.25;
 class Builder {
   pos: number[] = [];
   idx: number[] = [];
+  col: number[] = [];
+  /** vertex colour for the quads that follow, when building a coloured mesh */
+  color: THREE.Color | null = null;
   constructor(private y: number) {}
 
   quad(a: [number, number], b: [number, number], c: [number, number], d: [number, number]): void {
     const i = this.pos.length / 3;
-    for (const p of [a, b, c, d]) this.pos.push(p[0], this.y, p[1]);
+    for (const p of [a, b, c, d]) {
+      this.pos.push(p[0], this.y, p[1]);
+      if (this.color) this.col.push(this.color.r, this.color.g, this.color.b);
+    }
     this.idx.push(i, i + 2, i + 1, i + 1, i + 2, i + 3);
   }
 
@@ -32,6 +38,7 @@ class Builder {
   geometry(): THREE.BufferGeometry {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
+    if (this.col.length) g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
     g.setIndex(this.idx);
     g.computeVertexNormals();
     return g;
@@ -45,20 +52,24 @@ function normalAt(s: Sample[], i: number): { x: number; y: number } {
   return { x: -t.y, y: t.x };
 }
 
-function ribbon(b: Builder, s: Sample[], width: number): void {
-  const h = width / 2;
+/** Strip along a curve between two signed offsets from its centre line. */
+function strip(b: Builder, s: Sample[], from: number, to: number): void {
   for (let i = 1; i < s.length; i++) {
     const n0 = normalAt(s, i - 1);
     const n1 = normalAt(s, i);
     const p0 = s[i - 1];
     const p1 = s[i];
     b.quad(
-      [p0.x + n0.x * h, p0.y + n0.y * h],
-      [p0.x - n0.x * h, p0.y - n0.y * h],
-      [p1.x + n1.x * h, p1.y + n1.y * h],
-      [p1.x - n1.x * h, p1.y - n1.y * h],
+      [p0.x + n0.x * to, p0.y + n0.y * to],
+      [p0.x + n0.x * from, p0.y + n0.y * from],
+      [p1.x + n1.x * to, p1.y + n1.y * to],
+      [p1.x + n1.x * from, p1.y + n1.y * from],
     );
   }
+}
+
+function ribbon(b: Builder, s: Sample[], width: number): void {
+  strip(b, s, -width / 2, width / 2);
 }
 
 function dashes(b: Builder, s: Sample[], skip: number, width = MARK_WIDTH): void {
@@ -115,6 +126,30 @@ export function buildDashedLines(lines: { from: Vec2; to: Vec2 }[], width: numbe
   for (const l of lines) {
     const len = Math.hypot(l.to.x - l.from.x, l.to.y - l.from.y);
     dashes(b, [{ ...l.from, t: 0, s: 0 }, { ...l.to, t: 1, s: len }], 0, width);
+  }
+  return b.geometry();
+}
+
+const FREE = new THREE.Color(0x4cc36b);
+const BUSY = new THREE.Color(0xf2c230);
+const JAMMED = new THREE.Color(0xe5483b);
+
+/** Green → yellow → red by how full a lane is. */
+export function congestionColor(level: number, out: THREE.Color): THREE.Color {
+  if (level < 0.5) return out.copy(FREE).lerp(BUSY, level / 0.5);
+  return out.copy(BUSY).lerp(JAMMED, Math.min(1, (level - 0.5) / 0.4));
+}
+
+/** Each direction of each road coloured by its congestion, laid over the asphalt. */
+export function buildTrafficOverlay(net: RoadNetwork, level: (seg: RoadSegment, dir: 1 | -1) => number): THREE.BufferGeometry {
+  const b = new Builder(0.12);
+  const half = ASPHALT_WIDTH / 2;
+  for (const seg of net.segments.values()) {
+    // Right-hand traffic: travel a → b uses the right side of that direction
+    b.color = congestionColor(level(seg, 1), new THREE.Color());
+    strip(b, seg.samples, 0.15, half);
+    b.color = congestionColor(level(seg, -1), new THREE.Color());
+    strip(b, seg.samples, -half, -0.15);
   }
   return b.geometry();
 }

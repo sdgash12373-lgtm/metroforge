@@ -1,0 +1,357 @@
+import { type Vec2, dist } from './geometry';
+import type { RoadNetwork, RoadSegment } from './roads';
+
+/** 50 km/h town roads. */
+export const SPEED_LIMIT = 13.9;
+/** Lane centre offset from the road centre line (right-hand traffic). */
+export const LANE_OFFSET = 1.75;
+
+const ACCEL = 2.0;
+const BRAKE = 3.0;
+const HEADWAY = 1.2;
+const MIN_GAP = 2.0;
+/** Seconds a vehicle may sit still before it gives up (keeps gridlocked loops from freezing forever). */
+export const GIVE_UP_AFTER = 40;
+
+export type Dir = 1 | -1;
+export type VehicleKind = 'car' | 'truck';
+
+/** One travel direction of one segment. */
+export interface LaneRef {
+  seg: number;
+  dir: Dir;
+}
+
+export const laneKey = (seg: number, dir: Dir): number => seg * 2 + (dir === 1 ? 0 : 1);
+
+export const VEHICLE_LENGTH: Record<VehicleKind, number> = { car: 4.5, truck: 8 };
+
+export interface Vehicle {
+  id: number;
+  kind: VehicleKind;
+  seg: number;
+  dir: Dir;
+  /** distance travelled along the current lane, from the node it entered at */
+  pos: number;
+  speed: number;
+  /** lanes still to drive after the current one */
+  route: LaneRef[];
+  /** where to stop on the last lane, in that lane's travel distance */
+  dest: number;
+  /** 0..1 for colour variety */
+  tint: number;
+  /** seconds spent stopped in a row */
+  stuck: number;
+}
+
+/** A place on the road network: a segment and a distance from its `a` end. */
+export interface RoadPoint {
+  seg: number;
+  s: number;
+}
+
+class MinHeap {
+  private items: { k: number; v: number }[] = [];
+  get size(): number {
+    return this.items.length;
+  }
+  push(v: number, k: number): void {
+    const a = this.items;
+    a.push({ k, v });
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (a[p].k <= a[i].k) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop(): { k: number; v: number } {
+    const a = this.items;
+    const top = a[0];
+    const last = a.pop()!;
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = i * 2 + 1;
+        const r = l + 1;
+        let m = i;
+        if (l < a.length && a[l].k < a[m].k) m = l;
+        if (r < a.length && a[r].k < a[m].k) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
+/**
+ * Vehicles driving on the road network. Each segment has one lane per direction.
+ * Cars follow the car ahead (a simplified Intelligent Driver Model) and wait at a
+ * junction until there is room on the next lane, so queues and jams form on their own.
+ */
+export class Traffic {
+  vehicles: Vehicle[] = [];
+  nextId = 1;
+  tripsCompleted = 0;
+  tripsAbandoned = 0;
+  /** vehicles currently on each lane, sorted back to front */
+  private lanes = new Map<number, Vehicle[]>();
+
+  constructor(private net: RoadNetwork) {}
+
+  setNetwork(net: RoadNetwork): void {
+    this.net = net;
+    this.vehicles = [];
+    this.lanes.clear();
+  }
+
+  /** Share of a lane's length taken up by vehicles (0 = empty, 1 = bumper to bumper). */
+  congestion(seg: RoadSegment, dir: Dir): number {
+    const list = this.lanes.get(laneKey(seg.id, dir));
+    if (!list?.length) return 0;
+    let used = 0;
+    for (const v of list) used += VEHICLE_LENGTH[v.kind] + MIN_GAP;
+    return Math.min(1, used / Math.max(seg.length, 1));
+  }
+
+  /** Expected seconds to drive a lane, slower when it is busy. */
+  private laneTime(seg: RoadSegment, dir: Dir): number {
+    return seg.length / (SPEED_LIMIT * (1 - 0.8 * this.congestion(seg, dir)));
+  }
+
+  /** Fastest route between two road points (A* over junctions, weighted by current traffic). */
+  findRoute(from: RoadPoint, to: RoadPoint): { first: LaneRef; route: LaneRef[]; startPos: number; dest: number } | null {
+    const s0 = this.net.segments.get(from.seg);
+    const s1 = this.net.segments.get(to.seg);
+    if (!s0 || !s1) return null;
+    if (s0.id === s1.id && Math.abs(to.s - from.s) > 1) {
+      const dir: Dir = to.s > from.s ? 1 : -1;
+      return {
+        first: { seg: s0.id, dir },
+        route: [],
+        startPos: dir === 1 ? from.s : s0.length - from.s,
+        dest: dir === 1 ? to.s : s0.length - to.s,
+      };
+    }
+    const goal = this.net.node(s1.a).p;
+    const h = (n: number) => dist(this.net.node(n).p, goal) / SPEED_LIMIT;
+    const cost = new Map<number, number>();
+    const prev = new Map<number, { node: number; lane: LaneRef } | null>();
+    const heap = new MinHeap();
+    const start = (node: number, c: number, lane: LaneRef) => {
+      if (c < (cost.get(node) ?? Infinity)) {
+        cost.set(node, c);
+        prev.set(node, { node: -1, lane });
+        heap.push(node, c + h(node));
+      }
+    };
+    start(s0.b, (s0.length - from.s) / SPEED_LIMIT, { seg: s0.id, dir: 1 });
+    start(s0.a, from.s / SPEED_LIMIT, { seg: s0.id, dir: -1 });
+
+    const adj = this.adjacency();
+    const done = new Set<number>();
+    while (heap.size) {
+      const { v: u } = heap.pop();
+      if (done.has(u)) continue;
+      done.add(u);
+      if (done.has(s1.a) && done.has(s1.b)) break;
+      for (const e of adj.get(u) ?? []) {
+        const c = cost.get(u)! + this.laneTime(e.seg, e.dir);
+        if (c < (cost.get(e.to) ?? Infinity)) {
+          cost.set(e.to, c);
+          prev.set(e.to, { node: u, lane: { seg: e.seg.id, dir: e.dir } });
+          heap.push(e.to, c + h(e.to));
+        }
+      }
+    }
+    // Enter the destination segment from whichever end is cheaper
+    const viaA = (cost.get(s1.a) ?? Infinity) + to.s / SPEED_LIMIT;
+    const viaB = (cost.get(s1.b) ?? Infinity) + (s1.length - to.s) / SPEED_LIMIT;
+    if (!Number.isFinite(Math.min(viaA, viaB))) return null;
+    const endNode = viaA <= viaB ? s1.a : s1.b;
+    const lastLane: LaneRef = { seg: s1.id, dir: viaA <= viaB ? 1 : -1 };
+    const lanes: LaneRef[] = [lastLane];
+    let n = endNode;
+    for (;;) {
+      const p = prev.get(n);
+      if (!p) return null;
+      lanes.unshift(p.lane);
+      if (p.node === -1) break;
+      n = p.node;
+    }
+    const first = lanes.shift()!;
+    const startPos = first.dir === 1 ? from.s : s0.length - from.s;
+    const dest = lastLane.dir === 1 ? to.s : s1.length - to.s;
+    return { first, route: lanes, startPos, dest };
+  }
+
+  private adjacencyCache: { version: number; map: Map<number, { to: number; seg: RoadSegment; dir: Dir }[]> } | null = null;
+  private netVersion = 0;
+
+  /** Call after roads change: drops vehicles whose road is gone and rebuilds the graph. */
+  onNetworkChanged(): void {
+    this.netVersion++;
+    this.vehicles = this.vehicles.filter(
+      (v) => this.net.segments.has(v.seg) && v.route.every((l) => this.net.segments.has(l.seg)),
+    );
+  }
+
+  private adjacency(): Map<number, { to: number; seg: RoadSegment; dir: Dir }[]> {
+    if (this.adjacencyCache?.version === this.netVersion) return this.adjacencyCache.map;
+    const m = new Map<number, { to: number; seg: RoadSegment; dir: Dir }[]>();
+    const add = (k: number, e: { to: number; seg: RoadSegment; dir: Dir }) => {
+      const l = m.get(k);
+      if (l) l.push(e);
+      else m.set(k, [e]);
+    };
+    for (const seg of this.net.segments.values()) {
+      add(seg.a, { to: seg.b, seg, dir: 1 });
+      add(seg.b, { to: seg.a, seg, dir: -1 });
+    }
+    this.adjacencyCache = { version: this.netVersion, map: m };
+    return m;
+  }
+
+  spawn(from: RoadPoint, to: RoadPoint, kind: VehicleKind, tint: number): Vehicle | null {
+    const r = this.findRoute(from, to);
+    if (!r) return null;
+    const v: Vehicle = {
+      id: this.nextId++,
+      kind,
+      seg: r.first.seg,
+      dir: r.first.dir,
+      pos: r.startPos,
+      speed: 0,
+      route: r.route,
+      dest: r.dest,
+      tint,
+      stuck: 0,
+    };
+    // Don't drop a vehicle on top of another one
+    const lane = this.lanes.get(laneKey(v.seg, v.dir));
+    if (lane?.some((o) => Math.abs(o.pos - v.pos) < VEHICLE_LENGTH[kind] + MIN_GAP)) return null;
+    this.vehicles.push(v);
+    this.index();
+    return v;
+  }
+
+  private index(): void {
+    this.lanes.clear();
+    for (const v of this.vehicles) {
+      const k = laneKey(v.seg, v.dir);
+      const l = this.lanes.get(k);
+      if (l) l.push(v);
+      else this.lanes.set(k, [v]);
+    }
+    for (const l of this.lanes.values()) l.sort((a, b) => a.pos - b.pos);
+  }
+
+  /** Space free at the start of a lane (distance to its last vehicle's tail). */
+  private entryRoom(lane: LaneRef): number {
+    const list = this.lanes.get(laneKey(lane.seg, lane.dir));
+    if (!list?.length) return Infinity;
+    const tail = list[0];
+    return tail.pos - VEHICLE_LENGTH[tail.kind];
+  }
+
+  step(dt: number): void {
+    if (dt <= 0) return;
+    this.index();
+    const arrived = new Set<number>();
+    const gaveUp = new Set<number>();
+    for (const list of this.lanes.values()) {
+      // Front to back so each car sees where its leader is this step
+      for (let i = list.length - 1; i >= 0; i--) {
+        const v = list[i];
+        const seg = this.net.segments.get(v.seg);
+        if (!seg) {
+          arrived.add(v.id);
+          continue;
+        }
+        const len = VEHICLE_LENGTH[v.kind];
+        let gap: number;
+        let leadSpeed = 0;
+        if (i < list.length - 1) {
+          const lead = list[i + 1];
+          // The leader may have just crossed into its next lane this step
+          const ahead = lead.seg === v.seg && lead.dir === v.dir ? lead.pos : seg.length + lead.pos;
+          gap = ahead - VEHICLE_LENGTH[lead.kind] - v.pos;
+          leadSpeed = lead.speed;
+        } else if (!v.route.length) {
+          gap = v.dest - v.pos + MIN_GAP;
+        } else {
+          const room = this.entryRoom(v.route[0]);
+          gap = seg.length - v.pos + (room === Infinity ? 200 : room);
+          if (room < len + MIN_GAP) gap = Math.min(gap, seg.length - v.pos + MIN_GAP * 0.5);
+          leadSpeed = room === Infinity ? SPEED_LIMIT : 0;
+        }
+        gap = Math.max(gap, 0.01);
+        const sStar = MIN_GAP + v.speed * HEADWAY + (v.speed * (v.speed - leadSpeed)) / (2 * Math.sqrt(ACCEL * BRAKE));
+        const acc = ACCEL * (1 - (v.speed / SPEED_LIMIT) ** 4 - (Math.max(sStar, 0) / gap) ** 2);
+        v.speed = Math.max(0, Math.min(SPEED_LIMIT, v.speed + acc * dt));
+        v.pos += v.speed * dt;
+        v.stuck = v.speed < 0.2 ? v.stuck + dt : 0;
+        if (v.stuck > GIVE_UP_AFTER) {
+          gaveUp.add(v.id);
+          continue;
+        }
+
+        if (!v.route.length) {
+          if (v.pos >= v.dest - 0.5) arrived.add(v.id);
+          continue;
+        }
+        if (v.pos >= seg.length) {
+          const next = v.route[0];
+          if (this.entryRoom(next) >= len + MIN_GAP) {
+            v.pos -= seg.length;
+            v.seg = next.seg;
+            v.dir = next.dir;
+            v.route.shift();
+            // Joined the tail of the next lane: keep the index right for cars behind
+            const k = laneKey(next.seg, next.dir);
+            const l = this.lanes.get(k);
+            if (l) l.unshift(v);
+            else this.lanes.set(k, [v]);
+          } else {
+            v.pos = seg.length;
+            v.speed = 0;
+          }
+        }
+      }
+    }
+    if (arrived.size || gaveUp.size) {
+      this.tripsCompleted += arrived.size;
+      this.tripsAbandoned += gaveUp.size;
+      this.vehicles = this.vehicles.filter((v) => !arrived.has(v.id) && !gaveUp.has(v.id));
+    }
+  }
+
+  /** World position and heading of a vehicle (sim coordinates). */
+  pose(v: Vehicle): { p: Vec2; heading: Vec2 } | null {
+    const seg = this.net.segments.get(v.seg);
+    if (!seg) return null;
+    const s = v.dir === 1 ? v.pos : seg.length - v.pos;
+    const S = seg.samples;
+    let i = 1;
+    while (i < S.length - 1 && S[i].s < s) i++;
+    const a = S[i - 1];
+    const b = S[i];
+    const f = Math.max(0, Math.min(1, (s - a.s) / (b.s - a.s || 1)));
+    let hx = (b.x - a.x) * v.dir;
+    let hy = (b.y - a.y) * v.dir;
+    const hl = Math.hypot(hx, hy) || 1;
+    hx /= hl;
+    hy /= hl;
+    // Right of travel direction (x east, y south)
+    const rx = -hy;
+    const ry = hx;
+    return {
+      p: { x: a.x + (b.x - a.x) * f + rx * LANE_OFFSET, y: a.y + (b.y - a.y) * f + ry * LANE_OFFSET },
+      heading: { x: hx, y: hy },
+    };
+  }
+}

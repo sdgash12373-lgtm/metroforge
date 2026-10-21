@@ -196,6 +196,27 @@ body {
   font-size: 10px;
   opacity: 0.55;
 }
+.brush-size {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.brush-size span {
+  color: var(--muted);
+}
+.brush-size input {
+  width: 120px;
+  accent-color: var(--accent);
+  touch-action: pan-x;
+}
+.brush-size b {
+  min-width: 44px;
+  text-align: right;
+}
 .swatch {
   width: 12px;
   height: 12px;
@@ -224,6 +245,59 @@ button:focus-visible {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.warning {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 64px);
+  left: max(8px, env(safe-area-inset-left, 0px));
+  padding: 6px 12px;
+  border: 1px solid var(--danger);
+  font-size: 13px;
+}
+
+.budget {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 64px);
+  right: max(8px, env(safe-area-inset-right, 0px));
+  width: min(280px, calc(100vw - 16px));
+  padding: 12px 14px;
+  font-variant-numeric: tabular-nums;
+}
+.budget h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.brow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.brow span {
+  color: var(--muted);
+}
+.brow.total {
+  margin-top: 4px;
+  padding-top: 7px;
+  border-top: 1px solid var(--panel-line);
+}
+.brow b.neg {
+  color: var(--danger);
+}
+.tax {
+  display: block;
+  margin-top: 10px;
+}
+.tax input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.budget .note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .toast {
@@ -255,9 +329,7 @@ button:focus-visible {
     padding: 8px 10px;
     font-size: 13px;
   }
-  .toast {
-    top: calc(env(safe-area-inset-top, 0px) + 96px);
-  }
+
 }
 @media (prefers-reduced-motion: reduce) {
   .rci i,

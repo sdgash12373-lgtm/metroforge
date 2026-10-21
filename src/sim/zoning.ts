@@ -50,6 +50,8 @@ export interface Lot {
   front: Lot | null;
   /** 0..1, stable per position, for visual variety */
   seed: number;
+  /** distance along the owning road segment, where its traffic enters the road */
+  s: number;
 }
 
 /** Columns of cells every CELL meters along the curve, DEPTH cells deep on both sides. */
@@ -67,7 +69,7 @@ export function generateLots(net: RoadNetwork, seg: RoadSegment): Lot[] {
         const off = side * (ROAD_WIDTH / 2 + CELL * (depth - 0.5));
         const x = p.x + n.x * off;
         const y = p.y + n.y * off;
-        const lot: Lot = { x, y, dir, side, depth, zone: Zone.None, level: 0, blocked: false, front, seed: hash01(x, y) };
+        const lot: Lot = { x, y, dir, side, depth, zone: Zone.None, level: 0, blocked: false, front, seed: hash01(x, y), s };
         lots.push(lot);
         front = lot;
       }
