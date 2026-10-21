@@ -58,7 +58,7 @@ export class ToolController {
     this.world.setShowEmptyCells(tool === 'zone');
     this.world.setTrafficOverlay(tool === 'traffic');
     this.world.setLineOverlay(tool === 'bus');
-    this.world.setUndergroundView((this.isRoadTool && this.roadLevel === 'tunnel') || tool === 'bulldoze');
+    this.updateUnderground();
     this.updatePickHeight();
     this.refresh();
   }
@@ -66,7 +66,7 @@ export class ToolController {
   setRoadLevel(level: RoadLevel): void {
     this.roadLevel = level;
     this.updatePickHeight();
-    this.world.setUndergroundView(this.isRoadTool && level === 'tunnel');
+    this.updateUnderground();
     this.events.changed();
     this.refresh();
   }
@@ -86,9 +86,15 @@ export class ToolController {
     return LEVEL_HEIGHT[this.roadLevel];
   }
 
-  /** Taps land on the elevated deck plane while drawing elevated roads; tunnels are drawn from the surface. */
+  /** Taps land on the plane being built on, so the finger sits on the deck or tunnel being drawn. */
   private updatePickHeight(): void {
-    this.world.rig.pickHeight = this.isRoadTool && this.roadLevel === 'elevated' ? ELEVATED_HEIGHT : 0;
+    this.world.rig.pickHeight = this.isRoadTool ? this.level : 0;
+  }
+
+  /** See-through ground while building tunnels; tunnels marked on the surface while bulldozing. */
+  private updateUnderground(): void {
+    this.world.setXray(this.isRoadTool && this.roadLevel === 'tunnel');
+    this.world.setUndergroundView(this.tool === 'bulldoze');
   }
 
   setZone(zone: Zone): void {
@@ -154,6 +160,11 @@ export class ToolController {
     this.events.changed();
   }
 
+  /** Once a road has a start, a finger drag places its end (with the ghost road following). */
+  get aimsOnDrag(): boolean {
+    return this.isRoadTool && this.drawing;
+  }
+
   /** Painting tools take one-finger drags; the others use drags to move the camera. */
   get paintsOnDrag(): boolean {
     return this.tool === 'zone';
@@ -164,11 +175,11 @@ export class ToolController {
     const r = this.world.rig.snapRadius;
     const h = this.level;
     if (h === 0) return net.snap(p, r, 0);
-    // Roads on the level being drawn win, then streets at that spot (to start a ramp). Elevated taps
-    // land on the deck plane, so the street is looked up where the finger points on the ground.
+    // Roads on the level being drawn win, then streets at that spot (to start a ramp). Taps land on the
+    // deck or tunnel plane, so the street is looked up where the finger points on the ground.
     const own = net.snap(p, r, h);
     if (own.kind !== 'free' && Math.abs(net.snapHeight(own, 0) - h) < LEVEL_TOLERANCE) return own;
-    const street = net.snap(h > 0 ? this.world.rig.toGround(p, h) : p, r, 0);
+    const street = net.snap(this.world.rig.toGround(p, h), r, 0);
     return street.kind !== 'free' ? street : own;
   }
 
@@ -201,10 +212,10 @@ export class ToolController {
           return `高架道路：從地面道路接出會自動做成匝道（至少 ${Math.ceil(ELEVATED_HEIGHT / MAX_GRADE)} 公尺），跨過地面道路不會形成路口`;
         }
         if (this.roadLevel === 'tunnel' && !start) {
-          return `地下道路：從地面道路接出會自動做成隧道入口（至少 ${Math.ceil(-TUNNEL_DEPTH / MAX_GRADE)} 公尺），藍色是地底下的道路`;
+          return `地下道路：地面變透明，看得到地底下的道路；從地面道路接出會自動做成隧道入口（至少 ${Math.ceil(-TUNNEL_DEPTH / MAX_GRADE)} 公尺）`;
         }
         if (this.tool === 'curve') return start ? '點一下決定彎曲的方向（控制點）' : '曲線道路：點起點 → 控制點 → 終點';
-        return start ? '點終點；交叉處會自動變成路口' : '直線道路：點起點，再點終點，可連續拉路';
+        return start ? '點終點，或按住拖曳預覽路徑、放開完成；雙指移動地圖' : '直線道路：點起點，再點終點，可連續拉路';
       }
       case 'zone':
         return this.zone === Zone.None ? '在格子上塗抹以清除分區' : `塗抹道路旁的格子設為「${ZONES[this.zone].name}」；雙指移動地圖`;

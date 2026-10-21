@@ -30,6 +30,7 @@ export class World {
   /** route of the bus line being drawn */
   private readonly draftLine: THREE.Mesh;
   private transitVersion = -1;
+  private readonly ground: THREE.Mesh;
   /** tunnels shown on the surface while building underground */
   private readonly tunnels: THREE.Mesh;
   private peopleAge = 0;
@@ -75,7 +76,8 @@ export class World {
     this.sun.shadow.bias = -0.0005;
     this.scene.add(this.sun, this.sun.target);
 
-    this.scene.add(this.makeGround());
+    this.ground = this.makeGround();
+    this.scene.add(this.ground);
     this.scene.add(this.roadGroup);
     this.buildings = new BuildingLayer(shadows);
     this.scene.add(this.buildings.group);
@@ -234,6 +236,20 @@ export class World {
     this.showEmpty = on;
     this.buildings.showEmptyCells = on;
     this.lotsVersion = -1;
+  }
+
+  /** See-through ground, so tunnels and the one being drawn show beneath it. */
+  setXray(on: boolean): void {
+    const m = this.ground.material as THREE.MeshLambertMaterial;
+    if (m.transparent === on) return;
+    m.transparent = on;
+    m.opacity = on ? 0.3 : 1;
+    m.depthWrite = !on;
+    m.needsUpdate = true;
+    // The ghost road may be under the ground: draw it over everything
+    this.materials.preview.depthTest = !on;
+    this.materials.preview.needsUpdate = true;
+    this.scene.background = new THREE.Color(on ? 0x5d6b62 : 0xbcd8ea);
   }
 
   /** Shows tunnels on the surface above them. */

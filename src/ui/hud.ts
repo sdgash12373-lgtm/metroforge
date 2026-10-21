@@ -3,15 +3,22 @@ import { ZONES, Zone } from '../sim/zoning';
 import { LINE_COLORS } from '../sim/transit';
 import { BRUSH_MAX, BRUSH_MIN, type Tool, type ToolController } from './tools';
 
-const TOOLS: { id: Tool; label: string; key: string }[] = [
+/** The road tools share one dock button and are picked on a second row. */
+const ROAD_TOOLS: { id: Tool; label: string }[] = [
+  { id: 'road', label: '直線' },
+  { id: 'curve', label: '曲線' },
+  { id: 'roundabout', label: '圓環' },
+];
+const isRoadTool = (t: Tool) => ROAD_TOOLS.some((r) => r.id === t);
+
+type DockItem = Tool | 'roads';
+const TOOLS: { id: DockItem; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
-  { id: 'road', label: '直線', key: '2' },
-  { id: 'curve', label: '曲線', key: '3' },
-  { id: 'roundabout', label: '圓環', key: '4' },
-  { id: 'zone', label: '分區', key: '5' },
-  { id: 'bulldoze', label: '拆除', key: '6' },
-  { id: 'traffic', label: '交通', key: '7' },
-  { id: 'bus', label: '公車', key: '8' },
+  { id: 'roads', label: '道路', key: '2' },
+  { id: 'zone', label: '分區', key: '3' },
+  { id: 'bulldoze', label: '拆除', key: '4' },
+  { id: 'traffic', label: '交通', key: '5' },
+  { id: 'bus', label: '公車', key: '6' },
 ];
 
 export const SPEEDS = [0, 1, 3] as const;
@@ -37,7 +44,11 @@ export class Hud {
   private hint: HTMLElement;
   private sub: HTMLElement;
   private toastEl: HTMLElement;
-  private toolButtons = new Map<Tool, HTMLButtonElement>();
+  private toolButtons = new Map<DockItem, HTMLButtonElement>();
+  /** second row under 道路: straight, curved, roundabout */
+  private kinds: HTMLElement;
+  /** road tool the 道路 button returns to */
+  private lastRoadTool: Tool = 'road';
   private speedButtons: HTMLButtonElement[] = [];
   private toastTimer = 0;
   private warning: HTMLElement;
@@ -179,21 +190,30 @@ export class Hud {
     const bottom = el('div', 'bottom');
     this.hint = el('div', 'hint panel');
     this.sub = el('div', 'dock sub panel');
+    this.kinds = el('div', 'dock sub panel');
+    for (const k of ROAD_TOOLS) {
+      const b = el('button', 'tool');
+      b.type = 'button';
+      b.dataset.tool = k.id;
+      b.append(el('span', '', k.label));
+      b.onclick = () => this.selectTool(k.id);
+      this.kinds.append(b);
+    }
     const dock = el('nav', 'dock panel');
     for (const t of TOOLS) {
       const b = el('button', 'tool');
       b.type = 'button';
       b.append(el('span', '', t.label), el('kbd', '', t.key));
-      b.onclick = () => this.selectTool(t.id);
+      b.onclick = () => this.selectTool(t.id === 'roads' ? this.lastRoadTool : t.id);
       dock.append(b);
       this.toolButtons.set(t.id, b);
     }
-    bottom.append(this.hint, this.sub, dock);
+    bottom.append(this.hint, this.sub, this.kinds, dock);
     root.append(top, this.warning, this.budgetPanel, this.toastEl, bottom);
 
     addEventListener('keydown', (e) => {
       const t = TOOLS.find((x) => x.key === e.key);
-      if (t) this.selectTool(t.id);
+      if (t) this.selectTool(t.id === 'roads' ? this.lastRoadTool : t.id);
       if (e.key === ' ') {
         e.preventDefault();
         actions.setSpeed(this.speed === 0 ? 1 : 0);
@@ -202,6 +222,7 @@ export class Hud {
   }
 
   selectTool(t: Tool): void {
+    if (isRoadTool(t)) this.lastRoadTool = t;
     this.tools.setTool(t);
     this.render();
   }
@@ -215,7 +236,10 @@ export class Hud {
 
   /** Tool dock, sub-options and speed state. */
   render(): void {
-    for (const [id, b] of this.toolButtons) b.setAttribute('aria-pressed', String(id === this.tools.tool));
+    const tool = this.tools.tool;
+    for (const [id, b] of this.toolButtons) b.setAttribute('aria-pressed', String(id === 'roads' ? isRoadTool(tool) : id === tool));
+    this.kinds.hidden = !isRoadTool(tool);
+    for (const b of this.kinds.querySelectorAll<HTMLButtonElement>('button')) b.setAttribute('aria-pressed', String(b.dataset.tool === tool));
     this.speedButtons.forEach((b, i) => b.setAttribute('aria-pressed', String(i === this.speed)));
     this.sub.replaceChildren();
     const option = (label: string, on: boolean, onClick: () => void, swatch?: number) => {
