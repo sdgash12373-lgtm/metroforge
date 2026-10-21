@@ -3,16 +3,18 @@ import type { RoadNetwork } from './roads';
 import type { Dir, RoadPoint, Traffic, Vehicle } from './traffic';
 
 export const BUS_CAPACITY = 30;
-/** Ticket price per boarding. */
+/** Default ticket price per boarding, and the most a player can charge. */
 export const BUS_FARE = 1;
+export const MAX_FARE = 5;
 /** Running cost per bus per day. */
 export const BUS_UPKEEP = 3;
 /** Building cost per stop on a new line. */
 export const STOP_COST = 300;
 /** How far people will walk to and from a stop. */
 export const WALK_RADIUS = 180;
-/** Share of commuters with a usable bus line who take it instead of driving. */
-export const BUS_SHARE = 0.6;
+/** Share of commuters with a usable line who ride it at a free fare; each dollar of fare puts some back in their cars. */
+const SHARE_AT_FREE = 0.75;
+const SHARE_LOST_PER_DOLLAR = 0.12;
 const STOP_DWELL = 3;
 const STOP_REACH = 10;
 const METERS_PER_BUS = 500;
@@ -40,6 +42,8 @@ export interface PathPiece {
 
 export interface BusLine {
   id: number;
+  /** shown in the dock and on the line panel; players can rename lines */
+  name: string;
   color: number;
   /** stop ids in order; buses run the loop and come back to the first one */
   stops: number[];
@@ -60,6 +64,8 @@ export class Transit {
   version = 0;
   faresToday = 0;
   ridersToday = 0;
+  /** ticket price per boarding */
+  fare = BUS_FARE;
 
   constructor(
     private net: RoadNetwork,
@@ -123,11 +129,12 @@ export class Transit {
     this.version++;
   }
 
-  addLine(stops: number[], id?: number, color?: number): BusLine {
+  addLine(stops: number[], id?: number, color?: number, name?: string): BusLine {
     const lineId = id ?? this.nextLine++;
     this.nextLine = Math.max(this.nextLine, lineId + 1);
     const line: BusLine = {
       id: lineId,
+      name: name ?? `${lineId} 號線`,
       color: color ?? LINE_COLORS[(lineId - 1) % LINE_COLORS.length],
       stops: [...stops],
       path: [],
@@ -139,6 +146,20 @@ export class Transit {
     this.route(line);
     this.version++;
     return line;
+  }
+
+  /** Share of commuters with a usable line who take it at the current fare. */
+  share(): number {
+    return clamp(SHARE_AT_FREE - SHARE_LOST_PER_DOLLAR * this.fare, 0.1, 0.9);
+  }
+
+  /** Renames or recolours a line (blank names fall back to the default). */
+  editLine(id: number, change: { name?: string; color?: number }): void {
+    const line = this.lines.get(id);
+    if (!line) return;
+    if (change.name !== undefined) line.name = change.name.trim().slice(0, 20) || `${line.id} 號線`;
+    if (change.color !== undefined) line.color = change.color;
+    this.version++;
   }
 
   removeLine(id: number): void {
@@ -302,7 +323,7 @@ export class Transit {
         else queue.set(dest, n - take);
       }
     }
-    this.faresToday += on * BUS_FARE;
+    this.faresToday += on * this.fare;
     this.ridersToday += on;
     line.riders += on;
     v.next = (v.next + 1) % line.stops.length;

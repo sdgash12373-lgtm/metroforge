@@ -257,11 +257,14 @@ button:focus-visible {
 }
 
 .budget {
+  box-sizing: border-box;
   position: absolute;
   top: calc(env(safe-area-inset-top, 0px) + 64px);
   right: max(8px, env(safe-area-inset-right, 0px));
   width: min(280px, calc(100vw - 16px));
   padding: 12px 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   font-variant-numeric: tabular-nums;
 }
 .budget h2 {
@@ -336,4 +339,54 @@ button:focus-visible {
   .toast {
     transition: none;
   }
+}
+
+/* Line / flight editor */
+.edit .field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.edit .field span {
+  color: var(--muted);
+}
+.edit .field input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--panel-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+}
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.swatches button,
+.swatches input {
+  width: 100%;
+  aspect-ratio: 1;
+  min-height: 28px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.swatches button[aria-pressed='true'] {
+  border-color: var(--ink);
+}
+.swatches input {
+  background: none;
+  border-color: var(--panel-line);
+}
+.chip.danger {
+  border-color: var(--danger);
+  color: var(--danger);
 }

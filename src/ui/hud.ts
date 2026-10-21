@@ -1,6 +1,7 @@
 import { type City, MAX_TAX } from '../sim/city';
 import { ZONES, Zone } from '../sim/zoning';
-import { LINE_COLORS } from '../sim/transit';
+import { LINE_COLORS, MAX_FARE } from '../sim/transit';
+import { EditPanel } from './editPanel';
 import { BRUSH_MAX, BRUSH_MIN, type Tool, type ToolController } from './tools';
 
 /** The road tools share one dock button and are picked on a second row. */
@@ -59,6 +60,12 @@ export class Hud {
   private topBar: HTMLElement;
   lockButton: HTMLButtonElement;
   private clearArmed = 0;
+  private fareInputs: { input: HTMLInputElement; label: HTMLElement; get(city: City): number }[] = [];
+  private editPanel = new EditPanel();
+  private budgetBtn!: HTMLButtonElement;
+  private bottomBar!: HTMLElement;
+  /** line whose editor was last opened, so picking another line can close the budget on phones */
+  private editKey: string | null = null;
   speed = 1;
 
   constructor(
@@ -114,10 +121,8 @@ export class Hud {
 
     const budgetBtn = el('button', 'chip', '預算');
     budgetBtn.type = 'button';
-    budgetBtn.onclick = () => {
-      this.budgetPanel.hidden = !this.budgetPanel.hidden;
-      budgetBtn.setAttribute('aria-pressed', String(!this.budgetPanel.hidden));
-    };
+    budgetBtn.onclick = () => this.showBudget(this.budgetPanel.hidden);
+    this.budgetBtn = budgetBtn;
     top.append(budgetBtn);
 
     const reset = el('button', 'chip ghost', '新城市');
@@ -162,7 +167,7 @@ export class Hud {
       net: row('每日淨額'),
     };
     this.budgetRows.net.parentElement!.classList.add('total');
-    const slider = (id: string, label: string, onInput: (v: number) => void) => {
+    const slider = (id: string, label: string, onInput: (v: number) => void, max = MAX_TAX) => {
       const wrap = el('label', 'tax');
       wrap.htmlFor = id;
       const value = el('b');
@@ -170,7 +175,7 @@ export class Hud {
       input.id = id;
       input.type = 'range';
       input.min = '0';
-      input.max = String(MAX_TAX);
+      input.max = String(max);
       input.step = '1';
       input.oninput = () => onInput(Number(input.value));
       const head = el('div', 'brow');
@@ -183,6 +188,9 @@ export class Hud {
     const biz = slider('tax-biz', '商業稅率', (v) => this.city && (this.city.taxes.business = v));
     this.taxInputs = { res: res.input, biz: biz.input, resLabel: res.value, bizLabel: biz.value };
     this.budgetPanel.append(el('p', 'note', '稅率越高收入越多，但需求會下降；預設 9%。'));
+    const fare = slider('fare-bus', '公車票價', (v) => this.city && (this.city.transit.fare = v), MAX_FARE);
+    this.fareInputs.push({ input: fare.input, label: fare.value, get: (c) => c.transit.fare });
+    this.budgetPanel.append(el('p', 'note', '票價越高收入越多，但搭車的人會變少；預設 $1。'));
 
     this.toastEl = el('div', 'toast panel');
     this.toastEl.setAttribute('role', 'status');
@@ -209,7 +217,8 @@ export class Hud {
       this.toolButtons.set(t.id, b);
     }
     bottom.append(this.hint, this.sub, this.kinds, dock);
-    root.append(top, this.warning, this.budgetPanel, this.toastEl, bottom);
+    this.bottomBar = bottom;
+    root.append(top, this.warning, this.budgetPanel, this.editPanel.el, this.toastEl, bottom);
 
     addEventListener('keydown', (e) => {
       const t = TOOLS.find((x) => x.key === e.key);
@@ -315,12 +324,8 @@ export class Hud {
     }
     if (!city) return;
     for (const line of city.transit.lines.values()) {
-      const label = `${line.id} 號線 · ${line.stops.length} 站${line.ok ? '' : ' · 中斷'}`;
+      const label = `${line.name} · ${line.stops.length} 站${line.ok ? '' : ' · 中斷'}`;
       option(label, t.selectedLine === line.id, () => t.selectLine(t.selectedLine === line.id ? null : line.id), line.color);
-    }
-    const picked = t.selectedLine;
-    if (picked !== null && city.transit.lines.has(picked)) {
-      option('刪除這條路線', false, () => t.deleteLine(picked));
     }
     if (city.transit.lines.size) {
       // Two taps, like 新城市, so a stray tap can't wipe every line
@@ -338,6 +343,44 @@ export class Hud {
         t.clearLines();
       });
     }
+  }
+
+  /** Name and colour editor for the line picked in the dock. */
+  private updateEditor(city: City): void {
+    const t = this.tools;
+    const line = t.tool === 'bus' && t.selectedLine !== null ? city.transit.lines.get(t.selectedLine) : undefined;
+    const key = line ? `bus:${line.id}` : null;
+    // Phones only have room for one panel: picking a line closes the budget, opening the budget hides the editor
+    const narrow = window.innerWidth < 720;
+    if (key !== this.editKey) {
+      this.editKey = key;
+      if (key && narrow) this.showBudget(false);
+    }
+    if (!line || (narrow && !this.budgetPanel.hidden)) {
+      this.editPanel.hide();
+      return;
+    }
+    const buses = city.transit.buses(line.id).length;
+    this.editPanel.show(key!, {
+      title: '公車路線',
+      name: line.name,
+      color: line.color,
+      info: `${line.stops.length} 站 · 公車 ${buses} 台 · 全長 ${Math.round(line.length).toLocaleString()} 公尺 · 累計載客 ${line.riders.toLocaleString()} 人`,
+      rename: (name) => {
+        city.transit.editLine(line.id, { name });
+        this.render();
+      },
+      recolor: (color) => {
+        city.transit.editLine(line.id, { color });
+        this.render();
+      },
+      remove: { label: '刪除這條路線', run: () => t.deleteLine(line.id) },
+    });
+  }
+
+  private showBudget(on: boolean): void {
+    this.budgetPanel.hidden = !on;
+    this.budgetBtn.setAttribute('aria-pressed', String(on));
   }
 
   updateHint(): void {
@@ -364,7 +407,13 @@ export class Hud {
         if (document.activeElement !== input) input.value = String(v);
         label.textContent = `${v}%`;
       }
+      for (const f of this.fareInputs) {
+        const v = f.get(city);
+        if (document.activeElement !== f.input) f.input.value = String(v);
+        f.label.textContent = `$${v}`;
+      }
     }
+    this.updateEditor(city);
     // The top bar wraps to more rows on narrow screens; keep the panels just below it
     const below = `${this.topBar.offsetTop + this.topBar.offsetHeight + 8}px`;
     const lost = city.stats.disconnected;
@@ -373,7 +422,18 @@ export class Hud {
     const shift = `calc(${below} + ${this.warning.hidden ? 0 : this.warning.offsetHeight + 8}px)`;
     this.warning.style.top = below;
     this.budgetPanel.style.top = shift;
+    this.editPanel.el.style.top = this.budgetPanel.hidden ? shift : `calc(${shift} + ${this.budgetPanel.offsetHeight + 8}px)`;
     this.toastEl.style.top = shift;
+    // Never let a panel run under the dock
+    let floor = window.innerHeight;
+    for (const c of this.bottomBar.children) {
+      const r = c.getBoundingClientRect();
+      if (r.height) floor = Math.min(floor, r.top);
+    }
+    floor -= 8;
+    for (const p of [this.budgetPanel, this.editPanel.el]) {
+      if (!p.hidden) p.style.maxHeight = `${Math.max(120, floor - p.getBoundingClientRect().top)}px`;
+    }
     this.stats.pop.textContent = city.stats.population.toLocaleString();
     this.stats.jobs.textContent = city.stats.jobs.toLocaleString();
     this.stats.money.textContent = `$${Math.floor(city.money).toLocaleString()}`;

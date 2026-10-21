@@ -1,7 +1,7 @@
 import { angleGuides } from '../sim/angles';
 import type { City } from '../sim/city';
 import { type GuideLine, alignToGuides } from '../sim/guides';
-import { type Vec2, lerp } from '../sim/geometry';
+import { type Vec2, lerp, quadPoint } from '../sim/geometry';
 import { ROUNDABOUT_RADIUS, type RoundaboutSize } from '../sim/city';
 import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type Snap, TUNNEL_DEPTH } from '../sim/roads';
 import { LINE_COLORS, type PathPiece, STOP_COST } from '../sim/transit';
@@ -221,7 +221,7 @@ export class ToolController {
         return this.zone === Zone.None ? '在格子上塗抹以清除分區' : `塗抹道路旁的格子設為「${ZONES[this.zone].name}」；雙指移動地圖`;
       case 'roundabout': {
         const cost = this.city.roundaboutCost(this.roundaboutSize);
-        return `${this.roundaboutSize} 通圓環 · 約 $${cost.toLocaleString()}　點地圖放置；壓到的道路會自動接上圓環，車輛逆時針單向繞行`;
+        return `${this.roundaboutSize} 通圓環 · 約 $${cost.toLocaleString()}　靠近路口或道路會自動吸附（橘色圈），壓到的道路自動接上；車輛逆時針單向繞行`;
       }
       case 'bulldoze':
         return '點一條道路拆除，退還一半費用';
@@ -237,7 +237,7 @@ export class ToolController {
         const t = this.city.transit;
         const picked = this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
         if (picked) {
-          return `${picked.id} 號線：公車 ${t.buses(picked.id).length} 台 · 全長 ${Math.round(picked.length).toLocaleString()} 公尺 · 累計載客 ${picked.riders.toLocaleString()} 人`;
+          return `${picked.name}：公車 ${t.buses(picked.id).length} 台 · 載客 ${picked.riders.toLocaleString()} 人`;
         }
         if (!t.lines.size) return '公車：點地面道路設第一個站，依序點下一站，最後點回第一站完成路線';
         let riders = 0;
@@ -259,7 +259,7 @@ export class ToolController {
     if (this.isRoadTool) this.tapRoad(p);
     else if (this.tool === 'bus') this.tapBus(p);
     else if (this.tool === 'roundabout') {
-      const r = this.city.buildRoundabout(p, this.roundaboutSize);
+      const r = this.city.buildRoundabout(this.roundaboutCenter(p).p, this.roundaboutSize);
       this.events.toast(r.ok ? `圓環完成，花費 $${r.cost.toLocaleString()}` : (r.reason ?? '這裡不能蓋圓環'));
     } else if (this.tool === 'bulldoze') {
       const r = this.city.bulldoze(p, Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6));
@@ -301,6 +301,29 @@ export class ToolController {
     this.draft = { start: { kind: 'node', node: end, p: end.p }, control: null };
   }
 
+  /**
+   * Where a roundabout at p would go: onto a nearby crossroads or road end first, else centred on a
+   * road it is near, so its existing roads join the ring cleanly.
+   */
+  private roundaboutCenter(p: Vec2): { p: Vec2; snapped: boolean } {
+    const net = this.city.net;
+    const ring = ROUNDABOUT_RADIUS[this.roundaboutSize];
+    const street = (id: number) =>
+      [...net.segments.values()].every((s) => (s.a !== id && s.b !== id) || net.isStreet(s));
+    let best: { p: Vec2; d: number } | null = null;
+    for (const n of net.nodes.values()) {
+      if (n.h !== 0 || !street(n.id)) continue;
+      // Junctions pull from the whole ring; plain bends and road ends only from closer in
+      const reach = net.degree(n.id) >= 3 ? ring : ring * 0.6;
+      const d = Math.hypot(n.p.x - p.x, n.p.y - p.y);
+      if (d < reach && (!best || d < best.d)) best = { p: n.p, d };
+    }
+    if (best) return { p: { ...best.p }, snapped: true };
+    const hit = net.segmentAt(p, ring * 0.6, 0);
+    if (hit && net.isStreet(hit.seg)) return { p: quadPoint(net.quad(hit.seg), hit.t), snapped: true };
+    return { p, snapped: false };
+  }
+
   private tapBus(p: Vec2): void {
     const transit = this.city.transit;
     const r = this.world.rig.snapRadius;
@@ -337,7 +360,10 @@ export class ToolController {
       w.setCursor(near ?? null, true);
     }
     w.setDraftLine(this.tool === 'bus' ? this.draftPath : null, LINE_COLORS[(this.city.transit.nextLine - 1) % LINE_COLORS.length]);
-    if (this.tool === 'roundabout') w.setBrush(this.hover, ROUNDABOUT_RADIUS[this.roundaboutSize], 0xffffff);
+    if (this.tool === 'roundabout') {
+      const c = this.hover && this.roundaboutCenter(this.hover);
+      w.setBrush(c?.p ?? null, ROUNDABOUT_RADIUS[this.roundaboutSize], c?.snapped ? 0xf2b134 : 0xffffff);
+    }
     else w.setBrush(this.tool === 'zone' ? this.hover : null, this.brushRadius, this.zone === Zone.None ? 0xffffff : ZONES[this.zone].color);
     const { start, control } = this.draft;
     if (isRoad && start && hoverSnap) {

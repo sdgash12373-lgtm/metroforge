@@ -147,6 +147,33 @@ describe('bus lines', () => {
     expect(l.stops).toHaveLength(3);
     expect(l.ok).toBe(true);
   });
+
+  it('can be renamed and recoloured, and keep both with the fare in a save', () => {
+    const city = block();
+    line(city, [[150, 0], [300, 150], [150, 300]]);
+    const l = [...city.transit.lines.values()][0];
+    expect(l.name).toBe(`${l.id} 號線`);
+    city.transit.editLine(l.id, { name: '  市區環狀線  ', color: 0x2e86ab });
+    expect(l.name).toBe('市區環狀線');
+    city.transit.editLine(l.id, { name: '' });
+    expect(l.name).toBe(`${l.id} 號線`);
+    city.transit.editLine(l.id, { name: '市區環狀線' });
+    city.transit.fare = 3;
+    const copy = City.deserialize(JSON.parse(JSON.stringify(city.serialize())));
+    const c = copy.transit.lines.get(l.id)!;
+    expect([c.name, c.color]).toEqual(['市區環狀線', 0x2e86ab]);
+    expect(copy.transit.fare).toBe(3);
+  });
+
+  it('lose riders as the fare goes up', () => {
+    const city = new City();
+    const shares = [0, 1, 3, 5].map((f) => {
+      city.transit.fare = f;
+      return city.transit.share();
+    });
+    for (let i = 1; i < shares.length; i++) expect(shares[i]).toBeLessThan(shares[i - 1]);
+    expect(shares[3]).toBeGreaterThan(0);
+  });
 });
 
 describe('tunnels', () => {

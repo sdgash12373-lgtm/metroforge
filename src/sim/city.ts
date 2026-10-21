@@ -1,7 +1,7 @@
 import { type Sample, type Vec2, clamp, curveIntersections, dist, quadPoint } from './geometry';
 import { ELEVATED_HEIGHT, MAX_GRADE, RoadNetwork, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { type RoadPoint, Traffic } from './traffic';
-import { BUS_SHARE, BUS_UPKEEP, STOP_COST, Transit } from './transit';
+import { BUS_UPKEEP, STOP_COST, Transit } from './transit';
 import { type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
@@ -56,9 +56,10 @@ export interface SaveData {
   /** node ids where roads leave the map (v2) */
   outside?: number[];
   taxes?: TaxRates;
-  /** v3: bus stops (id, x, y) and lines (id, color, stop ids) */
+  /** v3: bus stops (id, x, y), lines (id, color, stop ids, name) and the fare */
   stops?: [number, number, number][];
-  lines?: [number, number, number[]][];
+  lines?: ([number, number, number[]] | [number, number, number[], string])[];
+  busFare?: number;
 }
 
 /** A zoned cell together with the road it sits on. */
@@ -406,7 +407,7 @@ export class City {
       // Without local jobs, residents commute out of town along the highway
       const job = work.length ? pick(work) : null;
       // Commuters with a bus line from near home to near work mostly ride it
-      if (job && this.transit.lines.size && rng() < BUS_SHARE && this.transit.board(home.lot, job.lot)) continue;
+      if (job && this.transit.lines.size && rng() < this.transit.share() && this.transit.board(home.lot, job.lot)) continue;
       const to = job ? at(job) : gate;
       if (to) this.traffic.spawn(at(home), to, 'car', rng());
     }
@@ -445,7 +446,8 @@ export class City {
       outside: [...this.outside],
       taxes: { ...this.taxes },
       stops: [...this.transit.stops.values()].map((s) => [s.id, round2(s.p.x), round2(s.p.y)]),
-      lines: [...this.transit.lines.values()].map((l) => [l.id, l.color, [...l.stops]]),
+      lines: [...this.transit.lines.values()].map((l) => [l.id, l.color, [...l.stops], l.name]),
+      busFare: this.transit.fare,
     };
   }
 
@@ -467,7 +469,8 @@ export class City {
     for (const n of data.outside ?? []) city.outside.add(n);
     if (data.taxes) city.taxes = { ...data.taxes };
     for (const [id, x, y] of data.stops ?? []) city.transit.addStop(id, { x, y });
-    for (const [id, color, stops] of data.lines ?? []) city.transit.addLine(stops, id, color);
+    for (const [id, color, stops, name] of data.lines ?? []) city.transit.addLine(stops, id, color, name);
+    if (data.busFare !== undefined) city.transit.fare = data.busFare;
     city.roadsChanged();
     city.measure();
     return city;
