@@ -57,8 +57,8 @@ export interface Lot {
 /** Columns of cells every CELL meters along a street, DEPTH cells deep on both sides. */
 export function generateLots(net: RoadNetwork, seg: RoadSegment): Lot[] {
   const lots: Lot[] = [];
-  // Nothing fronts onto elevated roads and ramps
-  if (net.isRaised(seg)) return lots;
+  // Nothing fronts onto elevated roads, tunnels, ramps or roundabouts
+  if (!net.isStreet(seg)) return lots;
   const q = net.quad(seg);
   for (let s = CELL / 2; s <= seg.length - CELL / 2 + 1e-6; s += CELL) {
     const t = tAtLength(seg.samples, s);

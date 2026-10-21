@@ -8,7 +8,7 @@ import { Zone } from '../sim/zoning';
 import { BuildingLayer } from './buildings';
 import { CameraRig } from './cameraRig';
 import type { PathPiece } from '../sim/transit';
-import { buildDashedLines, buildLinePaths, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay } from './roadMesh';
+import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay } from './roadMesh';
 import { StopLayer } from './transit';
 import { VehicleLayer } from './vehicles';
 
@@ -30,6 +30,8 @@ export class World {
   /** route of the bus line being drawn */
   private readonly draftLine: THREE.Mesh;
   private transitVersion = -1;
+  /** tunnels shown on the surface while building underground */
+  private readonly tunnels: THREE.Mesh;
   private peopleAge = 0;
   private readonly overlay: THREE.Mesh;
   private overlayAge = Infinity;
@@ -51,6 +53,7 @@ export class World {
     markings: new THREE.MeshBasicMaterial({ color: 0xf2e6b0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
     preview: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }),
     concrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
+    tunnel: new THREE.MeshBasicMaterial({ color: 0x1c1f24, side: THREE.DoubleSide }),
   };
 
   constructor(container: HTMLElement, shadows: boolean) {
@@ -97,6 +100,13 @@ export class World {
     this.draftLine.visible = false;
     this.draftLine.renderOrder = 2;
     this.scene.add(this.linePaths, this.draftLine);
+    this.tunnels = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({ color: 0x3f8fd8, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    this.tunnels.visible = false;
+    this.tunnels.renderOrder = 2;
+    this.scene.add(this.tunnels);
 
     this.preview = new THREE.Mesh(new THREE.BufferGeometry(), this.materials.preview);
     this.preview.visible = false;
@@ -226,6 +236,11 @@ export class World {
     this.lotsVersion = -1;
   }
 
+  /** Shows tunnels on the surface above them. */
+  setUndergroundView(on: boolean): void {
+    this.tunnels.visible = on;
+  }
+
   /** Shows the bus routes on the roads (the bus tool's view). */
   setLineOverlay(on: boolean): void {
     this.linePaths.visible = on;
@@ -346,10 +361,13 @@ export class World {
       walk.receiveShadow = true;
       const asphalt = new THREE.Mesh(g.asphalt, this.materials.asphalt);
       asphalt.receiveShadow = true;
+      this.tunnels.geometry.dispose();
+      this.tunnels.geometry = buildTunnelOverlay(city.net);
       const concrete = new THREE.Mesh(g.concrete, this.materials.concrete);
       concrete.castShadow = true;
       concrete.receiveShadow = true;
-      this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings), concrete);
+      const mouths = new THREE.Mesh(g.dark, this.materials.tunnel);
+      this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings), concrete, mouths);
       this.updateTrees(city);
     }
     if (city.lotsVersion !== this.lotsVersion) {

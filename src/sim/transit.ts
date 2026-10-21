@@ -72,7 +72,7 @@ export class Transit {
   locate(p: Vec2, reach = STOP_REACH): { at: RoadPoint; p: Vec2 } | null {
     let best: { seg: number; t: number; d: number } | null = null;
     for (const seg of this.net.segments.values()) {
-      if (this.net.isRaised(seg) || !bboxNear(seg.bbox, p, reach)) continue;
+      if (!this.net.isStreet(seg) || !bboxNear(seg.bbox, p, reach)) continue;
       const r = closestOnSamples(seg.samples, p);
       if (r.d < reach && (!best || r.d < best.d)) best = { seg: seg.id, t: r.t, d: r.d };
     }
@@ -146,6 +146,11 @@ export class Transit {
     this.traffic.vehicles = this.traffic.vehicles.filter((v) => v.line !== id);
     for (const s of this.stops.values()) s.waiting.delete(id);
     this.pruneStops();
+  }
+
+  /** Closes every line and takes their buses off the road. */
+  clearLines(): void {
+    for (const id of [...this.lines.keys()]) this.removeLine(id);
   }
 
   /**

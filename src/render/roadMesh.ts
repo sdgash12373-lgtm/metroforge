@@ -12,6 +12,9 @@ const MARK_WIDTH = 0.25;
 const GIRDER = 1.4;
 const PILLAR_EVERY = 28;
 const PILLAR_SIZE = 1.8;
+/** Depth at which a tunnel ramp goes under the ground through a portal. */
+export const PORTAL_DEPTH = -5;
+const PORTAL_HEIGHT = 5.6;
 
 /** Height along a curve, by curve parameter t. */
 type Height = (t: number) => number;
@@ -104,7 +107,7 @@ function wall(b: Builder, s: Sample[], offset: number, depth: number, h: Height)
 }
 
 /** Upright box from the ground to `top`, centred on (x, z), turned to face along (dx, dz). */
-function pillar(b: Builder, x: number, z: number, dx: number, dz: number, w: number, d: number, top: number): void {
+function pillar(b: Builder, x: number, z: number, dx: number, dz: number, w: number, d: number, top: number, bottom = 0): void {
   const nx = -dz;
   const nz = dx;
   const c = (u: number, v: number) => [x + dx * u + nx * v, z + dz * u + nz * v];
@@ -112,8 +115,10 @@ function pillar(b: Builder, x: number, z: number, dx: number, dz: number, w: num
   for (let k = 0; k < 4; k++) {
     const p = corners[k];
     const q = corners[(k + 1) % 4];
-    b.quad([p[0], p[1], top], [p[0], p[1], 0], [q[0], q[1], top], [q[0], q[1], 0]);
+    b.quad([p[0], p[1], top], [p[0], p[1], bottom], [q[0], q[1], top], [q[0], q[1], bottom]);
   }
+  const [k0, k1, k2, k3] = corners;
+  b.quad([k0[0], k0[1], top], [k1[0], k1[1], top], [k3[0], k3[1], top], [k2[0], k2[1], top]);
 }
 
 function dashes(b: Builder, s: Sample[], skip: number, width = MARK_WIDTH, h: Height = FLAT): void {
@@ -136,11 +141,68 @@ export interface RoadGeometries {
   sidewalk: THREE.BufferGeometry;
   asphalt: THREE.BufferGeometry;
   markings: THREE.BufferGeometry;
-  /** girders and pillars of elevated roads */
+  /** girders and pillars of elevated roads, tunnel portals */
   concrete: THREE.BufferGeometry;
+  /** tunnel openings */
+  dark: THREE.BufferGeometry;
 }
 
-const segHeight = (net: RoadNetwork, seg: RoadSegment): Height => (net.isRaised(seg) ? (t) => net.heightAt(seg, t) : FLAT);
+const isTunnelRamp = (net: RoadNetwork, seg: RoadSegment): boolean => {
+  const ha = net.node(seg.a).h;
+  const hb = net.node(seg.b).h;
+  return Math.min(ha, hb) < 0 && Math.max(ha, hb) === 0;
+};
+
+/**
+ * Height a road is drawn at. The ground has no holes, so a tunnel ramp is drawn at street level up to
+ * its portal and drops out of sight there.
+ */
+export function shownHeight(net: RoadNetwork, seg: RoadSegment): Height {
+  const ha = net.node(seg.a).h;
+  const hb = net.node(seg.b).h;
+  if (ha === 0 && hb === 0) return FLAT;
+  if (!isTunnelRamp(net, seg)) return (t) => net.heightAt(seg, t);
+  return (t) => {
+    const h = net.heightAt(seg, t);
+    return h > PORTAL_DEPTH ? 0 : h;
+  };
+}
+
+const segHeight = shownHeight;
+
+/** Low walls along a tunnel ramp up to its portal: two posts, a beam, and the dark opening between them. */
+function portal(b: Builder, dark: Builder, s: Sample[], depth: Height): void {
+  for (const side of [-1, 1]) {
+    const off = side * (ROAD_WIDTH / 2 + 0.2);
+    for (let i = 1; i < s.length; i++) {
+      const h0 = depth(s[i - 1].t);
+      const h1 = depth(s[i].t);
+      if ((h0 > -0.2 && h1 > -0.2) || (h0 <= PORTAL_DEPTH && h1 <= PORTAL_DEPTH)) continue;
+      const n0 = normalAt(s, i - 1);
+      const n1 = normalAt(s, i);
+      // Walls rise as the road would sink: up to the portal's beam at the mouth
+      const w0 = Math.min(PORTAL_HEIGHT, 0.9 + (-h0 / -PORTAL_DEPTH) * (PORTAL_HEIGHT - 0.9));
+      const w1 = Math.min(PORTAL_HEIGHT, 0.9 + (-h1 / -PORTAL_DEPTH) * (PORTAL_HEIGHT - 0.9));
+      const p0 = [s[i - 1].x + n0.x * off, s[i - 1].y + n0.y * off];
+      const p1 = [s[i].x + n1.x * off, s[i].y + n1.y * off];
+      b.quad([p0[0], p0[1], w0], [p0[0], p0[1], 0], [p1[0], p1[1], w1], [p1[0], p1[1], 0]);
+    }
+  }
+  for (let i = 1; i < s.length; i++) {
+    const h0 = depth(s[i - 1].t);
+    const h1 = depth(s[i].t);
+    if (h0 > PORTAL_DEPTH === h1 > PORTAL_DEPTH) continue;
+    const p = s[h0 > PORTAL_DEPTH ? i : i - 1];
+    const d = normalize({ x: s[i].x - s[i - 1].x, y: s[i].y - s[i - 1].y });
+    const n = { x: -d.y, y: d.x };
+    const half = ROAD_WIDTH / 2 + 0.6;
+    for (const side of [-1, 1]) pillar(b, p.x + n.x * half * side, p.y + n.y * half * side, d.x, d.y, 1.2, 1.6, PORTAL_HEIGHT);
+    pillar(b, p.x, p.y, d.x, d.y, half * 2 + 1.2, 1.6, PORTAL_HEIGHT, PORTAL_HEIGHT - 1.2);
+    const l = [p.x - n.x * half, p.y - n.y * half];
+    const r = [p.x + n.x * half, p.y + n.y * half];
+    dark.quad([l[0], l[1], PORTAL_HEIGHT - 1.2], [l[0], l[1], 0], [r[0], r[1], PORTAL_HEIGHT - 1.2], [r[0], r[1], 0]);
+  }
+}
 
 /** Girders along both edges and a pillar every so often where the deck is high enough to need one. */
 function supports(b: Builder, s: Sample[], h: Height): void {
@@ -165,13 +227,18 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
   const asphalt = new Builder(0.07);
   const marks = new Builder(0.1);
   const concrete = new Builder(0);
+  const dark = new Builder(0);
   for (const seg of net.segments.values()) {
     const h = segHeight(net, seg);
+    const raised = net.isRaised(seg);
     // Raised decks go with the concrete so they cast shadows on the streets below
-    ribbon(h === FLAT ? walk : concrete, seg.samples, ROAD_WIDTH, h);
+    ribbon(raised ? concrete : walk, seg.samples, ROAD_WIDTH, h);
     ribbon(asphalt, seg.samples, ASPHALT_WIDTH, h);
-    dashes(marks, seg.samples, ROAD_WIDTH * 0.6, MARK_WIDTH, h);
-    if (h !== FLAT) supports(concrete, seg.samples, h);
+    // One-way roads (roundabouts) have no centre line
+    if (!seg.oneway) dashes(marks, seg.samples, ROAD_WIDTH * 0.6, MARK_WIDTH, h);
+    if (raised) supports(concrete, seg.samples, h);
+    // Tunnel mouths: the ramp between street level and a tunnel
+    else if (isTunnelRamp(net, seg)) portal(concrete, dark, seg.samples, (t) => net.heightAt(seg, t));
   }
   for (const n of net.nodes.values()) {
     (n.h > 0 ? concrete : walk).disc(n.p.x, n.p.y, ROAD_WIDTH / 2, n.h);
@@ -179,7 +246,13 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
     // Elevated junctions stand on a pillar of their own
     if (n.h > GIRDER + 1.5) pillar(concrete, n.p.x, n.p.y, 1, 0, PILLAR_SIZE * 1.4, PILLAR_SIZE * 1.4, n.h - GIRDER * 0.5);
   }
-  return { sidewalk: walk.geometry(), asphalt: asphalt.geometry(), markings: marks.geometry(), concrete: concrete.geometry() };
+  return {
+    sidewalk: walk.geometry(),
+    asphalt: asphalt.geometry(),
+    markings: marks.geometry(),
+    concrete: concrete.geometry(),
+    dark: dark.geometry(),
+  };
 }
 
 /** Ghost road shown while drawing, rising from height ha to hb like a built ramp would. */
@@ -221,6 +294,10 @@ export function buildTrafficOverlay(net: RoadNetwork, level: (seg: RoadSegment, 
     // Right-hand traffic: travel a → b uses the right side of that direction
     const h = segHeight(net, seg);
     b.color = congestionColor(level(seg, 1), new THREE.Color());
+    if (seg.oneway) {
+      strip(b, seg.samples, -half, half, h);
+      continue;
+    }
     strip(b, seg.samples, 0.15, half, h);
     b.color = congestionColor(level(seg, -1), new THREE.Color());
     strip(b, seg.samples, -half, -0.15, h);
@@ -257,5 +334,17 @@ export function buildLinePaths(net: RoadNetwork, lines: { color: number; path: P
       strip(b, lanePiece(seg, piece), LANE_OFFSET - width / 2, LANE_OFFSET + width / 2, segHeight(net, seg));
     }
   }
+  return b.geometry();
+}
+
+/** Tunnels drawn on the surface above them, for the underground view. */
+export function buildTunnelOverlay(net: RoadNetwork): THREE.BufferGeometry {
+  const b = new Builder(0.35);
+  for (const seg of net.segments.values()) {
+    if (net.node(seg.a).h >= 0 && net.node(seg.b).h >= 0) continue;
+    ribbon(b, seg.samples, ROAD_WIDTH);
+    dashes(b, seg.samples, ROAD_WIDTH * 0.6, MARK_WIDTH * 2);
+  }
+  for (const n of net.nodes.values()) if (n.h < 0) b.disc(n.p.x, n.p.y, ROAD_WIDTH / 2);
   return b.geometry();
 }

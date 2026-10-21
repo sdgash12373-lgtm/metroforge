@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Traffic, Vehicle } from '../sim/traffic';
+import { PORTAL_DEPTH } from './roadMesh';
 
 const MAX = 1200;
 const CAR_COLORS = [0xe4572e, 0x2e86ab, 0xf2f2f2, 0x3b3b3b, 0xf2b134, 0x6a994e, 0xa23b72, 0x9aa5b1];
@@ -68,7 +69,8 @@ export class VehicleLayer {
       const i = v.kind === 'truck' ? t : v.kind === 'bus' ? b : c;
       if (i >= mesh.instanceMatrix.count) continue;
       this.q.setFromAxisAngle(this.up, Math.atan2(-pose.heading.y, pose.heading.x));
-      this.p.set(pose.p.x, pose.h + 0.1, pose.p.y);
+      // Ramps into tunnels are drawn at street level up to the portal
+      this.p.set(pose.p.x, (pose.h > PORTAL_DEPTH ? Math.max(0, pose.h) : pose.h) + 0.1, pose.p.y);
       this.m.compose(this.p, this.q, this.one);
       mesh.setMatrixAt(i, this.m);
       if (v.kind === 'bus') {

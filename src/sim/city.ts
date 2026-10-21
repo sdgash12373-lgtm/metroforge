@@ -1,5 +1,5 @@
-import { type Vec2, clamp } from './geometry';
-import { ELEVATED_HEIGHT, MAX_GRADE, RoadNetwork, type RoadSegment, type Snap } from './roads';
+import { type Sample, type Vec2, clamp, curveIntersections, dist, quadPoint } from './geometry';
+import { ELEVATED_HEIGHT, MAX_GRADE, RoadNetwork, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { type RoadPoint, Traffic } from './traffic';
 import { BUS_SHARE, BUS_UPKEEP, STOP_COST, Transit } from './transit';
 import { type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
@@ -11,6 +11,14 @@ export const ROAD_UPKEEP = 0.004;
 export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
 const SAVE_VERSION = 3;
+/** Ring radius of a roundabout by its number of exits. */
+export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
+/** Length of the short roads a new roundabout puts out at each exit. */
+const SPOKE_LENGTH = 30;
+/** An exit is skipped where an existing road already joins the ring this close to it. */
+const SPOKE_CLEARANCE = (25 * Math.PI) / 180;
+
+export type RoundaboutSize = 4 | 6;
 
 export type Rng = () => number;
 
@@ -43,8 +51,8 @@ export interface SaveData {
   day: number;
   /** id, x, y, height (v3) */
   nodes: ([number, number, number] | [number, number, number, number])[];
-  /** id, a, b, control x, control y, per-lot zone * 10 + level */
-  segs: [number, number, number, number, number, number[]][];
+  /** id, a, b, control x, control y, per-lot zone * 10 + level, 1 if one-way (v3) */
+  segs: ([number, number, number, number, number, number[]] | [number, number, number, number, number, number[], number])[];
   /** node ids where roads leave the map (v2) */
   outside?: number[];
   taxes?: TaxRates;
@@ -130,10 +138,11 @@ export class City {
     this.computeConnectivity();
   }
 
-  /** Price of a road; elevated decks cost three times as much as streets, ramps in between. */
+  /** Price of a road: elevated decks cost 3× a street, tunnels 4×, ramps in between. */
   roadCost(a: Vec2, c: Vec2 | null, b: Vec2, ha = 0, hb = 0): number {
-    const raised = (ha + hb) / 2 / ELEVATED_HEIGHT;
-    return Math.round(RoadNetwork.previewLength(a, c, b) * ROAD_COST_PER_M * (1 + 2 * raised));
+    const avg = (ha + hb) / 2;
+    const extra = avg >= 0 ? (2 * avg) / ELEVATED_HEIGHT : (3 * avg) / TUNNEL_DEPTH;
+    return Math.round(RoadNetwork.previewLength(a, c, b) * ROAD_COST_PER_M * (1 + extra));
   }
 
   /** Heights the two ends of a planned road would have, given the level new road ends are built at. */
@@ -171,7 +180,8 @@ export class City {
   }
 
   bulldoze(p: Vec2, radius: number): { ok: boolean; refund: number; reason?: string } {
-    const hit = this.net.segmentAt(p, radius);
+    // Roads you can see win over tunnels beneath them
+    const hit = this.net.segmentAt(p, radius, 0) ?? this.net.segmentAt(p, radius);
     if (!hit) return { ok: false, refund: 0 };
     if (this.outside.has(hit.seg.a) || this.outside.has(hit.seg.b)) {
       return { ok: false, refund: 0, reason: '這段是對外的高速公路，不能拆除' };
@@ -181,6 +191,86 @@ export class City {
     this.money += refund;
     this.roadsChanged();
     return { ok: true, refund };
+  }
+
+  /** Estimated price of a roundabout: the ring plus its exit roads. */
+  roundaboutCost(size: RoundaboutSize): number {
+    return Math.round((2 * Math.PI * ROUNDABOUT_RADIUS[size] + size * SPOKE_LENGTH) * ROAD_COST_PER_M);
+  }
+
+  /**
+   * A one-way ring (anticlockwise on screen, for right-hand traffic) with 4 or 6 exits.
+   * Roads it crosses join the ring, road pieces left inside it are removed, and exits
+   * get a short road unless an existing road already joins the ring there.
+   */
+  buildRoundabout(center: Vec2, size: RoundaboutSize): { ok: boolean; cost: number; reason?: string } {
+    const r = ROUNDABOUT_RADIUS[size];
+    const cost = this.roundaboutCost(size);
+    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
+    for (const seg of this.net.segments.values()) {
+      const near = seg.samples.some((p) => dist(p, center) < r + 12);
+      if (!near) continue;
+      if (seg.oneway) return { ok: false, cost, reason: '離另一個圓環太近' };
+      if (!this.net.isStreet(seg)) return { ok: false, cost, reason: '圓環要蓋在平地上，不能壓到高架或隧道' };
+    }
+    // Line the exits up with the first road that crosses the ring, if any
+    const circle: Sample[] = [];
+    for (let i = 0; i <= 64; i++) {
+      const a = (-i / 64) * Math.PI * 2;
+      circle.push({ x: center.x + Math.cos(a) * r, y: center.y + Math.sin(a) * r, t: i / 64, s: 0 });
+    }
+    let offset = 0;
+    for (const seg of this.net.segments.values()) {
+      const hit = curveIntersections(circle, seg.samples)[0];
+      if (hit) {
+        offset = -hit.ta * Math.PI * 2;
+        break;
+      }
+    }
+    const step = (Math.PI * 2) / size;
+    const angle = (k: number) => offset - k * step;
+    const at = (a: number, d: number): Vec2 => ({ x: center.x + Math.cos(a) * d, y: center.y + Math.sin(a) * d });
+    const spent = this.money;
+
+    // Ring: one quadratic arc per exit, built in driving order
+    let first: number | null = null;
+    let prev: number | null = null;
+    for (let k = 0; k < size; k++) {
+      const node = (id: number): Snap => ({ kind: 'node', node: this.net.node(id), p: this.net.node(id).p });
+      const start: Snap = prev === null ? { kind: 'free', p: at(angle(k), r) } : node(prev);
+      const end: Snap = k === size - 1 && first !== null ? node(first) : { kind: 'free', p: at(angle(k + 1), r) };
+      const control = at(angle(k + 0.5), r / Math.cos(step / 2));
+      const pieces = this.net.addRoad(start, control, end, 0, true);
+      if (!pieces.length) continue;
+      if (first === null) first = pieces[0].a;
+      prev = pieces[pieces.length - 1].b;
+    }
+    // Clear the old roads inside the ring
+    for (const seg of [...this.net.segments.values()]) {
+      if (seg.oneway) continue;
+      const mid = quadPoint(this.net.quad(seg), 0.5);
+      if (dist(mid, center) < r - 2) this.net.removeSegment(seg.id);
+    }
+    // Exit roads where nothing joins the ring yet
+    const joined: number[] = [];
+    for (const seg of this.net.segments.values()) {
+      if (seg.oneway) continue;
+      for (const id of [seg.a, seg.b]) {
+        const p = this.net.node(id).p;
+        if (Math.abs(dist(p, center) - r) < 1.5) joined.push(Math.atan2(p.y - center.y, p.x - center.x));
+      }
+    }
+    for (let k = 0; k < size; k++) {
+      const a = angle(k);
+      const taken = joined.some((j) => Math.abs(Math.atan2(Math.sin(j - a), Math.cos(j - a))) < SPOKE_CLEARANCE);
+      if (taken) continue;
+      const exit = this.net.snap(at(a, r), 1.5, 0);
+      if (exit.kind === 'free') continue;
+      this.net.addRoad(exit, null, { kind: 'free', p: at(a, r + SPOKE_LENGTH) });
+    }
+    this.money = spent - cost;
+    this.roadsChanged();
+    return { ok: true, cost };
   }
 
   /** Opens a bus line through the given stops (a loop). */
@@ -350,7 +440,8 @@ export class City {
         round2(s.c.x),
         round2(s.c.y),
         s.lots.map((l) => l.zone * 10 + l.level),
-      ]),
+        ...(s.oneway ? [1] : []),
+      ] as SaveData['segs'][number]),
       outside: [...this.outside],
       taxes: { ...this.taxes },
       stops: [...this.transit.stops.values()].map((s) => [s.id, round2(s.p.x), round2(s.p.y)]),
@@ -364,8 +455,8 @@ export class City {
     city.money = data.money;
     city.day = data.day;
     for (const [id, x, y, h] of data.nodes) city.net.addNode({ x, y }, id, h ?? 0);
-    for (const [id, a, b, cx, cy, lots] of data.segs) {
-      const seg = city.net.createSegment(a, b, { x: cx, y: cy }, undefined, id);
+    for (const [id, a, b, cx, cy, lots, oneway] of data.segs) {
+      const seg = city.net.createSegment(a, b, { x: cx, y: cy }, undefined, id, oneway === 1);
       lots.forEach((v, i) => {
         const lot = seg.lots[i];
         if (!lot) return;

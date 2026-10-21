@@ -22,6 +22,8 @@ export const ROAD_WIDTH = 10;
 export const MIN_SEGMENT = 4;
 /** Deck height of elevated roads, enough for traffic to pass underneath. */
 export const ELEVATED_HEIGHT = 8;
+/** Depth of tunnels (negative height). */
+export const TUNNEL_DEPTH = -8;
 /** Roads closer in height than this at a crossing meet in a junction; otherwise one passes over the other. */
 export const LEVEL_TOLERANCE = 4;
 /** Steepest average slope a ramp may have (18 %). */
@@ -47,6 +49,8 @@ export interface RoadSegment {
   length: number;
   bbox: BBox;
   lots: Lot[];
+  /** traffic only drives a → b (roundabouts) */
+  oneway: boolean;
 }
 
 export type Snap =
@@ -84,8 +88,10 @@ export class RoadNetwork {
     return n;
   }
 
-  createSegment(a: number, b: number, c: Vec2, from?: RoadSegment, id?: number): RoadSegment {
+  /** New segment a → b. Pieces of a split segment keep its one-way setting. */
+  createSegment(a: number, b: number, c: Vec2, from?: RoadSegment, id?: number, oneway = from?.oneway ?? false): RoadSegment {
     const seg: RoadSegment = {
+      oneway,
       id: id ?? this.nextSeg++,
       a,
       b,
@@ -115,6 +121,11 @@ export class RoadNetwork {
   /** True when any part of the segment is off the ground (elevated road or ramp). */
   isRaised(seg: RoadSegment): boolean {
     return this.node(seg.a).h > 0 || this.node(seg.b).h > 0;
+  }
+
+  /** An ordinary two-way road at ground level: the kind buildings and bus stops can front onto. */
+  isStreet(seg: RoadSegment): boolean {
+    return !seg.oneway && this.node(seg.a).h === 0 && this.node(seg.b).h === 0;
   }
 
   /** Height a snap would join the network at (free points take `free`). */
@@ -206,7 +217,7 @@ export class RoadNetwork {
    * wherever the new road crosses an existing one at the same level so those crossings are junctions.
    * Free ends are placed at `height`; an end on an existing road takes that road's height, which makes ramps.
    */
-  addRoad(start: Snap, control: Vec2 | null, end: Snap, height = 0): RoadSegment[] {
+  addRoad(start: Snap, control: Vec2 | null, end: Snap, height = 0, oneway = false): RoadSegment[] {
     const A = this.resolve(start, height);
     // Resolving the start may have split the segment the end was snapped to
     const B = this.resolve(end.kind === 'segment' ? this.snap(end.p, 0.5, this.heightAt(end.seg, end.t)) : end, height);
@@ -257,7 +268,7 @@ export class RoadNetwork {
       const from = chain[i - 1].node;
       const existing = this.connected(from.id, node.id);
       if (existing && control === null) continue;
-      created.push(this.createSegment(from.id, node.id, piece.c));
+      created.push(this.createSegment(from.id, node.id, piece.c, undefined, undefined, oneway));
     }
     return created;
   }

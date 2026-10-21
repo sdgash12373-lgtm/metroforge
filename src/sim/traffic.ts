@@ -147,6 +147,8 @@ export class Traffic {
     const s1 = this.net.segments.get(to.seg);
     if (!s0 || !s1) return null;
     const ahead: Dir = to.s > from.s ? 1 : -1;
+    // One-way roads can only be driven a → b
+    if (s0.oneway) startDir = 1;
     if (s0.id === s1.id && Math.abs(to.s - from.s) > 1 && (startDir ?? ahead) === ahead) {
       const dir = ahead;
       return {
@@ -189,7 +191,7 @@ export class Traffic {
     }
     // Enter the destination segment from whichever end is cheaper
     const viaA = (cost.get(s1.a) ?? Infinity) + to.s / SPEED_LIMIT;
-    const viaB = (cost.get(s1.b) ?? Infinity) + (s1.length - to.s) / SPEED_LIMIT;
+    const viaB = s1.oneway ? Infinity : (cost.get(s1.b) ?? Infinity) + (s1.length - to.s) / SPEED_LIMIT;
     if (!Number.isFinite(Math.min(viaA, viaB))) return null;
     const endNode = viaA <= viaB ? s1.a : s1.b;
     const lastLane: LaneRef = { seg: s1.id, dir: viaA <= viaB ? 1 : -1 };
@@ -229,7 +231,7 @@ export class Traffic {
     };
     for (const seg of this.net.segments.values()) {
       add(seg.a, { to: seg.b, seg, dir: 1 });
-      add(seg.b, { to: seg.a, seg, dir: -1 });
+      if (!seg.oneway) add(seg.b, { to: seg.a, seg, dir: -1 });
     }
     this.adjacencyCache = { version: this.netVersion, map: m };
     return m;

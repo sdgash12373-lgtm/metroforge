@@ -5,12 +5,13 @@ import { BRUSH_MAX, BRUSH_MIN, type Tool, type ToolController } from './tools';
 
 const TOOLS: { id: Tool; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
-  { id: 'road', label: '直線道路', key: '2' },
-  { id: 'curve', label: '曲線道路', key: '3' },
-  { id: 'zone', label: '分區', key: '4' },
-  { id: 'bulldoze', label: '拆除', key: '5' },
-  { id: 'traffic', label: '交通', key: '6' },
-  { id: 'bus', label: '公車', key: '7' },
+  { id: 'road', label: '直線', key: '2' },
+  { id: 'curve', label: '曲線', key: '3' },
+  { id: 'roundabout', label: '圓環', key: '4' },
+  { id: 'zone', label: '分區', key: '5' },
+  { id: 'bulldoze', label: '拆除', key: '6' },
+  { id: 'traffic', label: '交通', key: '7' },
+  { id: 'bus', label: '公車', key: '8' },
 ];
 
 export const SPEEDS = [0, 1, 3] as const;
@@ -46,6 +47,7 @@ export class Hud {
   private city: City | null = null;
   private topBar: HTMLElement;
   lockButton: HTMLButtonElement;
+  private clearArmed = 0;
   speed = 1;
 
   constructor(
@@ -260,14 +262,18 @@ export class Hud {
       size.append(el('span', '', '範圍'), range, value);
       this.sub.append(size);
     } else if (this.tools.tool === 'road' || this.tools.tool === 'curve') {
-      option('地面', !this.tools.elevated, () => this.tools.setElevated(false));
-      option('高架', this.tools.elevated, () => this.tools.setElevated(true));
+      option('地面', this.tools.roadLevel === 'ground', () => this.tools.setRoadLevel('ground'));
+      option('高架', this.tools.roadLevel === 'elevated', () => this.tools.setRoadLevel('elevated'));
+      option('地下', this.tools.roadLevel === 'tunnel', () => this.tools.setRoadLevel('tunnel'));
       if (this.tools.drawing) {
         option('結束拉路', false, () => {
           this.tools.cancel();
           this.render();
         });
       }
+    } else if (this.tools.tool === 'roundabout') {
+      option('4 通', this.tools.roundaboutSize === 4, () => this.tools.setRoundaboutSize(4));
+      option('6 通', this.tools.roundaboutSize === 6, () => this.tools.setRoundaboutSize(6));
     } else if (this.tools.tool === 'bus') {
       this.renderBusDock(option);
     }
@@ -291,6 +297,22 @@ export class Hud {
     const picked = t.selectedLine;
     if (picked !== null && city.transit.lines.has(picked)) {
       option('刪除這條路線', false, () => t.deleteLine(picked));
+    }
+    if (city.transit.lines.size) {
+      // Two taps, like 新城市, so a stray tap can't wipe every line
+      option(this.clearArmed ? '確定清除全部？' : '清除全部路線', false, () => {
+        if (!this.clearArmed) {
+          this.clearArmed = window.setTimeout(() => {
+            this.clearArmed = 0;
+            this.render();
+          }, 3000);
+          this.render();
+          return;
+        }
+        clearTimeout(this.clearArmed);
+        this.clearArmed = 0;
+        t.clearLines();
+      });
     }
   }
 
