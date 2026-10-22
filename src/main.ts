@@ -1,5 +1,6 @@
 import './style.css';
 import { City, type SaveData } from './sim/city';
+import { KAOHSIUNG } from './sim/terrain';
 import { World } from './render/world';
 import { Hud, SPEEDS } from './ui/hud';
 import { attachInput } from './ui/input';
@@ -10,7 +11,7 @@ const TICK_SECONDS = 0.5;
 const LOCK_KEY = 'skyline-city:build-mode';
 
 function newCity(): City {
-  const city = new City();
+  const city = new City(KAOHSIUNG);
   // The highway exit the city grows from
   const gate = { x: -480, y: 60 };
   city.buildRoad({ kind: 'free', p: gate }, { x: -240, y: 40 }, { kind: 'free', p: { x: 0, y: 0 } }, true);

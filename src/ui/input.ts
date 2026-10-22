@@ -28,7 +28,8 @@ type Gesture =
  * Mouse and touch on the map.
  * One finger / left button: the active tool (tap), or move the map on drag. While a road is being
  * drawn, a finger drag moves the road's end instead and lifting the finger builds it.
- * Two fingers: pinch zoom, twist rotate, drag to move. Right button: orbit. Wheel: zoom.
+ * Two fingers: pinch zoom, twist rotate, drag to move. Right button: orbit, or a right click to stop
+ * drawing a road. Wheel: zoom.
  */
 export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolController): void {
   const ptrs = new Map<number, Pointer>();
@@ -120,6 +121,8 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
       const g = ground(e.clientX, e.clientY);
       if (g) tools.onTap(g);
     }
+    // A right click without dragging ends the road or track being drawn
+    if (p.button === 2 && e.type === 'pointerup' && tools.drawing && Math.hypot(p.x - p.startX, p.y - p.startY) <= TAP_SLOP) tools.cancel();
     ptrs.delete(e.pointerId);
     // Fingers have no hover: drop the brush / snap ring once the touch ends
     if (e.pointerType !== 'mouse' && ptrs.size === 0) tools.onHover(null);

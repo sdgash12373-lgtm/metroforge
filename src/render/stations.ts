@@ -85,33 +85,33 @@ function platforms(f: Frame, h: number, len: number): void {
 }
 
 function metroStation(f: Frame, h: number, color: number): void {
-  platforms(f, h, 60);
+  platforms(f, h, 44);
   if (h < 0) {
     // Hall around the platforms, open on top so the trains show in the see-through view
     for (const side of [-1, 1]) {
-      f.box(0, side * 7.6, 64, 0.6, h - 0.4, h + 5.6, CONCRETE);
-      f.box(0, side * 7.25, 64, 0.1, h + 3.2, h + 3.9, color);
+      f.box(0, side * 7.6, 48, 0.6, h - 0.4, h + 5.6, CONCRETE);
+      f.box(0, side * 7.25, 48, 0.1, h + 3.2, h + 3.9, color);
     }
-    for (const end of [-1, 1]) f.box(end * 32, 0, 0.6, 15.8, h - 0.4, h + 5.6, CONCRETE);
-    // Two entrances on the street above, on opposite sides of the line
+    for (const end of [-1, 1]) f.box(end * 24, 0, 0.6, 15.8, h - 0.4, h + 5.6, CONCRETE);
+    // Two small entrances on the street above, on opposite sides of the line
     for (const end of [-1, 1]) {
-      const u = end * 22;
-      const v = end * 13;
-      f.box(u, v, 6, 4.2, 0, 2.6, GLASS);
-      f.box(u, v, 7, 5, 2.6, 3.1, color);
-      f.box(u + end * 4.4, v, 0.5, 0.5, 0, 4.2, 0x4a4f57);
-      f.box(u + end * 4.4, v, 1.2, 1.2, 4.2, 5.4, color);
+      const u = end * 15;
+      const v = end * 11;
+      f.box(u, v, 4.4, 3.2, 0, 2.5, GLASS);
+      f.box(u, v, 5, 3.8, 2.5, 2.9, color);
+      f.box(u + end * 3.2, v, 0.4, 0.4, 0, 3.6, 0x4a4f57);
+      f.box(u + end * 3.2, v, 1, 1, 3.6, 4.6, color);
       // Stair shaft down to the hall, seen in the see-through view
-      f.box(u * 0.7, end * 9.5, 5, 3.6, h + 3.9, -0.2, CONCRETE);
+      f.box(u * 0.75, end * 9, 4, 3, h + 3.9, -0.2, CONCRETE);
     }
     return;
   }
   // Above ground: a canopy over both platforms
-  for (const u of [-24, -8, 8, 24]) for (const side of [-1, 1]) f.box(u, side * 6.6, 0.5, 0.5, h + 1.1, h + 5.2, 0x7d838a);
-  f.box(0, 0, 58, 15.5, h + 5.2, h + 5.7, CONCRETE);
-  f.box(0, 0, 58.4, 15.9, h + 5.7, h + 6.0, color);
+  for (const u of [-16, 0, 16]) for (const side of [-1, 1]) f.box(u, side * 6.6, 0.5, 0.5, h + 1.1, h + 5.2, 0x7d838a);
+  f.box(0, 0, 42, 15.5, h + 5.2, h + 5.7, CONCRETE);
+  f.box(0, 0, 42.4, 15.9, h + 5.7, h + 6.0, color);
   // Elevated stations get a stair and lift tower down to the street
-  if (h > 2) f.box(0, 10.5, 8, 4.6, 0, h + 5.7, GLASS);
+  if (h > 2) f.box(0, 10.5, 7, 4.2, 0, h + 5.7, GLASS);
 }
 
 function trainStation(f: Frame, h: number, color: number): void {

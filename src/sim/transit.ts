@@ -73,7 +73,7 @@ export const METRO: TransitMode = {
   metersPerVehicle: 1200,
   maxVehicles: 6,
   dwell: 10,
-  margin: 30,
+  margin: 22,
   streetsOnly: false,
   reverses: true,
   shareAtFree: 0.85,

@@ -1,0 +1,80 @@
+import type { Vec2 } from './geometry';
+import type { RoadNetwork, RoadSegment } from './roads';
+
+/** Seconds of green, then yellow, for each direction in turn. */
+export const GREEN_TIME = 12;
+export const YELLOW_TIME = 3;
+/** Roads within this angle of each other share a green (straight across the junction). */
+const SAME_AXIS = Math.PI / 6;
+/** Vehicles wait this far back from the junction centre. */
+export const STOP_BACK = 6;
+
+export type Light = 'green' | 'yellow' | 'red';
+
+export interface Approach {
+  seg: number;
+  /** the junction is at this end of the segment */
+  end: 'a' | 'b';
+  /** unit direction from the junction out along the road */
+  out: Vec2;
+  phase: number;
+}
+
+export interface Junction {
+  node: number;
+  approaches: Approach[];
+  phases: number;
+  /** staggers neighbouring junctions so they do not all change together */
+  offset: number;
+}
+
+/** Direction from a segment's end at `end` out along it. */
+function outward(seg: RoadSegment, end: 'a' | 'b'): Vec2 {
+  const s = seg.samples;
+  const [p, q] = end === 'a' ? [s[0], s[1]] : [s[s.length - 1], s[s.length - 2]];
+  const l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+  return { x: (q.x - p.x) / l, y: (q.y - p.y) / l };
+}
+
+/**
+ * Every node where three or more two-way roads meet gets traffic lights. Roads that line up across
+ * the junction share a phase; roundabouts (one-way rings) keep yielding instead.
+ */
+export function findJunctions(net: RoadNetwork): Map<number, Junction> {
+  const at = new Map<number, { seg: RoadSegment; end: 'a' | 'b' }[]>();
+  const add = (node: number, seg: RoadSegment, end: 'a' | 'b') => {
+    const l = at.get(node);
+    if (l) l.push({ seg, end });
+    else at.set(node, [{ seg, end }]);
+  };
+  for (const seg of net.segments.values()) {
+    add(seg.a, seg, 'a');
+    add(seg.b, seg, 'b');
+  }
+  const out = new Map<number, Junction>();
+  for (const [node, list] of at) {
+    if (list.length < 3 || list.some((e) => e.seg.oneway)) continue;
+    const axes: number[] = [];
+    const approaches = list.map(({ seg, end }) => {
+      const o = outward(seg, end);
+      const axis = (Math.atan2(o.y, o.x) + Math.PI) % Math.PI;
+      let phase = axes.findIndex((a) => {
+        const d = Math.abs(a - axis);
+        return Math.min(d, Math.PI - d) < SAME_AXIS;
+      });
+      if (phase < 0) phase = axes.push(axis) - 1;
+      return { seg: seg.id, end, out: o, phase };
+    });
+    const cycle = axes.length * (GREEN_TIME + YELLOW_TIME);
+    out.set(node, { node, approaches, phases: axes.length, offset: (node * 7.31) % cycle });
+  }
+  return out;
+}
+
+/** The light shown to traffic coming in on approach `phase` of a junction at `time` seconds. */
+export function lightAt(j: Junction, phase: number, time: number): Light {
+  const slot = GREEN_TIME + YELLOW_TIME;
+  const t = (time + j.offset) % (j.phases * slot);
+  if (Math.floor(t / slot) !== phase) return 'red';
+  return t % slot < GREEN_TIME ? 'green' : 'yellow';
+}

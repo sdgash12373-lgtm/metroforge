@@ -240,10 +240,12 @@ export class ToolController {
     this.world.rig.pickHeight = this.isRoadTool ? this.height : 0;
   }
 
-  /** See-through ground while building tunnels or metro lines; tunnels marked on the surface while bulldozing. */
+  /** See-through ground while building tunnels or metro lines, and a cleared city for the metro; tunnels marked on the surface while bulldozing. */
   private updateUnderground(): void {
     this.world.setXray((this.isRoadTool && this.level === 'tunnel') || (this.tool === 'metro' && this.railAction === 'line'));
     this.world.setUndergroundView(this.tool === 'bulldoze');
+    // Metro runs over and under the city: buildings and streets would hide the track being laid
+    this.world.setDeclutter(this.tool === 'metro');
   }
 
   setZone(zone: Zone): void {
@@ -391,13 +393,13 @@ export class ToolController {
     const { start, control } = this.draft;
     if (start && this.hover && (!this.curved || control)) {
       const end = this.snapRoad(this.hover).snap;
-      const steep = this.city.gradeProblem(start, control, end, this.height, this.net);
+      const steep = this.city.buildProblem(start, control, end, this.height, this.net);
       if (steep) return steep;
       const len = Math.round(Math.hypot(end.p.x - start.p.x, end.p.y - start.p.y));
       const [ha, hb] = this.city.roadHeights(start, end, this.height, this.net);
       const cost = this.cost(start.p, control, end.p, ha, hb);
       const kind = ha === hb ? (ha > 0 ? '高架 ' : ha < 0 ? '隧道 ' : '') : hb < 0 || ha < 0 ? '隧道入口 ' : '匝道 ';
-      return `${kind}約 ${len} 公尺 · $${cost.toLocaleString()}　點一下完成，再點起點結束${verb}`;
+      return `${kind}約 ${len} 公尺 · $${cost.toLocaleString()}　點一下完成；再點起點或按右鍵結束${verb}`;
     }
     if (this.level === 'elevated' && !start) {
       return `高架${what}：從地面接出會自動做成匝道（至少 ${Math.ceil(ELEVATED_HEIGHT / MAX_GRADE)} 公尺），跨過地面不會形成路口`;
@@ -607,7 +609,7 @@ export class ToolController {
       const end = hoverSnap.p;
       const [ha, hb] = this.city.roadHeights(start, hoverSnap, this.height, net);
       const cost = this.cost(start.p, ctrl, end, ha, hb);
-      const ok = cost <= this.city.money && !this.city.gradeProblem(start, ctrl, hoverSnap, this.height, net);
+      const ok = cost <= this.city.money && !this.city.buildProblem(start, ctrl, hoverSnap, this.height, net);
       w.setPreview({ a: start.p, c: ctrl ?? lerp(start.p, end, 0.5), b: end }, ok, ha, hb);
       w.setAngleGuides(angleGuides(net, start, ctrl, hoverSnap));
     } else {
