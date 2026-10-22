@@ -1,5 +1,8 @@
 import { MAX_AIR_FARE } from '../sim/airport';
+import logoUrl from '../assets/logo.png';
+import { gameDate, ntd } from '../sim/format';
 import { type City, MAX_TAX } from '../sim/city';
+import { FACILITIES, LANDMARK_KINDS, SERVICE_KINDS } from '../sim/facilities';
 import { RAIL_KINDS } from '../sim/rail';
 import { ZONES, Zone } from '../sim/zoning';
 import { BUS, LINE_COLORS, MODES, type Transit } from '../sim/transit';
@@ -7,7 +10,7 @@ import { EditPanel } from './editPanel';
 import { BRUSH_MAX, BRUSH_MIN, DISTRICT_MAX, DISTRICT_MIN, type Tool, type ToolController, isRail } from './tools';
 
 /** Tools that share one dock button and are picked on a second row. */
-type Group = 'roads' | 'transport' | 'names';
+type Group = 'roads' | 'transport' | 'build' | 'names';
 const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
   roads: [
     { id: 'road', label: '直線' },
@@ -20,6 +23,10 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
     { id: 'train', label: '火車' },
     { id: 'hsr', label: '高鐵' },
     { id: 'airport', label: '機場' },
+  ],
+  build: [
+    ...SERVICE_KINDS.map((k) => ({ id: k as Tool, label: FACILITIES[k].label })),
+    { id: 'landmark', label: '地標' },
   ],
   names: [
     { id: 'streetName', label: '路名' },
@@ -36,7 +43,8 @@ const TOOLS: { id: DockItem; label: string; key: string }[] = [
   { id: 'bulldoze', label: '拆除', key: '4' },
   { id: 'traffic', label: '交通', key: '5' },
   { id: 'transport', label: '運輸', key: '6' },
-  { id: 'names', label: '命名', key: '7' },
+  { id: 'build', label: '建設', key: '7' },
+  { id: 'names', label: '命名', key: '8' },
 ];
 
 export const SPEEDS = [0, 1, 3] as const;
@@ -69,12 +77,12 @@ export class Hud {
   /** second row under 道路 (straight, curved, roundabout) and 運輸 (bus, metro, train, high-speed, airport) */
   private kinds: HTMLElement;
   /** tool each grouped dock button returns to */
-  private lastTool: Record<Group, Tool> = { roads: 'road', transport: 'bus', names: 'streetName' };
+  private lastTool: Record<Group, Tool> = { roads: 'road', transport: 'bus', build: 'park', names: 'streetName' };
   private speedButtons: HTMLButtonElement[] = [];
   private toastTimer = 0;
   private warning: HTMLElement;
   private budgetPanel: HTMLElement;
-  private budgetRows: Record<'res' | 'biz' | 'fares' | 'air' | 'roads' | 'transit' | 'airUpkeep' | 'net', HTMLElement>;
+  private budgetRows: Record<'res' | 'biz' | 'fares' | 'air' | 'tourism' | 'roads' | 'transit' | 'airUpkeep' | 'services' | 'net', HTMLElement>;
   private taxInputs: { res: HTMLInputElement; biz: HTMLInputElement; resLabel: HTMLElement; bizLabel: HTMLElement };
   private city: City | null = null;
   private topBar: HTMLElement;
@@ -83,6 +91,9 @@ export class Hud {
   private fareInputs: { input: HTMLInputElement; label: HTMLElement; get(city: City): number }[] = [];
   private editPanel = new EditPanel();
   private budgetBtn!: HTMLButtonElement;
+  private needsBtn!: HTMLButtonElement;
+  private needsPanel: HTMLElement;
+  private needsBody: HTMLElement;
   private bottomBar!: HTMLElement;
   /** line whose editor was last opened, so picking another line can close the budget on phones */
   private editKey: string | null = null;
@@ -95,7 +106,12 @@ export class Hud {
   ) {
     const top = el('header', 'hud panel');
     this.topBar = top;
-    top.append(el('div', 'brand', '天際線'));
+    const brand = el('div', 'brand');
+    const logo = el('img');
+    logo.src = logoUrl;
+    logo.alt = '';
+    brand.append(logo, el('span', '', 'Metroforge'));
+    top.append(brand);
     const stat = (label: string) => {
       const box = el('div', 'stat');
       const v = el('b');
@@ -103,7 +119,8 @@ export class Hud {
       top.append(box);
       return v;
     };
-    this.stats = { pop: stat('人口'), jobs: stat('工作'), money: stat('資金'), day: stat('第') };
+    this.stats = { pop: stat('人口'), jobs: stat('工作'), money: stat('資金'), day: stat('') };
+    this.stats.day.parentElement!.classList.add('clock');
     const rci = el('div', 'rci');
     rci.title = '需求：住宅 / 商業 / 辦公 / 工業';
     const bar = (k: string, color: string) => {
@@ -145,10 +162,32 @@ export class Hud {
     this.budgetBtn = budgetBtn;
     top.append(budgetBtn);
 
+    const needsBtn = el('button', 'chip', '需求');
+    needsBtn.type = 'button';
+    needsBtn.onclick = () => this.showNeeds(this.needsPanel.hidden);
+    this.needsBtn = needsBtn;
+    top.append(needsBtn);
+
     const menu = el('button', 'chip', '選單');
     menu.type = 'button';
     menu.onclick = () => actions.openMenu();
     top.append(menu);
+
+    // Ticker across the top bar for update notices
+    this.tickerEl = el('div', 'ticker');
+    this.tickerEl.hidden = true;
+    this.tickerEl.setAttribute('role', 'status');
+    this.tickerText = el('span');
+    const lane = el('div', 'lane');
+    lane.append(this.tickerText);
+    this.tickerAction = el('button', 'chip');
+    this.tickerAction.type = 'button';
+    const close = el('button', 'close', '×');
+    close.type = 'button';
+    close.setAttribute('aria-label', '關閉通知');
+    close.onclick = () => this.endTicker();
+    this.tickerEl.append(lane, this.tickerAction, close);
+    top.append(this.tickerEl);
 
     this.warning = el('div', 'warning panel');
     this.warning.hidden = true;
@@ -169,9 +208,11 @@ export class Hud {
       biz: row('商業稅'),
       fares: row('運輸票價'),
       air: row('機場收入'),
+      tourism: row('觀光收入'),
       roads: row('道路維護'),
       transit: row('運輸營運'),
       airUpkeep: row('機場營運'),
+      services: row('公共服務'),
       net: row('每日淨額'),
     };
     this.budgetRows.net.parentElement!.classList.add('total');
@@ -208,6 +249,13 @@ export class Hud {
     }
     this.budgetPanel.append(el('p', 'note', '票價越高收入越多，但搭乘的人會變少。'));
 
+    // Residents' needs: happiness, how much of the city each service reaches, what people ask for
+    this.needsPanel = el('section', 'budget needs panel');
+    this.needsPanel.hidden = true;
+    this.needsPanel.append(el('h2', '', '居民需求'));
+    this.needsBody = el('div');
+    this.needsPanel.append(this.needsBody, el('p', 'note', '在「建設」蓋公園、學校、警察局、消防局和醫院，讓更多居民被服務範圍涵蓋；滿意度越高，住宅需求越高、升級越快。'));
+
     this.toastEl = el('div', 'toast panel');
     this.toastEl.setAttribute('role', 'status');
 
@@ -235,7 +283,7 @@ export class Hud {
     }
     bottom.append(this.hint, this.sub, this.kinds, dock);
     this.bottomBar = bottom;
-    root.append(top, this.warning, this.budgetPanel, this.editPanel.el, this.toastEl, bottom);
+    root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.editPanel.el, this.toastEl, bottom);
 
     addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement).closest?.('input, textarea') || document.body.classList.contains('menu-open')) return;
@@ -253,7 +301,7 @@ export class Hud {
   }
 
   private toolFor(item: DockItem): Tool {
-    return item === 'roads' || item === 'transport' || item === 'names' ? this.lastTool[item] : item;
+    return item in GROUPS ? this.lastTool[item as Group] : (item as Tool);
   }
 
   selectTool(t: Tool): void {
@@ -344,6 +392,15 @@ export class Hud {
       } else this.renderLineDock(option);
     } else if (this.tools.tool === 'airport') {
       this.renderAirportDock(option);
+    } else if (this.tools.tool === 'landmark') {
+      const t = this.tools;
+      const built = new Set([...(this.city?.facilities.values() ?? [])].map((f) => f.kind));
+      for (const k of LANDMARK_KINDS) {
+        option(`${FACILITIES[k].label}${built.has(k) ? ' · 已興建' : ''}`, t.landmark === k, () => {
+          t.setLandmark(k);
+          this.render();
+        }, FACILITIES[k].color);
+      }
     } else if (this.tools.tool === 'district') {
       const t = this.tools;
       const size = el('label', 'brush-size');
@@ -463,9 +520,12 @@ export class Hud {
     const narrow = window.innerWidth < 720;
     if (key !== this.editKey) {
       this.editKey = key;
-      if (key && narrow) this.showBudget(false);
+      if (key && narrow) {
+        this.showBudget(false);
+        this.showNeeds(false);
+      }
     }
-    if (!key || (narrow && !this.budgetPanel.hidden)) {
+    if (!key || (narrow && (!this.budgetPanel.hidden || !this.needsPanel.hidden))) {
       this.editPanel.hide();
       return;
     }
@@ -548,16 +608,90 @@ export class Hud {
   private showBudget(on: boolean): void {
     this.budgetPanel.hidden = !on;
     this.budgetBtn.setAttribute('aria-pressed', String(on));
+    if (on) this.showNeeds(false);
+  }
+
+  private showNeeds(on: boolean): void {
+    this.needsPanel.hidden = !on;
+    this.needsBtn.setAttribute('aria-pressed', String(on));
+    if (on) this.showBudget(false);
+    if (on && this.city) this.renderNeeds(this.city);
+  }
+
+  private tickerEl: HTMLElement;
+  private tickerText: HTMLElement;
+  private tickerAction: HTMLButtonElement;
+  private tickerDone: (() => void) | null = null;
+
+  /**
+   * Scrolls `text` across the top bar `loops` times (0 = until closed), then calls `done`.
+   * `action` adds a button next to it, such as 重新整理.
+   */
+  ticker(text: string, opts: { loops?: number; action?: { label: string; run: () => void }; done?: () => void } = {}): void {
+    this.endTicker();
+    this.tickerText.textContent = text;
+    this.tickerAction.hidden = !opts.action;
+    if (opts.action) {
+      this.tickerAction.textContent = opts.action.label;
+      this.tickerAction.onclick = opts.action.run;
+    }
+    this.tickerDone = opts.done ?? null;
+    this.tickerEl.hidden = false;
+    // Same speed whatever the length: about 110 px a second
+    const lane = this.tickerText.parentElement!;
+    const span = lane.clientWidth + this.tickerText.scrollWidth;
+    this.tickerText.style.animation = 'none';
+    void this.tickerText.offsetWidth;
+    this.tickerText.style.animation = `ticker ${Math.max(8, span / 110)}s linear ${opts.loops || 'infinite'}`;
+    this.tickerText.onanimationend = () => this.endTicker();
+  }
+
+  private endTicker(): void {
+    if (this.tickerEl.hidden) return;
+    this.tickerEl.hidden = true;
+    this.tickerText.style.animation = 'none';
+    const done = this.tickerDone;
+    this.tickerDone = null;
+    done?.();
+  }
+
+  private needsShown = '';
+  private renderNeeds(city: City): void {
+    const n = city.needs;
+    const key = JSON.stringify([Math.round(n.happiness), n.wants, n.tourists, SERVICE_KINDS.map((k) => Math.round(n.coverage[k] * 100))]);
+    if (key === this.needsShown) return;
+    this.needsShown = key;
+    const rows: HTMLElement[] = [];
+    const meter = (label: string, pct: number, color: string, text = `${Math.round(pct)}%`) => {
+      const r = el('div', 'meter');
+      const track = el('div', 'track');
+      const fill = el('i');
+      fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+      fill.style.background = color;
+      track.append(fill);
+      r.append(el('span', '', label), track, el('b', '', text));
+      rows.push(r);
+    };
+    const mood = n.happiness >= 70 ? '😊' : n.happiness >= 45 ? '😐' : '😟';
+    meter('滿意度', n.happiness, n.happiness >= 70 ? '#5fb565' : n.happiness >= 45 ? '#e3b23c' : '#e4572e', `${mood} ${Math.round(n.happiness)}`);
+    for (const k of SERVICE_KINDS) meter(FACILITIES[k].label, n.coverage[k] * 100, `#${FACILITIES[k].color.toString(16).padStart(6, '0')}`);
+    rows.push(el('h3', '', '居民心聲'));
+    if (!city.stats.population) rows.push(el('p', 'note', '還沒有居民。'));
+    else if (!n.wants.length) rows.push(el('p', 'note', '居民對公共服務很滿意！'));
+    for (const k of n.wants) rows.push(el('p', 'want', `「${FACILITIES[k].need}」 → 蓋${FACILITIES[k].label}`));
+    if (n.tourists) rows.push(el('p', 'note', `今日觀光客 ${n.tourists.toLocaleString()} 人`));
+    this.needsBody.replaceChildren(...rows);
   }
 
   updateHint(): void {
     this.hint.textContent = this.tools.hint();
   }
 
-  update(city: City): void {
+  /** `dayFraction`: how far through the current day the clock is, 0..1. */
+  update(city: City, dayFraction = 0): void {
     this.city = city;
     const b = city.budget;
-    const money = (v: number) => `${v < 0 ? '−' : ''}$${Math.abs(Math.round(v)).toLocaleString()}`;
+    const money = ntd;
     if (!this.budgetPanel.hidden) {
       this.budgetRows.res.textContent = money(b.residentialTax);
       this.budgetRows.biz.textContent = money(b.businessTax);
@@ -566,7 +700,9 @@ export class Hud {
       this.budgetRows.roads.textContent = money(-b.roadUpkeep);
       this.budgetRows.transit.textContent = money(-b.transitUpkeep);
       this.budgetRows.airUpkeep.textContent = money(-b.airUpkeep);
-      const net = b.residentialTax + b.businessTax + b.transitFares + b.airIncome - b.roadUpkeep - b.transitUpkeep - b.airUpkeep;
+      this.budgetRows.tourism.textContent = money(b.tourism);
+      this.budgetRows.services.textContent = money(-b.servicesUpkeep);
+      const net = b.residentialTax + b.businessTax + b.transitFares + b.airIncome + b.tourism - b.roadUpkeep - b.transitUpkeep - b.airUpkeep - b.servicesUpkeep;
       this.budgetRows.net.textContent = money(net);
       this.budgetRows.net.classList.toggle('neg', net < 0);
       for (const [input, label, v] of [
@@ -579,7 +715,7 @@ export class Hud {
       for (const f of this.fareInputs) {
         const v = f.get(city);
         if (document.activeElement !== f.input) f.input.value = String(v);
-        f.label.textContent = `$${v}`;
+        f.label.textContent = `NT$${v}`;
       }
     }
     this.updateEditor(city);
@@ -591,7 +727,10 @@ export class Hud {
     const shift = `calc(${below} + ${this.warning.hidden ? 0 : this.warning.offsetHeight + 8}px)`;
     this.warning.style.top = below;
     this.budgetPanel.style.top = shift;
-    this.editPanel.el.style.top = this.budgetPanel.hidden ? shift : `calc(${shift} + ${this.budgetPanel.offsetHeight + 8}px)`;
+    this.needsPanel.style.top = shift;
+    if (!this.needsPanel.hidden) this.renderNeeds(city);
+    const open = !this.budgetPanel.hidden ? this.budgetPanel : !this.needsPanel.hidden ? this.needsPanel : null;
+    this.editPanel.el.style.top = open ? `calc(${shift} + ${open.offsetHeight + 8}px)` : shift;
     this.toastEl.style.top = shift;
     // On phones the toast would sit on the editor's title: show it just below the editor
     if (window.innerWidth < 720 && !this.editPanel.el.hidden) {
@@ -605,14 +744,14 @@ export class Hud {
       if (r.height) floor = Math.min(floor, r.top);
     }
     floor -= 8;
-    for (const p of [this.budgetPanel, this.editPanel.el]) {
+    for (const p of [this.budgetPanel, this.needsPanel, this.editPanel.el]) {
       if (!p.hidden) p.style.maxHeight = `${Math.max(120, floor - p.getBoundingClientRect().top)}px`;
     }
     this.stats.pop.textContent = city.stats.population.toLocaleString();
     this.stats.jobs.textContent = city.stats.jobs.toLocaleString();
-    this.stats.money.textContent = `$${Math.floor(city.money).toLocaleString()}`;
+    this.stats.money.textContent = `${ntd(Math.floor(city.money))}`;
     this.stats.money.classList.toggle('neg', city.money < 0);
-    this.stats.day.textContent = `${city.day.toLocaleString()} 天`;
+    this.stats.day.textContent = gameDate(city.day + dayFraction);
     for (const k of ['R', 'C', 'O', 'I'] as const) this.bars[k].style.height = `${city.demand[k]}%`;
   }
 }

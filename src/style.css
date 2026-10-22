@@ -623,3 +623,156 @@ body.menu-open .angle-labels {
   color: #1d1a12;
   font-weight: 700;
 }
+
+/* Metroforge: logo, clock, update ticker, needs panel, release notes */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.brand img {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: #fff;
+  object-fit: contain;
+}
+.stat.clock span:empty {
+  display: none;
+}
+.stat.clock b {
+  font-size: 14px;
+  white-space: nowrap;
+}
+.menu-logo {
+  display: block;
+  width: 104px;
+  height: 104px;
+  margin: 0 auto 8px;
+  border-radius: 22px;
+  background: #fff;
+  object-fit: contain;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+.menu-title h1 {
+  letter-spacing: 0.08em;
+  text-indent: 0.08em;
+}
+.menu-title p {
+  font-size: 16px;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+}
+.ticker {
+  flex-basis: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(240, 180, 60, 0.16);
+  font-size: 13px;
+}
+.ticker[hidden] {
+  display: none;
+}
+.ticker .lane {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.ticker .lane span {
+  display: inline-block;
+  padding-left: 100%;
+  will-change: transform;
+}
+@keyframes ticker {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+.ticker .close {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.needs .meter {
+  display: grid;
+  grid-template-columns: 4.5em 1fr 4.2em;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 13px;
+}
+.needs .meter b {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.needs .track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--panel-line);
+  overflow: hidden;
+}
+.needs .track i {
+  display: block;
+  height: 100%;
+}
+.needs h3 {
+  margin: 12px 0 4px;
+  font-size: 14px;
+}
+.needs .want {
+  margin: 4px 0;
+  font-size: 13px;
+}
+.menu-news h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  margin: 0 0 6px;
+}
+.menu-news .badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px;
+}
+.menu-news details {
+  border-top: 1px solid var(--panel-line);
+  padding: 6px 0;
+}
+.menu-news summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.menu-news summary small {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.menu-news ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.menu-news li {
+  margin: 2px 0;
+}

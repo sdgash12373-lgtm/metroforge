@@ -1,4 +1,18 @@
 import { AIRPORT_COST, AIRPORT_UPKEEP, type Airport, Aviation, FLIGHT_UPKEEP, type RunwayCount } from './airport';
+import {
+  FACILITIES,
+  type Facility,
+  type FacilityKind,
+  SERVICE_KINDS,
+  type ServiceKind,
+  TOURIST_SPEND,
+  corners as facilityCorners,
+  covers,
+  footprintContains,
+  footprintGrid,
+  isLandmark,
+} from './facilities';
+import { ntd } from './format';
 import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, quadPoint, sampleQuad } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
 import { ELEVATED_HEIGHT, MAX_GRADE, ROAD_WIDTH, RoadNetwork, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
@@ -13,7 +27,7 @@ export const BULLDOZE_REFUND = 0.5;
 export const ROAD_UPKEEP = 0.004;
 export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
-const SAVE_VERSION = 5;
+const SAVE_VERSION = 6;
 /** Ring radius of a roundabout by its number of exits. */
 export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
 /** Length of the short roads a new roundabout puts out at each exit. */
@@ -47,6 +61,11 @@ export interface CityStats {
   riders: number;
 }
 
+/** Facility ends at most this far from a road's edge. */
+const FACILITY_ROAD_GAP = 4;
+/** Residential levels need this many services in reach: level 2 one service, level 3 two, ... */
+const SERVICES_PER_LEVEL = 1;
+
 export interface Budget {
   residentialTax: number;
   businessTax: number;
@@ -57,6 +76,22 @@ export interface Budget {
   transitUpkeep: number;
   airIncome: number;
   airUpkeep: number;
+  /** parks, schools, police, fire, hospitals and landmarks */
+  servicesUpkeep: number;
+  /** what visitors to the landmarks spend */
+  tourism: number;
+}
+
+/** How well the city looks after its residents. */
+export interface Needs {
+  /** 0..100 */
+  happiness: number;
+  /** share of residents each service reaches, 0..1 */
+  coverage: Record<ServiceKind, number>;
+  /** services most residents lack, worst first */
+  wants: ServiceKind[];
+  /** visitors to the landmarks yesterday */
+  tourists: number;
 }
 
 export interface TaxRates {
@@ -102,6 +137,8 @@ export interface SaveData extends NetSave {
   /** v5: the land the city stands on (older saves are flat) */
   terrain?: TerrainName;
   name?: string;
+  /** v6: parks, schools, police, fire, hospitals and landmarks (id, kind, x, y, angle) */
+  facilities?: [number, FacilityKind, number, number, number][];
 }
 
 const RAIL_COST_EXTRA = { elevated: 1, tunnel: 2 };
@@ -124,7 +161,24 @@ export class City {
   stats: CityStats = { population: 0, jobs: 0, buildings: 0, disconnected: 0, riders: 0 };
   taxes: TaxRates = { residential: DEFAULT_TAX, business: DEFAULT_TAX };
   /** last day's income and expenses */
-  budget: Budget = { residentialTax: 0, businessTax: 0, roadUpkeep: 0, transitFares: 0, transitUpkeep: 0, airIncome: 0, airUpkeep: 0 };
+  budget: Budget = {
+    residentialTax: 0,
+    businessTax: 0,
+    roadUpkeep: 0,
+    transitFares: 0,
+    transitUpkeep: 0,
+    airIncome: 0,
+    airUpkeep: 0,
+    servicesUpkeep: 0,
+    tourism: 0,
+  };
+  facilities = new Map<number, Facility>();
+  nextFacility = 1;
+  /** bumped when facilities are built or removed */
+  facilitiesVersion = 0;
+  needs: Needs = { happiness: 50, coverage: { park: 0, school: 0, police: 0, fire: 0, hospital: 0 }, wants: [], tourists: 0 };
+  /** services in reach of each home, from the last survey */
+  private served = new Map<Lot, number>();
   /** metro, train and high-speed rail, each on its own track */
   rails: Record<RailKind, RailSystem> = { metro: new RailSystem('metro'), train: new RailSystem('train'), hsr: new RailSystem('hsr') };
   aviation = new Aviation();
@@ -190,6 +244,7 @@ export class City {
   /** Water, hillside, track or an airfield on this spot, so nothing can be built on it. */
   occupied(p: Vec2): boolean {
     if (!buildable(this.terrain, p)) return true;
+    for (const f of this.facilities.values()) if (footprintContains(f, p, 2)) return true;
     for (const a of this.aviation.airports.values()) if (Aviation.contains(a, p, 2)) return true;
     const clear = ROAD_WIDTH / 2 + CELL * 0.45;
     for (const r of RAIL_KINDS) {
@@ -284,7 +339,7 @@ export class City {
     const steep = this.buildProblem(start, control, end, height);
     if (steep) return { ok: false, cost, reason: steep };
     if (this.crossesAirport(start.p, control, end.p, ha, hb)) return { ok: false, cost, reason: '不能穿過機場（可以從地下穿過）' };
-    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
+    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     const created = this.net.addRoad(start, control, end, height);
     if (!created.length) return { ok: false, cost, reason: '這裡已經有道路了' };
     this.money -= cost;
@@ -316,7 +371,7 @@ export class City {
     const steep = this.buildProblem(start, control, end, height, sys.net);
     if (steep) return { ok: false, cost, reason: steep };
     if (this.crossesAirport(start.p, control, end.p, ha, hb)) return { ok: false, cost, reason: '不能穿過機場（可以從地下穿過）' };
-    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
+    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     const created = sys.net.addRoad(start, control, end, height);
     if (!created.length) return { ok: false, cost, reason: '這裡已經有軌道了' };
     this.money -= cost;
@@ -344,11 +399,101 @@ export class City {
         return { ok: false, cost, reason: '離另一座機場太近' };
       }
     }
-    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
+    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     this.money -= cost;
     const airport = this.aviation.addAirport(p, angle, runways);
     this.landChanged();
     return { ok: true, cost, airport };
+  }
+
+  /**
+   * Where a facility tapped at p would go: set back from the nearest street, facing it.
+   * Without a street close by it stays at p, turned by `angle`.
+   */
+  facilitySpot(kind: FacilityKind, p: Vec2, angle = 0): { p: Vec2; angle: number; road: boolean } {
+    const { d } = FACILITIES[kind];
+    const hit = this.net.segmentAt(p, d + ROAD_WIDTH, 0);
+    if (!hit || !this.net.isStreet(hit.seg)) return { p, angle, road: false };
+    const s = hit.seg.samples;
+    const i = Math.max(1, s.findIndex((q) => q.t >= hit.t));
+    const a = s[i - 1];
+    const b = s[i] ?? s[s.length - 1];
+    const tx = b.x - a.x;
+    const ty = b.y - a.y;
+    const len = Math.hypot(tx, ty) || 1;
+    const on = quadPoint(this.net.quad(hit.seg), hit.t);
+    // Normal pointing to the side of the road that was tapped
+    let nx = -ty / len;
+    let ny = tx / len;
+    if ((p.x - on.x) * nx + (p.y - on.y) * ny < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    const back = ROAD_WIDTH / 2 + FACILITY_ROAD_GAP / 2 + d / 2;
+    // The footprint's depth axis points away from the road
+    return { p: { x: on.x + nx * back, y: on.y + ny * back }, angle: Math.atan2(ny, nx) - Math.PI / 2, road: true };
+  }
+
+  /** Why a facility can't go here, or null. */
+  facilityProblem(kind: FacilityKind, p: Vec2, angle: number): string | null {
+    const spec = FACILITIES[kind];
+    const plan = { kind, p, angle };
+    if (isLandmark(kind) && [...this.facilities.values()].some((f) => f.kind === kind)) return `城市裡已經有${spec.label}了`;
+    if (footprintGrid(plan).some((q) => !buildable(this.terrain, q))) return `${spec.label}要蓋在平坦的陸地上`;
+    const inside = (q: Vec2) => footprintContains(plan, q, 1);
+    const hits = (net: RoadNetwork) => [...net.segments.values()].some((seg) => seg.samples.some((q) => inside(q) && net.heightAt(seg, q.t) >= 0));
+    if (hits(this.net) || RAIL_KINDS.some((k) => hits(this.rails[k].net))) return '這裡有道路或軌道，請換個空地';
+    if (facilityCorners(plan).some((q) => this.aviation.airportAt(q)) || footprintGrid(plan, 3).some((q) => this.aviation.airportAt(q))) return '這裡是機場';
+    for (const f of this.facilities.values()) {
+      if (facilityCorners(plan).some((q) => footprintContains(f, q)) || facilityCorners(f).some((q) => inside(q)) || footprintContains(f, p)) {
+        return `這裡已經有${FACILITIES[f.kind].label}`;
+      }
+    }
+    const reach = Math.max(spec.w, spec.d) / 2 + ROAD_WIDTH / 2 + FACILITY_ROAD_GAP + 2;
+    if (!this.net.segmentAt(p, reach, 0)) return `${spec.label}要蓋在道路旁邊`;
+    if (spec.cost > this.money) return `資金不足，需要 ${ntd(spec.cost)}`;
+    return null;
+  }
+
+  buildFacility(kind: FacilityKind, p: Vec2, angle: number, free = false): { ok: boolean; cost: number; reason?: string; facility?: Facility } {
+    const cost = free ? 0 : FACILITIES[kind].cost;
+    const problem = this.facilityProblem(kind, p, angle);
+    if (problem && !(free && problem.startsWith('資金不足'))) return { ok: false, cost, reason: problem };
+    this.money -= cost;
+    const facility = this.addFacility(kind, p, angle);
+    return { ok: true, cost, facility };
+  }
+
+  private addFacility(kind: FacilityKind, p: Vec2, angle: number, id?: number): Facility {
+    const f: Facility = { id: id ?? this.nextFacility++, kind, p: { x: p.x, y: p.y }, angle };
+    this.nextFacility = Math.max(this.nextFacility, f.id + 1);
+    this.facilities.set(f.id, f);
+    this.facilitiesVersion++;
+    this.landChanged();
+    return f;
+  }
+
+  removeFacility(id: number): void {
+    if (!this.facilities.delete(id)) return;
+    this.facilitiesVersion++;
+    this.landChanged();
+  }
+
+  facilityAt(p: Vec2, pad = 0): Facility | null {
+    for (const f of this.facilities.values()) if (footprintContains(f, p, pad)) return f;
+    return null;
+  }
+
+  /** Services within reach of a point, and how much landmarks around it add (0..1). */
+  servicesAt(p: Vec2): { kinds: Set<ServiceKind>; landmark: number } {
+    const kinds = new Set<ServiceKind>();
+    let landmark = 0;
+    for (const f of this.facilities.values()) {
+      if (!covers(f, p)) continue;
+      if (isLandmark(f.kind)) landmark += 0.5;
+      else kinds.add(f.kind);
+    }
+    return { kinds, landmark: Math.min(1, landmark) };
   }
 
   /**
@@ -363,6 +508,13 @@ export class City {
         const hit = this.rails[k].net.segmentAt(p, radius, level);
         if (hit) return this.bulldozeTrack(k, hit.seg);
       }
+    }
+    const facility = this.facilityAt(p);
+    if (facility) {
+      const refund = Math.round(FACILITIES[facility.kind].cost * BULLDOZE_REFUND);
+      this.removeFacility(facility.id);
+      this.money += refund;
+      return { ok: true, refund, what: FACILITIES[facility.kind].label };
     }
     const airport = this.aviation.airportAt(p);
     if (airport) {
@@ -414,7 +566,7 @@ export class City {
   buildRoundabout(center: Vec2, size: RoundaboutSize): { ok: boolean; cost: number; reason?: string } {
     const r = ROUNDABOUT_RADIUS[size];
     const cost = this.roundaboutCost(size);
-    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
+    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     for (let i = 0; i < 24; i++) {
       const a = (i / 24) * Math.PI * 2;
       if (!buildable(this.terrain, { x: center.x + Math.cos(a) * (r + 10), y: center.y + Math.sin(a) * (r + 10) })) {
@@ -548,7 +700,7 @@ export class City {
   createLine(transit: Transit, stops: number[]): { ok: boolean; cost: number; reason?: string } {
     const cost = stops.length * transit.mode.stopCost;
     if (stops.length < 2) return { ok: false, cost, reason: '路線至少要兩個站' };
-    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
+    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     const plan = transit.plan(stops, true);
     if (!plan.ok) return { ok: false, cost, reason: transit.mode.streetsOnly ? '有些站之間沒有道路相連' : '有些車站之間沒有軌道相連' };
     this.money -= cost;
@@ -573,6 +725,9 @@ export class City {
     let disconnected = 0;
     const jobs: Record<DemandKey, number> = { R: 0, C: 0, O: 0, I: 0 };
     const zoned: Placed[] = [];
+    const reach: Record<ServiceKind, number> = { park: 0, school: 0, police: 0, fire: 0, hospital: 0 };
+    let satisfied = 0;
+    this.served.clear();
     for (const seg of this.net.segments.values()) {
       const linked = this.isConnected(seg);
       for (const lot of seg.lots) {
@@ -582,23 +737,57 @@ export class City {
         if (!lot.level) continue;
         buildings++;
         const info = ZONES[lot.zone];
-        if (info.demand === 'R') pop += lot.level * info.perLevel;
-        else jobs[info.demand] += lot.level * info.perLevel;
+        if (info.demand === 'R') {
+          const people = lot.level * info.perLevel;
+          pop += people;
+          const s = this.facilities.size ? this.servicesAt(lot) : { kinds: new Set<ServiceKind>(), landmark: 0 };
+          for (const k of s.kinds) reach[k] += people;
+          this.served.set(lot, s.kinds.size + s.landmark);
+          satisfied += people * Math.min(1, (s.kinds.size + s.landmark) / SERVICE_KINDS.length);
+        } else jobs[info.demand] += lot.level * info.perLevel;
       }
     }
     const totalJobs = jobs.C + jobs.O + jobs.I;
+    const coverage = { park: 0, school: 0, police: 0, fire: 0, hospital: 0 };
+    for (const k of SERVICE_KINDS) coverage[k] = pop ? reach[k] / pop : 0;
+    const hall = [...this.facilities.values()].some((f) => f.kind === 'cityHall') ? 8 : 0;
+    const happiness = pop ? clamp(Math.round(30 + 65 * (satisfied / pop) + hall), 0, 100) : 50;
+    const wants = SERVICE_KINDS.filter((k) => coverage[k] < 0.6).sort((a, b) => coverage[a] - coverage[b]);
+    this.needs = { happiness, coverage, wants, tourists: this.needs.tourists };
+    // Happy residents bring more; landmarks' visitors bring shops and offices
+    const mood = pop > 60 ? (happiness - 45) * 0.3 : 0;
+    const visitors = Math.min(15, this.needs.tourists / 60);
     const d = (v: number) => clamp(Math.round(v), 0, 100);
     // Every tax point above the default costs demand
     const rTax = (this.taxes.residential - DEFAULT_TAX) * 3;
     const bTax = (this.taxes.business - DEFAULT_TAX) * 3;
     this.demand = {
-      R: d(45 + (totalJobs * 1.1 - pop) * 0.3 - rTax),
-      C: d(35 + (pop * 0.25 - jobs.C) * 0.5 - bTax),
-      O: d(20 + (pop * 0.2 - jobs.O) * 0.4 - bTax),
+      R: d(45 + (totalJobs * 1.1 - pop) * 0.3 - rTax + mood),
+      C: d(35 + (pop * 0.25 - jobs.C) * 0.5 - bTax + visitors),
+      O: d(20 + (pop * 0.2 - jobs.O) * 0.4 - bTax + visitors * 0.5),
       I: d(40 + (pop * 0.3 - jobs.I) * 0.4 - bTax),
     };
     this.stats = { population: pop, jobs: totalJobs, buildings, disconnected, riders: this.stats.riders };
     return zoned;
+  }
+
+  /**
+   * Highest level a building can reach. Homes need services in reach to grow tall: one more for
+   * each level, and a school for the top levels of high-density housing.
+   */
+  levelCap(lot: Lot): number {
+    const info = ZONES[lot.zone as Exclude<Zone, Zone.None>];
+    if (info.demand !== 'R') return info.maxLevel;
+    const served = this.served.get(lot) ?? 0;
+    let cap = Math.min(info.maxLevel, 1 + Math.floor(served / SERVICES_PER_LEVEL));
+    if (lot.zone === Zone.ResidentialHigh && cap > 2 && !this.servicesAt(lot).kinds.has('school')) cap = 2;
+    return cap;
+  }
+
+  /** Homes with parks and services nearby grow faster. */
+  private growthBoost(lot: Lot): number {
+    if (ZONES[lot.zone as Exclude<Zone, Zone.None>].demand !== 'R') return 1;
+    return 0.5 + 0.5 * Math.min(1, (this.served.get(lot) ?? 0) / 3);
   }
 
   /** How jammed a segment is in its busier direction, 0..1. */
@@ -626,7 +815,7 @@ export class City {
           lot.level = 1;
           changed = true;
         }
-      } else if (lot.level < info.maxLevel && rng() < 0.03 * (0.3 + want) * (1 - 0.7 * this.congestion(seg))) {
+      } else if (lot.level < this.levelCap(lot) && rng() < 0.03 * (0.3 + want) * (1 - 0.7 * this.congestion(seg)) * this.growthBoost(lot)) {
         lot.level++;
         changed = true;
       }
@@ -656,6 +845,14 @@ export class City {
     }
     for (const k of RAIL_KINDS) upkeep += this.rails[k].trackLength() * TRACK_UPKEEP;
     const air = this.aviation;
+    let services = 0;
+    let tourists = 0;
+    for (const f of this.facilities.values()) {
+      const spec = FACILITIES[f.kind];
+      services += spec.upkeep;
+      if (spec.tourists) tourists += spec.tourists * (40 + this.stats.population / 100);
+    }
+    this.needs.tourists = Math.round(tourists);
     this.budget = {
       residentialTax: this.stats.population * this.taxes.residential * 0.005,
       businessTax: this.stats.jobs * this.taxes.business * 0.004,
@@ -665,9 +862,12 @@ export class City {
       transitUpkeep: upkeep,
       airIncome: this.budget.airIncome * 0.97 + air.incomeToday * 0.03,
       airUpkeep: air.airports.size * AIRPORT_UPKEEP + air.flights.size * FLIGHT_UPKEEP,
+      servicesUpkeep: services,
+      tourism: tourists * TOURIST_SPEND,
     };
     const b = this.budget;
-    this.money += b.residentialTax + b.businessTax + fares + air.incomeToday - b.roadUpkeep - b.transitUpkeep - b.airUpkeep;
+    this.money +=
+      b.residentialTax + b.businessTax + fares + air.incomeToday + b.tourism - b.roadUpkeep - b.transitUpkeep - b.airUpkeep - b.servicesUpkeep;
     this.stats.riders = riders;
     air.incomeToday = 0;
     air.passengersToday = 0;
@@ -764,6 +964,7 @@ export class City {
       districts: [...this.districts.values()].map((d) => [d.id, round2(d.p.x), round2(d.p.y), Math.round(d.r), d.name, d.color]),
       terrain: this.terrain.name,
       name: this.name,
+      facilities: [...this.facilities.values()].map((f) => [f.id, f.kind, round2(f.p.x), round2(f.p.y), round2(f.angle * 1000) / 1000]),
     };
   }
 
@@ -793,6 +994,7 @@ export class City {
       if (seg) seg.name = name;
     }
     for (const [id, x, y, r, name, color] of data.districts ?? []) city.addDistrict({ x, y }, r, { id, name, color });
+    for (const [id, kind, x, y, angle] of data.facilities ?? []) if (FACILITIES[kind]) city.addFacility(kind, { x, y }, angle, id);
     city.roadsChanged();
     city.measure();
     return city;

@@ -10,6 +10,7 @@ import { CameraRig } from './cameraRig';
 import type { PathPiece } from '../sim/transit';
 import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay } from './roadMesh';
 import { StopLayer } from './transit';
+import { buildFacilityGeometry } from './facilities';
 import { SignalLayer } from './signals';
 import { HILL_TREES, LOWLAND_TREES, MAP_SIZE, type TreeSpot, buildGroundGeometry, treeSpots } from './terrainMesh';
 import { FLAT, type Terrain, WATER_LEVEL } from '../sim/terrain';
@@ -76,6 +77,10 @@ export class World {
   /** outline of an airport about to be placed */
   private readonly footprint: THREE.Mesh;
   private readonly districtRings = new THREE.Group();
+  /** service areas while placing a facility */
+  private readonly coverage = new THREE.Group();
+  private readonly facilities: THREE.Mesh;
+  private facilitiesVersion = -1;
   /** street and district names over the map */
   private readonly nameLayer: HTMLElement;
   private names: { at: THREE.Vector3; dir: THREE.Vector3 | null; el: HTMLElement; street: boolean }[] = [];
@@ -183,6 +188,10 @@ export class World {
     this.airports.castShadow = false;
     this.planes = new PlaneLayer(shadows);
     this.signals = new SignalLayer(shadows);
+    this.facilities = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
+    this.facilities.castShadow = shadows;
+    this.facilities.receiveShadow = true;
+    this.scene.add(this.facilities);
     this.scene.add(this.airports, this.planes.group, this.signals.group);
 
     this.preview = new THREE.Mesh(new THREE.BufferGeometry(), this.materials.preview);
@@ -218,7 +227,7 @@ export class World {
     this.nameLayer = document.createElement('div');
     this.nameLayer.className = 'angle-labels map-names';
     container.after(this.nameLayer, this.angleLabels);
-    this.scene.add(this.districtRings);
+    this.scene.add(this.districtRings, this.coverage);
   }
 
   private makeTrees(shadows: boolean) {
@@ -278,6 +287,7 @@ export class World {
     this.lotsVersion = -1;
     this.transitVersion = -1;
     this.aviationVersion = -1;
+    this.facilitiesVersion = -1;
     this.labelsVersion = -1;
     for (const k of RAIL_KINDS) {
       this.rails[k].version = -1;
@@ -319,6 +329,7 @@ export class World {
     if (this.decluttered === on) return;
     this.decluttered = on;
     this.buildings.group.visible = !on;
+    this.facilities.visible = !on;
     this.trees.trunks.visible = !on;
     this.trees.crowns.visible = !on;
     this.vehicles.group.visible = !on;
@@ -376,6 +387,30 @@ export class World {
       ring.renderOrder = 3;
       this.districtRings.add(ring);
     }
+  }
+
+  /** Areas served by facilities, as tinted discs with a ring at the edge. */
+  setCoverage(list: { p: Vec2; r: number; color: number }[]): void {
+    for (const c of [...this.coverage.children]) {
+      (c as THREE.Mesh).geometry.dispose();
+      this.coverage.remove(c);
+    }
+    for (const a of list) {
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(a.r, 64).rotateX(-Math.PI / 2), this.discMaterial(a.color));
+      disc.position.set(a.p.x, 0.35, a.p.y);
+      disc.renderOrder = 2;
+      const ring = new THREE.Mesh(new THREE.RingGeometry(a.r * 0.99, a.r, 96).rotateX(-Math.PI / 2), this.ringMaterial(a.color));
+      ring.position.set(a.p.x, 0.4, a.p.y);
+      ring.renderOrder = 3;
+      this.coverage.add(disc, ring);
+    }
+  }
+
+  private discMaterials = new Map<number, THREE.MeshBasicMaterial>();
+  private discMaterial(color: number): THREE.MeshBasicMaterial {
+    let m = this.discMaterials.get(color);
+    if (!m) this.discMaterials.set(color, (m = new THREE.MeshBasicMaterial({ color, depthWrite: false, transparent: true, opacity: 0.16 })));
+    return m;
   }
 
   private ringMaterials = new Map<number, THREE.MeshBasicMaterial>();
@@ -569,6 +604,11 @@ export class World {
       this.aviationVersion = city.aviation.version;
       this.airports.geometry.dispose();
       this.airports.geometry = buildAirportGeometry(city.aviation.airports.values());
+    }
+    if (city.facilitiesVersion !== this.facilitiesVersion) {
+      this.facilitiesVersion = city.facilitiesVersion;
+      this.facilities.geometry.dispose();
+      this.facilities.geometry = buildFacilityGeometry(city.facilities.values());
     }
     if (city.lotsVersion !== this.lotsVersion) {
       const zoningChanged = this.lotsVersion !== -1;

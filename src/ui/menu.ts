@@ -1,4 +1,8 @@
 import type { City } from '../sim/city';
+import logoUrl from '../assets/logo.png';
+import { CHANGELOG } from '../changelog';
+import { seenLatest } from './updates';
+import { gameDate, ntd } from '../sim/format';
 import type { TerrainName } from '../sim/terrain';
 import { AUTO_SLOT, type SaveSlots, type SlotInfo, slotLabel } from '../storage/saves';
 
@@ -49,7 +53,6 @@ function button(label: string, cls: string, run: () => void): HTMLButtonElement 
   return b;
 }
 
-const money = (v: number) => `${v < 0 ? '−' : ''}$${Math.abs(v).toLocaleString()}`;
 
 function when(t: number): string {
   const d = new Date(t);
@@ -137,7 +140,10 @@ export class Menu {
   private async home(): Promise<HTMLElement[]> {
     const latest = await this.slots.latest();
     const title = el('div', 'menu-title');
-    title.append(el('h1', '', '天際線'), el('p', '', 'Skyline City · 城市建造'));
+    const logo = el('img', 'menu-logo');
+    logo.src = logoUrl;
+    logo.alt = 'Metroforge 商標';
+    title.append(logo, el('h1', '', 'Metroforge'), el('p', '', '都市創造'));
     const list = el('div', 'menu-buttons');
     if (latest) {
       const cont = button('', 'menu-btn primary', () => void this.loadSlot(latest.id));
@@ -149,7 +155,26 @@ export class Menu {
       button('讀取存檔', 'menu-btn', () => this.show('load')),
       button('設定', 'menu-btn', () => this.show('settings')),
     );
-    return [title, list];
+    return [title, list, this.news()];
+  }
+
+  /** 更新內容: the latest release open, older ones folded away. */
+  private news(): HTMLElement {
+    const box = el('section', 'menu-news');
+    const head = el('h2', '', '更新內容');
+    if (!seenLatest()) head.append(el('span', 'badge', '新'));
+    box.append(head);
+    CHANGELOG.slice(0, 3).forEach((r, i) => {
+      const d = el('details');
+      d.open = i === 0;
+      const sum = el('summary');
+      sum.append(el('b', '', `v${r.version} ${r.title}`), el('small', '', r.date));
+      const ul = el('ul');
+      for (const n of r.notes) ul.append(el('li', '', n));
+      d.append(sum, ul);
+      box.append(d);
+    });
+    return box;
   }
 
   private pause(): HTMLElement[] {
@@ -242,7 +267,7 @@ export class Menu {
     if (info) {
       text.append(
         el('b', '', info.name),
-        el('span', '', `人口 ${info.population.toLocaleString()} · ${money(info.money)} · 第 ${info.day} 天`),
+        el('span', '', `人口 ${info.population.toLocaleString()} · ${ntd(info.money)} · ${gameDate(info.day, false)}`),
         el('span', '', when(info.savedAt)),
       );
     } else text.append(el('b', 'muted', '空的欄位'));
@@ -312,7 +337,7 @@ export class Menu {
         this.actions.toast(`已匯入「${info.name}」到${slotLabel(slot)}`);
       } catch (err) {
         console.warn('Could not import', err);
-        this.actions.toast('這不是天際線的存檔檔案');
+        this.actions.toast('這不是 Metroforge 的存檔檔案');
       }
       await this.render();
     };

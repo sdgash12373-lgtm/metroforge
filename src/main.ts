@@ -5,6 +5,7 @@ import { AUTO_SLOT, SaveSlots, openStore } from './storage/saves';
 import { Menu, type Settings } from './ui/menu';
 import { World } from './render/world';
 import { Hud, SPEEDS } from './ui/hud';
+import { latestTicker, markSeen, seenLatest, watchForNewVersion } from './ui/updates';
 import { attachInput } from './ui/input';
 import { ToolController } from './ui/tools';
 
@@ -123,6 +124,8 @@ const menu: Menu = new Menu(document.getElementById('ui')!, slots, {
     hud!.speed = 1;
     hud!.render();
     saveAcc = 0;
+    // Tell the player what this version brought, once, after the menu has closed
+    if (!seenLatest()) setTimeout(() => hud!.ticker(latestTicker(), { loops: 2, done: markSeen }), 400);
   },
   newCity: (name, terrain) => newCity(name, terrain),
   saveTo: async (slot) => {
@@ -166,6 +169,11 @@ function showcase(): void {
 }
 showcase();
 menu.show('home');
+watchForNewVersion((version, title) =>
+  hud!.ticker(`有新版本 v${version}${title ? `「${title}」` : ''}已發布，重新整理頁面即可更新`, {
+    action: { label: '重新整理', run: () => location.reload() },
+  }),
+);
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && menu.open && menu.inGame) menu.close();
 });
@@ -205,7 +213,7 @@ function frame(now: number): void {
   }
   world.sync(city);
   world.animate(city, dt);
-  hud!.update(city);
+  hud!.update(city, acc / TICK_SECONDS);
   hud!.updateHint();
   world.render();
   requestAnimationFrame(frame);
