@@ -53,6 +53,8 @@ export class ToolController {
   private draftPath: PathPiece[] = [];
   /** line picked in the dock, to rename, recolour or delete it */
   selectedLine: number | null = null;
+  /** taps pick a line on the map, and a second tap on it removes it */
+  removingLines = false;
   railAction: RailAction = 'track';
   /** track tools draw curves instead of straight track */
   trackCurve = false;
@@ -85,6 +87,7 @@ export class ToolController {
     this.tool = tool;
     this.cancel();
     this.selectedLine = null;
+    this.removingLines = false;
     this.selectedFlight = null;
     this.selectedStreet = null;
     this.selectedDistrict = null;
@@ -116,6 +119,7 @@ export class ToolController {
     this.cancel();
     this.railAction = action;
     this.selectedLine = null;
+    this.removingLines = false;
     this.updatePickHeight();
     this.updateUnderground();
     this.events.changed();
@@ -311,6 +315,39 @@ export class ToolController {
     this.refresh();
   }
 
+  setRemovingLines(on: boolean): void {
+    this.cancel();
+    this.removingLines = on;
+    this.selectedLine = null;
+    this.events.changed();
+  }
+
+  removeSelectedLine(): void {
+    const t = this.transit;
+    const line = this.selectedLine !== null ? t?.lines.get(this.selectedLine) : undefined;
+    if (!t || !line) return;
+    t.removeLine(line.id);
+    this.selectedLine = null;
+    this.events.toast(`${line.name}已拆除`);
+    this.events.changed();
+    this.refresh();
+  }
+
+  /** In removal mode: the first tap on a line picks it, a second tap on the same line removes it. */
+  private tapRemoveLine(p: Vec2): void {
+    const t = this.transit!;
+    const line = t.lineAt(p, Math.max(12, this.world.rig.snapRadius));
+    if (!line) {
+      this.selectedLine = null;
+      this.events.toast('點地圖上的路線或車站');
+    } else if (this.selectedLine === line.id) {
+      this.removeSelectedLine();
+      return;
+    } else this.selectedLine = line.id;
+    this.events.changed();
+    this.refresh();
+  }
+
   selectLine(id: number | null): void {
     this.selectedLine = id;
     this.events.changed();
@@ -422,6 +459,10 @@ export class ToolController {
     if (n === 1) return `已設 1 站（每站 $${t.mode.stopCost.toLocaleString()}）；沿著路線點下一站`;
     if (n > 1) return t.mode.reverses ? `已設 ${n} 站；點「完成路線」開通，列車在兩端折返` : `已設 ${n} 站；點第一站或「完成路線」讓公車繞回起點`;
     const picked = this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
+    if (this.removingLines) {
+      if (picked) return `${picked.name}：再點一次路線或按「確定拆除」（沒有其他路線使用的車站會一起移除）`;
+      return t.lines.size ? `拆除路線：點地圖上的${label}路線或車站選取` : `沒有${label}路線可以拆除`;
+    }
     if (picked) return `${picked.name}：${label} ${t.buses(picked.id).length} 列 · 載客 ${picked.riders.toLocaleString()} 人`;
     if (!t.lines.size) {
       if (t.mode.streetsOnly) return '公車：點地面道路設第一個站，依序點下一站，最後點回第一站完成路線';
@@ -547,6 +588,10 @@ export class ToolController {
   }
 
   private tapLine(p: Vec2): void {
+    if (this.removingLines) {
+      this.tapRemoveLine(p);
+      return;
+    }
     const transit = this.transit!;
     const r = this.world.rig.snapRadius;
     const first = this.lineDraft[0];
