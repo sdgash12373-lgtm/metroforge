@@ -94,8 +94,8 @@ describe('format', () => {
   });
 });
 
-describe('upkeep of public buildings', () => {
-  it('is billed in one go every two weeks, the listed amount each time', async () => {
+describe('upkeep of roads and public buildings', () => {
+  it('is billed with the roads in one go every two weeks, an hour\'s worth each time', async () => {
     const { DAY_STEPS, HOUR_STEPS, UPKEEP_DAYS } = await import('../src/sim/city');
     const city = street();
     const spot = city.facilitySpot('hospital', { x: 0, y: 40 });
@@ -105,7 +105,9 @@ describe('upkeep of public buildings', () => {
     while (city.steps % period !== 0) city.tick(rng());
     const before = city.money;
     city.tick(rng());
-    expect(city.lastUpkeepBill).toBe(FACILITIES.hospital.upkeep * HOUR_STEPS);
+    const { ROAD_UPKEEP } = await import('../src/sim/city');
+    const roads = [...city.net.segments.values()].reduce((sum, s) => sum + s.length, 0);
+    expect(city.lastUpkeepBill).toBeCloseTo(FACILITIES.hospital.upkeep * HOUR_STEPS + roads * ROAD_UPKEEP * HOUR_STEPS, 3);
     expect(city.money).toBeLessThan(before - city.lastUpkeepBill * 0.5);
   });
 });

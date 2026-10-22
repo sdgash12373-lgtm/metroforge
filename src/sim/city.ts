@@ -24,7 +24,7 @@ import { Transit } from './transit';
 import { CELL, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
-/** Public buildings' upkeep is billed once every this many days (the amount each bill is its listed upkeep). */
+/** Upkeep of roads, transit and public buildings is billed once every this many days (each bill is one hour's worth). */
 export const UPKEEP_DAYS = 14;
 /** Highest office level once a 直轄市 opens skyscrapers (otherwise 5). */
 export const OFFICE_TOWER_LEVEL = 7;
@@ -247,7 +247,7 @@ export class City {
   maxVehicles = 400;
   /** bumped whenever roads change, so the renderer knows to rebuild meshes */
   roadsVersion = 0;
-  /** what the last two-weekly upkeep bill for public buildings came to */
+  /** what the last two-weekly upkeep bill (roads, transit, public buildings) came to */
   lastUpkeepBill = 0;
   /** bumped whenever zoning or buildings change */
   lotsVersion = 0;
@@ -1061,10 +1061,11 @@ export class City {
       admin: (pop * rank.admin) / MONTH_STEPS,
       residentialTax: this.stats.population * this.taxes.residential * 0.0025,
       businessTax: this.stats.jobs * this.taxes.business * 0.002,
-      roadUpkeep: roadLength * ROAD_UPKEEP,
-      transitUpkeep: upkeep,
+      // Roads, transit and public buildings: an hour's upkeep billed once every two weeks,
+      // spread over the two weeks for the monthly budget
+      roadUpkeep: (roadLength * ROAD_UPKEEP * HOUR_STEPS) / (UPKEEP_DAYS * DAY_STEPS),
+      transitUpkeep: (upkeep * HOUR_STEPS) / (UPKEEP_DAYS * DAY_STEPS),
       airUpkeep: air.airports.size * AIRPORT_UPKEEP + air.flights.size * FLIGHT_UPKEEP,
-      // Spread over the two weeks for the monthly budget; the money goes out in one bill
       servicesUpkeep: bill / (UPKEEP_DAYS * DAY_STEPS),
       tourism: tourists * TOURIST_SPEND,
     };
@@ -1089,10 +1090,11 @@ export class City {
     this.spentThisStep = 0;
     this.money +=
       step.residentialTax + step.businessTax + step.subsidy + fares + air.incomeToday + step.tourism -
-      step.roadUpkeep - step.transitUpkeep - step.airUpkeep - step.admin;
+      step.airUpkeep - step.admin;
     if (this.steps % (UPKEEP_DAYS * DAY_STEPS) === 0) {
-      this.money -= bill;
-      this.lastUpkeepBill = bill;
+      const due = (roadLength * ROAD_UPKEEP + upkeep) * HOUR_STEPS + bill;
+      this.money -= due;
+      this.lastUpkeepBill = due;
     }
     this.stats.riders = riders;
     air.incomeToday = 0;
