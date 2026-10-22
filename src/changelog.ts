@@ -8,6 +8,12 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '2.0.3',
+    date: '2026-10-22',
+    title: '公共建設維護費改兩週繳一次',
+    notes: ['公共建設、綠化與地標的維護費金額不變，但從每小時扣一次改成每兩週扣一次', '預算面板的「公共服務」顯示換算後的每月金額'],
+  },
+  {
     version: '2.0.2',
     date: '2026-10-22',
     title: '分區不再互相蓋掉',
