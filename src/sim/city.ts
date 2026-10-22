@@ -863,8 +863,8 @@ export class City {
     return { ok: true, cost };
   }
 
-  paint(center: Vec2, radius: number, zone: Zone): number {
-    const n = paintZone(this.net, center, radius, zone);
+  paint(center: Vec2, radius: number, zone: Zone, overwrite = false): number {
+    const n = paintZone(this.net, center, radius, zone, overwrite);
     if (n) this.lotsVersion++;
     return n;
   }

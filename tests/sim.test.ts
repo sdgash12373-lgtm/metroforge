@@ -194,3 +194,21 @@ describe('alignment guides', () => {
     expect(alignToGuides(city.net, p, 5)).toEqual({ p, lines: [] });
   });
 });
+
+describe('zoning brush', () => {
+  it('only fills empty cells unless 更正 is on; clearing always works', () => {
+    const city = new City();
+    city.buildRoad({ kind: 'free', p: { x: -100, y: 0 } }, null, { kind: 'free', p: { x: 100, y: 0 } }, true);
+    city.paint({ x: 0, y: 20 }, 30, Zone.ResidentialLow);
+    const lots = () => [...city.net.segments.values()].flatMap((s) => s.lots).filter((l) => !l.blocked);
+    const before = lots().filter((l) => l.zone === Zone.ResidentialLow).length;
+    expect(before).toBeGreaterThan(0);
+    city.paint({ x: 0, y: 20 }, 60, Zone.Commercial);
+    expect(lots().filter((l) => l.zone === Zone.ResidentialLow).length).toBe(before);
+    expect(lots().some((l) => l.zone === Zone.Commercial)).toBe(true);
+    city.paint({ x: 0, y: 20 }, 30, Zone.Commercial, true);
+    expect(lots().filter((l) => l.zone === Zone.ResidentialLow).length).toBe(0);
+    city.paint({ x: 0, y: 20 }, 200, Zone.None);
+    expect(lots().every((l) => l.zone === Zone.None)).toBe(true);
+  });
+});

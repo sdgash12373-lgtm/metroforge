@@ -78,6 +78,8 @@ export interface ToolEvents {
 export class ToolController {
   tool: Tool = 'road';
   zone: Zone = Zone.ResidentialLow;
+  /** 更正: painting replaces zones already there instead of only filling empty cells */
+  overwriteZones = false;
   /** road being drawn: start point, then (curve tool) the bend control point */
   draft: { start: Snap | null; control: Vec2 | null } = { start: null, control: null };
   hover: Vec2 | null = null;
@@ -315,6 +317,12 @@ export class ToolController {
     this.world.setDeclutter(this.tool === 'metro');
   }
 
+  setOverwriteZones(on: boolean): void {
+    this.overwriteZones = on;
+    this.events.changed();
+    this.refresh();
+  }
+
   setZone(zone: Zone): void {
     this.zone = zone;
     this.events.changed();
@@ -455,7 +463,10 @@ export class ToolController {
       case 'curve':
         return this.drawHint('道路', '拉路');
       case 'zone':
-        return this.zone === Zone.None ? '在格子上塗抹以清除分區' : `塗抹道路旁的格子設為「${ZONES[this.zone].name}」；雙指移動地圖`;
+        if (this.zone === Zone.None) return '在格子上塗抹以清除分區';
+        return this.overwriteZones
+          ? `更正中：塗到的格子都改成「${ZONES[this.zone].name}」，包括已經有分區的；雙指移動地圖`
+          : `塗抹空的格子設為「${ZONES[this.zone].name}」，已有的分區不會被蓋掉（要改請按「更正」）；雙指移動地圖`;
       case 'upgradeRoad':
         return this.upgradeHint();
       case 'roundabout': {
@@ -655,7 +666,7 @@ export class ToolController {
 
   onPaint(p: Vec2): void {
     this.hover = p;
-    this.city.paint(p, this.brushRadius, this.zone);
+    this.city.paint(p, this.brushRadius, this.zone, this.overwriteZones);
     this.refresh();
   }
 
