@@ -1,5 +1,5 @@
 import './style.css';
-import { City, DAY_STEPS } from './sim/city';
+import { City, DAY_STEPS, GATE } from './sim/city';
 import { TERRAINS, type TerrainName } from './sim/terrain';
 import { clock } from './sim/weather';
 import { AUTO_SLOT, SaveSlots, openStore } from './storage/saves';
@@ -20,7 +20,7 @@ function newCity(name = '我的城市', terrain: TerrainName = 'kaohsiung'): Cit
   const city = new City(TERRAINS[terrain]);
   city.name = name;
   // The highway exit the city grows from
-  const gate = { x: -480, y: 60 };
+  const gate = GATE;
   city.buildRoad({ kind: 'free', p: gate }, { x: -240, y: 40 }, { kind: 'free', p: { x: 0, y: 0 } }, true);
   const node = [...city.net.nodes.values()].find((n) => n.p.x === gate.x && n.p.y === gate.y);
   if (node) city.addOutsideConnection(node.id);

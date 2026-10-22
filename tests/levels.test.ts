@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { City, budgetTotals } from '../src/sim/city';
+import { City, GATE, budgetTotals } from '../src/sim/city';
 import { LEVELS, UNLOCK } from '../src/sim/levels';
 import { roadWidth } from '../src/sim/roads';
 import { Zone } from '../src/sim/zoning';
@@ -117,5 +117,35 @@ describe('highway connection', () => {
     const lots = city.disconnectedLots({ x: 0, y: 0 });
     expect(lots.length).toBe(city.stats.disconnected);
     expect(lots.every((p) => p.x >= 290)).toBe(true);
+  });
+
+  it('keeps roundabouts off the highway entry, and puts a lost entry back when a save loads', () => {
+    const city = new City();
+    city.money = 1e9;
+    city.buildRoad(free(GATE.x, GATE.y), null, free(0, 0), true);
+    const gate = [...city.net.nodes.values()].find((n) => n.p.x === GATE.x)!.id;
+    city.addOutsideConnection(gate);
+    city.paint({ x: -200, y: 60 }, 40, Zone.ResidentialLow);
+    const r = city.buildRoundabout({ x: GATE.x + 20, y: GATE.y }, 4);
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain('高速公路');
+
+    // What an earlier version did: the entry was cleared away and every road was cut off
+    const save = city.serialize();
+    save.outside = [999];
+    const back = City.deserialize(JSON.parse(JSON.stringify(save)));
+    expect([...back.outside]).toEqual([gate]);
+    expect(back.disconnectedRoads()).toHaveLength(0);
+
+    // Entry gone with no road near the gate: a short highway stub joins the nearest road
+    const far = new City();
+    far.money = 1e9;
+    far.buildRoad(free(-300, 0), null, free(0, 0), true);
+    const s2 = far.serialize();
+    s2.outside = [999];
+    const b2 = City.deserialize(JSON.parse(JSON.stringify(s2)));
+    const entry = b2.net.node([...b2.outside][0]);
+    expect(entry.p).toEqual(GATE);
+    expect(b2.disconnectedRoads()).toHaveLength(0);
   });
 });
