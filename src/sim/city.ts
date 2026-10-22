@@ -17,6 +17,7 @@ import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveInterse
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
 import { ELEVATED_HEIGHT, MAX_GRADE, ROAD_WIDTH, RoadNetwork, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
+import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic } from './traffic';
 import { Transit } from './transit';
@@ -28,12 +29,14 @@ export const BULLDOZE_REFUND = 0.5;
 export const DAY_STEPS = 2400;
 /** Steps in one game hour; the budget shows money per hour. */
 export const HOUR_STEPS = DAY_STEPS / 24;
+/** Steps in one game month (30 days); the budget shows money per month. */
+export const MONTH_STEPS = DAY_STEPS * MONTH_DAYS;
 
 /** Road upkeep per meter per simulation step. */
 export const ROAD_UPKEEP = 0.004;
 export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
-const SAVE_VERSION = 6;
+const SAVE_VERSION = 7;
 /** Ring radius of a roundabout by its number of exits. */
 export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
 /** Length of the short roads a new roundabout puts out at each exit. */
@@ -72,20 +75,41 @@ const FACILITY_ROAD_GAP = 4;
 /** Residential levels need this many services in reach: level 2 one service, level 3 two, ... */
 const SERVICES_PER_LEVEL = 1;
 
+/**
+ * The city's finances per game month, at the current rate: what comes in moves with the
+ * population, jobs, tax rates, riders and visitors, never a fixed sum.
+ * 每月收入 = 稅收 + 補助 + 規費 + 其他收入; 每月結餘 = 每月收入 − 營運支出 − 建設支出.
+ */
 export interface Budget {
+  /** 稅收 */
   residentialTax: number;
   businessTax: number;
-  roadUpkeep: number;
-  /** tickets on buses and trains */
+  /** 補助: from the central government, per resident by rank */
+  subsidy: number;
+  /** 規費: tickets on buses and trains, and airport fees */
   transitFares: number;
+  airIncome: number;
+  /** 其他收入: what visitors to the landmarks spend */
+  tourism: number;
+  /** 營運支出 */
+  roadUpkeep: number;
   /** buses, trains and track */
   transitUpkeep: number;
-  airIncome: number;
   airUpkeep: number;
   /** parks, schools, police, fire, hospitals and landmarks */
   servicesUpkeep: number;
-  /** what visitors to the landmarks spend */
-  tourism: number;
+  /** civil servants and city offices, per resident by rank */
+  admin: number;
+  /** 建設支出: roads, track, buildings bought, averaged over the last few days */
+  construction: number;
+}
+
+export function budgetTotals(b: Budget): { income: number; taxes: number; fees: number; other: number; running: number; balance: number } {
+  const taxes = b.residentialTax + b.businessTax;
+  const fees = b.transitFares + b.airIncome;
+  const income = taxes + b.subsidy + fees + b.tourism;
+  const running = b.roadUpkeep + b.transitUpkeep + b.airUpkeep + b.servicesUpkeep + b.admin;
+  return { income, taxes, fees, other: b.tourism, running, balance: income - running - b.construction };
 }
 
 /** How well the city looks after its residents. */
@@ -143,6 +167,8 @@ export interface SaveData extends NetSave {
   /** v5: the land the city stands on (older saves are flat) */
   terrain?: TerrainName;
   name?: string;
+  /** v7: rank */
+  level?: number;
   /** v6: parks, schools, police, fire, hospitals and landmarks (id, kind, x, y, angle) */
   facilities?: [number, FacilityKind, number, number, number][];
 }
@@ -161,7 +187,7 @@ export class City {
   transit = new Transit(this.net, this.traffic);
   /** shown on the start screen and in save slots */
   name = '我的城市';
-  money = 80000;
+  money = 500000;
   /** the sky over the city, by the climate of its land */
   readonly weather: Weather;
   /** simulation steps so far; DAY_STEPS make a day. A new city starts at 8 in the morning. */
@@ -173,18 +199,27 @@ export class City {
   demand: Record<DemandKey, number> = { R: 50, C: 30, O: 20, I: 40 };
   stats: CityStats = { population: 0, jobs: 0, buildings: 0, disconnected: 0, riders: 0 };
   taxes: TaxRates = { residential: DEFAULT_TAX, business: DEFAULT_TAX };
-  /** income and expenses per game hour, at the current rate */
+  /** income and expenses per game month, at the current rate */
   budget: Budget = {
     residentialTax: 0,
     businessTax: 0,
-    roadUpkeep: 0,
+    subsidy: 0,
     transitFares: 0,
-    transitUpkeep: 0,
     airIncome: 0,
+    tourism: 0,
+    roadUpkeep: 0,
+    transitUpkeep: 0,
     airUpkeep: 0,
     servicesUpkeep: 0,
-    tourism: 0,
+    admin: 0,
+    construction: 0,
   };
+  /** rank: index into LEVELS */
+  level = 0;
+  /** bumped when the rank changes */
+  levelVersion = 0;
+  /** money spent building since the last step */
+  private spentThisStep = 0;
   facilities = new Map<number, Facility>();
   nextFacility = 1;
   /** bumped when facilities are built or removed */
@@ -356,7 +391,7 @@ export class City {
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     const created = this.net.addRoad(start, control, end, height);
     if (!created.length) return { ok: false, cost, reason: '這裡已經有道路了' };
-    this.money -= cost;
+    this.spend(cost);
     this.roadsChanged();
     const last = created[created.length - 1];
     return { ok: true, cost, endNode: last.b };
@@ -388,7 +423,7 @@ export class City {
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     const created = sys.net.addRoad(start, control, end, height);
     if (!created.length) return { ok: false, cost, reason: '這裡已經有軌道了' };
-    this.money -= cost;
+    this.spend(cost);
     this.railChanged(kind);
     return { ok: true, cost, endNode: created[created.length - 1].b };
   }
@@ -414,7 +449,7 @@ export class City {
       }
     }
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
-    this.money -= cost;
+    this.spend(cost);
     const airport = this.aviation.addAirport(p, angle, runways);
     this.landChanged();
     return { ok: true, cost, airport };
@@ -473,7 +508,7 @@ export class City {
     const cost = free ? 0 : FACILITIES[kind].cost;
     const problem = this.facilityProblem(kind, p, angle);
     if (problem && !(free && problem.startsWith('資金不足'))) return { ok: false, cost, reason: problem };
-    this.money -= cost;
+    this.spend(cost);
     const facility = this.addFacility(kind, p, angle);
     return { ok: true, cost, facility };
   }
@@ -527,14 +562,14 @@ export class City {
     if (facility) {
       const refund = Math.round(FACILITIES[facility.kind].cost * BULLDOZE_REFUND);
       this.removeFacility(facility.id);
-      this.money += refund;
+      this.spend(-refund);
       return { ok: true, refund, what: FACILITIES[facility.kind].label };
     }
     const airport = this.aviation.airportAt(p);
     if (airport) {
       const refund = Math.round(AIRPORT_COST[airport.runways] * BULLDOZE_REFUND);
       this.aviation.removeAirport(airport.id);
-      this.money += refund;
+      this.spend(-refund);
       this.landChanged();
       return { ok: true, refund, what: '機場' };
     }
@@ -551,7 +586,7 @@ export class City {
     const sys = this.rails[kind];
     const refund = Math.round(seg.length * sys.spec.costPerM * BULLDOZE_REFUND);
     sys.net.removeSegment(seg.id);
-    this.money += refund;
+    this.spend(-refund);
     this.railChanged(kind);
     return { ok: true, refund, what: `${sys.spec.mode.label}軌道` };
   }
@@ -562,7 +597,7 @@ export class City {
     }
     const refund = Math.round(seg.length * ROAD_COST_PER_M * BULLDOZE_REFUND);
     this.net.removeSegment(seg.id);
-    this.money += refund;
+    this.spend(-refund);
     this.roadsChanged();
     return { ok: true, refund, what: '道路' };
   }
@@ -648,7 +683,8 @@ export class City {
       if (exit.kind === 'free') continue;
       this.net.addRoad(exit, null, { kind: 'free', p: at(a, r + SPOKE_LENGTH) });
     }
-    this.money = spent - cost;
+    this.money = spent;
+    this.spend(cost);
     this.roadsChanged();
     return { ok: true, cost };
   }
@@ -717,7 +753,7 @@ export class City {
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     const plan = transit.plan(stops, true);
     if (!plan.ok) return { ok: false, cost, reason: transit.mode.streetsOnly ? '有些站之間沒有道路相連' : '有些車站之間沒有軌道相連' };
-    this.money -= cost;
+    this.spend(cost);
     transit.addLine(stops);
     return { ok: true, cost };
   }
@@ -812,6 +848,38 @@ export class City {
     return Math.max(this.traffic.congestion(seg, 1), this.traffic.congestion(seg, -1));
   }
 
+  /** Pays for building (or takes back a refund), counted as 建設支出. */
+  private spend(cost: number): void {
+    this.money -= cost;
+    this.spentThisStep += cost;
+  }
+
+  /** The next rank and how far the city is from each of its bars, or null at the top. */
+  nextLevel(): { level: CityLevel; checks: { label: string; have: number; need: number; ok: boolean }[]; ready: boolean } | null {
+    const level = LEVELS[this.level + 1];
+    if (!level) return null;
+    const t = budgetTotals(this.budget);
+    const checks = [
+      { label: '人口', have: this.stats.population, need: level.population },
+      { label: '每月收入', have: t.income, need: level.income },
+      { label: '每月結餘', have: t.balance, need: level.balance },
+    ].map((c) => ({ ...c, ok: c.have >= c.need }));
+    return { level, checks, ready: checks.every((c) => c.ok) };
+  }
+
+  /** Moves up a rank when every bar is met. */
+  upgrade(): boolean {
+    if (!this.nextLevel()?.ready) return false;
+    this.level++;
+    this.levelVersion++;
+    return true;
+  }
+
+  /** Whether the city's rank has opened a feature. */
+  unlocked(feature: keyof typeof UNLOCK): boolean {
+    return this.level >= UNLOCK[feature];
+  }
+
   /**
    * One simulation step (half a second at normal speed): demand, building growth (needs a road to the highway;
    * slowed by jams), new trips onto the roads, then taxes and upkeep. The rates below are per step;
@@ -874,30 +942,41 @@ export class City {
     // Few visitors come in a storm, none in a typhoon
     tourists *= { clear: 1, cloudy: 1, fog: 0.9, rain: 0.75, storm: 0.5, typhoon: 0 }[this.weather.sky];
     this.needs.tourists = Math.round(tourists * HOUR_STEPS);
+    const rank = LEVELS[this.level];
+    const pop = this.stats.population;
     const step = {
-      residentialTax: this.stats.population * this.taxes.residential * 0.005,
-      businessTax: this.stats.jobs * this.taxes.business * 0.004,
+      subsidy: (pop * rank.subsidy) / MONTH_STEPS,
+      admin: (pop * rank.admin) / MONTH_STEPS,
+      residentialTax: this.stats.population * this.taxes.residential * 0.0025,
+      businessTax: this.stats.jobs * this.taxes.business * 0.002,
       roadUpkeep: roadLength * ROAD_UPKEEP,
       transitUpkeep: upkeep,
       airUpkeep: air.airports.size * AIRPORT_UPKEEP + air.flights.size * FLIGHT_UPKEEP,
       servicesUpkeep: services,
       tourism: tourists * TOURIST_SPEND,
     };
-    const perHour = (v: number) => v * HOUR_STEPS;
+    const perMonth = (v: number) => v * MONTH_STEPS;
+    // Construction averages over about three days so one big build doesn't swing the month
+    const ease = 1 / (3 * DAY_STEPS);
     this.budget = {
-      residentialTax: perHour(step.residentialTax),
-      businessTax: perHour(step.businessTax),
-      roadUpkeep: perHour(step.roadUpkeep),
+      residentialTax: perMonth(step.residentialTax),
+      businessTax: perMonth(step.businessTax),
+      subsidy: perMonth(step.subsidy),
       // Fares come in bursts as vehicles reach stops and planes leave; show running averages
-      transitFares: this.budget.transitFares * 0.9 + perHour(fares) * 0.1,
-      transitUpkeep: perHour(step.transitUpkeep),
-      airIncome: this.budget.airIncome * 0.97 + perHour(air.incomeToday) * 0.03,
-      airUpkeep: perHour(step.airUpkeep),
-      servicesUpkeep: perHour(step.servicesUpkeep),
-      tourism: perHour(step.tourism),
+      transitFares: this.budget.transitFares * 0.9 + perMonth(fares) * 0.1,
+      airIncome: this.budget.airIncome * 0.97 + perMonth(air.incomeToday) * 0.03,
+      tourism: perMonth(step.tourism),
+      roadUpkeep: perMonth(step.roadUpkeep),
+      transitUpkeep: perMonth(step.transitUpkeep),
+      airUpkeep: perMonth(step.airUpkeep),
+      servicesUpkeep: perMonth(step.servicesUpkeep),
+      admin: perMonth(step.admin),
+      construction: this.budget.construction * (1 - ease) + perMonth(this.spentThisStep) * ease,
     };
+    this.spentThisStep = 0;
     this.money +=
-      step.residentialTax + step.businessTax + fares + air.incomeToday + step.tourism - step.roadUpkeep - step.transitUpkeep - step.airUpkeep - step.servicesUpkeep;
+      step.residentialTax + step.businessTax + step.subsidy + fares + air.incomeToday + step.tourism -
+      step.roadUpkeep - step.transitUpkeep - step.airUpkeep - step.servicesUpkeep - step.admin;
     this.stats.riders = riders;
     air.incomeToday = 0;
     air.passengersToday = 0;
@@ -995,6 +1074,7 @@ export class City {
       districts: [...this.districts.values()].map((d) => [d.id, round2(d.p.x), round2(d.p.y), Math.round(d.r), d.name, d.color]),
       terrain: this.terrain.name,
       name: this.name,
+      level: this.level,
       facilities: [...this.facilities.values()].map((f) => [f.id, f.kind, round2(f.p.x), round2(f.p.y), round2(f.angle * 1000) / 1000]),
     };
   }
@@ -1005,6 +1085,7 @@ export class City {
     city.money = data.money;
     city.steps = Math.round(data.day * DAY_STEPS);
     if (data.name) city.name = data.name;
+    city.level = Math.min(LEVELS.length - 1, data.level ?? 0);
     loadNet(city.net, data, true);
     for (const n of data.outside ?? []) city.outside.add(n);
     if (data.taxes) city.taxes = { ...data.taxes };

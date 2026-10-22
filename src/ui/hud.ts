@@ -1,7 +1,8 @@
 import { MAX_AIR_FARE } from '../sim/airport';
 import logoUrl from '../assets/logo.png';
 import { gameDate, ntd } from '../sim/format';
-import { type City, MAX_TAX } from '../sim/city';
+import { type City, MAX_TAX, budgetTotals } from '../sim/city';
+import { LEVELS, ntdShort } from '../sim/levels';
 import { FACILITIES, LANDMARK_KINDS, SERVICE_KINDS } from '../sim/facilities';
 import { RAIL_KINDS } from '../sim/rail';
 import type { Conditions } from '../sim/weather';
@@ -37,6 +38,9 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
 const groupOf = (t: Tool): Group | null => (Object.keys(GROUPS) as Group[]).find((g) => GROUPS[g].some((r) => r.id === t)) ?? null;
 
 type DockItem = Tool | Group;
+type BudgetRow =
+  | 'res' | 'biz' | 'subsidy' | 'fares' | 'air' | 'tourism' | 'income'
+  | 'roads' | 'transit' | 'airUpkeep' | 'services' | 'admin' | 'running' | 'construction' | 'net';
 const TOOLS: { id: DockItem; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
   { id: 'roads', label: '道路', key: '2' },
@@ -83,7 +87,7 @@ export class Hud {
   private toastTimer = 0;
   private warning: HTMLElement;
   private budgetPanel: HTMLElement;
-  private budgetRows: Record<'res' | 'biz' | 'fares' | 'air' | 'tourism' | 'roads' | 'transit' | 'airUpkeep' | 'services' | 'net', HTMLElement>;
+  private budgetRows: Record<BudgetRow, HTMLElement>;
   private taxInputs: { res: HTMLInputElement; biz: HTMLInputElement; resLabel: HTMLElement; bizLabel: HTMLElement };
   private city: City | null = null;
   private topBar: HTMLElement;
@@ -159,6 +163,13 @@ export class Hud {
     this.lockButton = lock;
     top.append(lock);
 
+    const levelBtn = el('button', 'chip level-chip', LEVELS[0].name);
+    levelBtn.type = 'button';
+    levelBtn.title = '城市等級';
+    levelBtn.onclick = () => this.showLevel(this.levelPanel.hidden);
+    this.levelBtn = levelBtn;
+    top.append(levelBtn);
+
     const budgetBtn = el('button', 'chip', '預算');
     budgetBtn.type = 'button';
     budgetBtn.onclick = () => this.showBudget(this.budgetPanel.hidden);
@@ -198,27 +209,38 @@ export class Hud {
     // Budget: last day's income and spending, and the two tax sliders
     this.budgetPanel = el('section', 'budget panel');
     this.budgetPanel.hidden = true;
-    this.budgetPanel.append(el('h2', '', '每小時收支'));
-    const row = (label: string) => {
-      const r = el('div', 'brow');
+    this.budgetPanel.append(el('h2', '', '每月財政'));
+    const row = (label: string, cls = '') => {
+      const r = el('div', `brow ${cls}`);
       const v = el('b');
       r.append(el('span', '', label), v);
       this.budgetPanel.append(r);
       return v;
     };
-    this.budgetRows = {
+    const group = (label: string) => this.budgetPanel.append(el('h3', 'bgroup', label));
+    group('收入');
+    const income = {
       res: row('住宅稅'),
       biz: row('商業稅'),
-      fares: row('運輸票價'),
-      air: row('機場收入'),
-      tourism: row('觀光收入'),
+      subsidy: row('中央補助'),
+      fares: row('運輸票價（規費）'),
+      air: row('機場規費'),
+      tourism: row('觀光收入（其他）'),
+      income: row('每月收入', 'sub'),
+    };
+    group('支出');
+    this.budgetRows = {
+      ...income,
       roads: row('道路維護'),
       transit: row('運輸營運'),
       airUpkeep: row('機場營運'),
       services: row('公共服務'),
-      net: row('每小時淨額'),
+      admin: row('行政人事'),
+      running: row('營運支出', 'sub'),
+      construction: row('建設支出（近 3 日平均）'),
+      net: row('每月結餘', 'total'),
     };
-    this.budgetRows.net.parentElement!.classList.add('total');
+    this.budgetPanel.append(el('p', 'note', '每月結餘 = 每月收入 − 營運支出 − 建設支出。收入隨人口、工作、稅率、搭乘人數與觀光客變動。'));
     const slider = (id: string, label: string, onInput: (v: number) => void, max = MAX_TAX, step = 1) => {
       const wrap = el('label', 'tax');
       wrap.htmlFor = id;
@@ -251,6 +273,9 @@ export class Hud {
       this.fareInputs.push({ input: s.input, label: s.value, get: (c) => f.transit(c).fare });
     }
     this.budgetPanel.append(el('p', 'note', '票價越高收入越多，但搭乘的人會變少。'));
+
+    this.levelPanel = el('section', 'budget level panel');
+    this.levelPanel.hidden = true;
 
     // Residents' needs: happiness, how much of the city each service reaches, what people ask for
     this.needsPanel = el('section', 'budget needs panel');
@@ -286,7 +311,7 @@ export class Hud {
     }
     bottom.append(this.hint, this.sub, this.kinds, dock);
     this.bottomBar = bottom;
-    root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.editPanel.el, this.toastEl, bottom);
+    root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.levelPanel, this.editPanel.el, this.toastEl, bottom);
 
     addEventListener('keydown', (e) => {
       if ((e.target as HTMLElement).closest?.('input, textarea') || document.body.classList.contains('menu-open')) return;
@@ -526,9 +551,10 @@ export class Hud {
       if (key && narrow) {
         this.showBudget(false);
         this.showNeeds(false);
+        this.showLevel(false);
       }
     }
-    if (!key || (narrow && (!this.budgetPanel.hidden || !this.needsPanel.hidden))) {
+    if (!key || (narrow && (!this.budgetPanel.hidden || !this.needsPanel.hidden || !this.levelPanel.hidden))) {
       this.editPanel.hide();
       return;
     }
@@ -611,14 +637,75 @@ export class Hud {
   private showBudget(on: boolean): void {
     this.budgetPanel.hidden = !on;
     this.budgetBtn.setAttribute('aria-pressed', String(on));
-    if (on) this.showNeeds(false);
+    if (on) {
+      this.showNeeds(false);
+      this.showLevel(false);
+    }
   }
 
   private showNeeds(on: boolean): void {
     this.needsPanel.hidden = !on;
     this.needsBtn.setAttribute('aria-pressed', String(on));
-    if (on) this.showBudget(false);
+    if (on) {
+      this.showBudget(false);
+      this.showLevel(false);
+    }
     if (on && this.city) this.renderNeeds(this.city);
+  }
+
+  private showLevel(on: boolean): void {
+    this.levelPanel.hidden = !on;
+    this.levelBtn.setAttribute('aria-pressed', String(on));
+    if (on) {
+      this.showBudget(false);
+      this.showNeeds(false);
+      this.levelShown = '';
+      if (this.city) this.renderLevel(this.city);
+    }
+  }
+
+  private levelBtn!: HTMLButtonElement;
+  private levelPanel!: HTMLElement;
+  private levelShown = '';
+  /** rank the "ready to move up" notice was last shown for */
+  private readyTold = -1;
+
+  /** 城市等級: this rank, the bars for the next one and a button to move up. */
+  private renderLevel(city: City): void {
+    const next = city.nextLevel();
+    const key = JSON.stringify([city.level, next?.checks.map((c) => [c.ok, Math.round(c.have / 1000)])]);
+    if (key === this.levelShown) return;
+    this.levelShown = key;
+    const body: HTMLElement[] = [el('h2', '', `城市等級：${LEVELS[city.level].name}`)];
+    const fmt = (label: string, v: number) => (label === '人口' ? `${Math.round(v).toLocaleString()} 人` : `NT$${ntdShort(v)}`);
+    if (next) {
+      body.push(el('h3', 'bgroup', `升級成「${next.level.name}」的條件`));
+      for (const c of next.checks) {
+        const row = el('div', `brow check${c.ok ? ' ok' : ''}`);
+        row.append(el('span', '', `${c.ok ? '✓' : '○'} ${c.label}`), el('b', '', `${fmt(c.label, c.have)} / ${fmt(c.label, c.need)}`));
+        body.push(row);
+      }
+      const up = el('button', `menu-btn${next.ready ? ' primary' : ''}`, next.ready ? `升級成${next.level.name}` : '尚未達到升級條件');
+      up.type = 'button';
+      up.disabled = !next.ready;
+      up.onclick = () => {
+        if (!city.upgrade()) return;
+        const opened = LEVELS[city.level].unlocks;
+        this.ticker(`🎉 恭喜！${city.name}升級為「${LEVELS[city.level].name}」${opened.length ? `，開放：${opened.join('、')}` : ''}`, { loops: 2 });
+        this.levelShown = '';
+        this.render();
+      };
+      body.push(up);
+      if (next.level.unlocks.length) body.push(el('p', 'note', `升級後開放：${next.level.unlocks.join('、')}`));
+    } else body.push(el('p', 'note', '已經是最高等級「直轄市」！'));
+    const ladder = el('div', 'ladder');
+    LEVELS.forEach((l, i) => {
+      const row = el('div', `brow${i === city.level ? ' current' : ''}`);
+      row.append(el('span', '', `${i === city.level ? '▶ ' : ''}${l.name}`), el('b', '', i ? `${l.population.toLocaleString()} 人 · 收入 ${ntdShort(l.income)} · 結餘 +${ntdShort(l.balance)}` : '起點'));
+      ladder.append(row);
+    });
+    body.push(el('h3', 'bgroup', '等級一覽（每月）'), ladder);
+    this.levelPanel.replaceChildren(...body);
   }
 
   private tickerEl: HTMLElement;
@@ -706,20 +793,30 @@ export class Hud {
   update(city: City, dayFraction = 0): void {
     this.city = city;
     const b = city.budget;
-    const money = ntd;
+    const money = (v: number) => (Math.abs(v) >= 1e6 ? `NT$${ntdShort(v)}` : ntd(v));
     if (!this.budgetPanel.hidden) {
-      this.budgetRows.res.textContent = money(b.residentialTax);
-      this.budgetRows.biz.textContent = money(b.businessTax);
-      this.budgetRows.fares.textContent = money(b.transitFares);
-      this.budgetRows.air.textContent = money(b.airIncome);
-      this.budgetRows.roads.textContent = money(-b.roadUpkeep);
-      this.budgetRows.transit.textContent = money(-b.transitUpkeep);
-      this.budgetRows.airUpkeep.textContent = money(-b.airUpkeep);
-      this.budgetRows.tourism.textContent = money(b.tourism);
-      this.budgetRows.services.textContent = money(-b.servicesUpkeep);
-      const net = b.residentialTax + b.businessTax + b.transitFares + b.airIncome + b.tourism - b.roadUpkeep - b.transitUpkeep - b.airUpkeep - b.servicesUpkeep;
-      this.budgetRows.net.textContent = money(net);
-      this.budgetRows.net.classList.toggle('neg', net < 0);
+      const t = budgetTotals(b);
+      const values: Record<BudgetRow, number> = {
+        res: b.residentialTax,
+        biz: b.businessTax,
+        subsidy: b.subsidy,
+        fares: b.transitFares,
+        air: b.airIncome,
+        tourism: b.tourism,
+        income: t.income,
+        roads: -b.roadUpkeep,
+        transit: -b.transitUpkeep,
+        airUpkeep: -b.airUpkeep,
+        services: -b.servicesUpkeep,
+        admin: -b.admin,
+        running: -t.running,
+        construction: -b.construction,
+        net: t.balance,
+      };
+      for (const k of Object.keys(values) as BudgetRow[]) {
+        this.budgetRows[k].textContent = money(values[k]);
+        this.budgetRows[k].classList.toggle('neg', values[k] < 0 && (k === 'net' || k === 'income'));
+      }
       for (const [input, label, v] of [
         [this.taxInputs.res, this.taxInputs.resLabel, city.taxes.residential],
         [this.taxInputs.biz, this.taxInputs.bizLabel, city.taxes.business],
@@ -743,8 +840,18 @@ export class Hud {
     this.warning.style.top = below;
     this.budgetPanel.style.top = shift;
     this.needsPanel.style.top = shift;
+    this.levelPanel.style.top = shift;
     if (!this.needsPanel.hidden) this.renderNeeds(city);
-    const open = !this.budgetPanel.hidden ? this.budgetPanel : !this.needsPanel.hidden ? this.needsPanel : null;
+    if (!this.levelPanel.hidden) this.renderLevel(city);
+    // The rank chip: its name, and a glow when the city can move up
+    const ready = !!city.nextLevel()?.ready;
+    this.levelBtn.textContent = `${LEVELS[city.level].name}${ready ? ' ⬆' : ''}`;
+    this.levelBtn.classList.toggle('ready', ready);
+    if (ready && this.readyTold !== city.level) {
+      this.readyTold = city.level;
+      this.toast(`可以升級成「${LEVELS[city.level + 1].name}」了！點上方的等級按鈕`);
+    }
+    const open = [this.budgetPanel, this.needsPanel, this.levelPanel].find((p) => !p.hidden) ?? null;
     this.editPanel.el.style.top = open ? `calc(${shift} + ${open.offsetHeight + 8}px)` : shift;
     this.toastEl.style.top = shift;
     // On phones the toast would sit on the editor's title: show it just below the editor
@@ -759,7 +866,7 @@ export class Hud {
       if (r.height) floor = Math.min(floor, r.top);
     }
     floor -= 8;
-    for (const p of [this.budgetPanel, this.needsPanel, this.editPanel.el]) {
+    for (const p of [this.budgetPanel, this.needsPanel, this.levelPanel, this.editPanel.el]) {
       if (!p.hidden) p.style.maxHeight = `${Math.max(120, floor - p.getBoundingClientRect().top)}px`;
     }
     this.stats.pop.textContent = city.stats.population.toLocaleString();
