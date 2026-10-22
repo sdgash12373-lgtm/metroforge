@@ -411,6 +411,10 @@ export class Hud {
         this.tools.setZone(Zone.None);
         this.render();
       });
+      option('更正', this.tools.overwriteZones, () => {
+        this.tools.setOverwriteZones(!this.tools.overwriteZones);
+        this.render();
+      });
       // Brush size: the dock is rebuilt on every render, so the slider is too
       const size = el('label', 'brush-size');
       size.htmlFor = 'brush-size';

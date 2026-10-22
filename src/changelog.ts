@@ -8,6 +8,15 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '2.0.2',
+    date: '2026-10-22',
+    title: '分區不再互相蓋掉',
+    notes: [
+      '塗分區時只會填空的格子，已經畫好的分區不會被蓋掉',
+      '要把舊分區改成別的，先按分區選單裡的「更正」再塗；「清除分區」照常可用',
+    ],
+  },
+  {
     version: '2.0.1',
     date: '2026-10-22',
     title: '找出沒接上高速公路的道路',

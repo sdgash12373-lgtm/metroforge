@@ -143,12 +143,17 @@ export function recomputeBlocked(net: RoadNetwork, occupied?: (p: Vec2) => boole
 }
 
 /** Paints a zone with a round brush. Returns the number of cells changed. */
-export function paintZone(net: RoadNetwork, center: Vec2, radius: number, zone: Zone): number {
+/**
+ * Zones the empty cells in a circle. Cells that already have another zone are left alone unless
+ * `overwrite` is set (the 更正 button); clearing (Zone.None) always works.
+ */
+export function paintZone(net: RoadNetwork, center: Vec2, radius: number, zone: Zone, overwrite = false): number {
   let changed = 0;
   for (const seg of net.segments.values()) {
     if (!bboxNear(seg.bbox, center, radius + ROAD_WIDTH / 2 + CELL * DEPTH)) continue;
     for (const lot of seg.lots) {
       if (lot.blocked || lot.zone === zone) continue;
+      if (!overwrite && zone !== Zone.None && lot.zone !== Zone.None) continue;
       if ((lot.x - center.x) ** 2 + (lot.y - center.y) ** 2 > radius * radius) continue;
       lot.zone = zone;
       lot.level = 0;
