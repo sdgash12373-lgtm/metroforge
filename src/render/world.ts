@@ -7,7 +7,7 @@ import type { City, District } from '../sim/city';
 import type { GuideLine } from '../sim/guides';
 import { type Quad, type Vec2, closestOnSamples, bboxNear } from '../sim/geometry';
 import { roadWidth } from '../sim/roads';
-import { Zone } from '../sim/zoning';
+import { CELL, Zone } from '../sim/zoning';
 import { BuildingLayer } from './buildings';
 import { CameraRig } from './cameraRig';
 import type { PathPiece } from '../sim/transit';
@@ -101,6 +101,8 @@ export class World {
   private readonly brush: THREE.Mesh;
   private readonly angleGroup = new THREE.Group();
   private readonly guideLines: THREE.Mesh;
+  private readonly grid: THREE.LineSegments;
+  private gridAt: Vec2 | null = null;
   /** outline of an airport about to be placed */
   private readonly footprint: THREE.Mesh;
   private readonly districtRings = new THREE.Group();
@@ -266,7 +268,8 @@ export class World {
     );
     this.footprint.renderOrder = 4;
     this.footprint.visible = false;
-    this.scene.add(this.preview, this.cursor, this.brush, this.angleGroup, this.guideLines, this.footprint);
+    this.grid = buildGrid();
+    this.scene.add(this.preview, this.cursor, this.brush, this.angleGroup, this.guideLines, this.footprint, this.grid);
     this.angleLabels = document.createElement('div');
     this.angleLabels.className = 'angle-labels';
     this.nameLayer = document.createElement('div');
@@ -566,6 +569,16 @@ export class World {
     }
   }
 
+  /**
+   * Ground grid while drawing roads, its squares the size of a zoning cell. It follows `center` (the cursor or
+   * the road being drawn), else the middle of the view; `h` lifts it to the deck when drawing viaducts.
+   */
+  setGrid(on: boolean, center: Vec2 | null = null, h = 0): void {
+    this.grid.visible = on;
+    this.gridAt = center;
+    this.grid.position.y = h + 0.12;
+  }
+
   /** Dashed alignment lines from existing road ends to the snapped point. */
   setGuideLines(lines: GuideLine[]): void {
     this.guideLines.visible = lines.length > 0;
@@ -779,6 +792,7 @@ export class World {
   }
 
   render(): void {
+    if (this.grid.visible) placeGrid(this.grid, this.gridAt ?? this.rig.target, this.rig.distance);
     // Keep the shadow camera centered on what the player is looking at (the sky aims the sun there)
     const span = Math.min(900, Math.max(150, this.rig.distance * 1.2));
     const cam = this.sun.shadow.camera;
@@ -801,6 +815,66 @@ export class World {
       }
     }
   }
+}
+
+/** Lines each way from the middle of the grid; every fifth is drawn stronger. */
+const GRID_HALF = 30;
+
+/** A square of grid lines one unit apart, faded out towards its edge; placeGrid scales it to the cell size. */
+function buildGrid(): THREE.LineSegments {
+  const pos: number[] = [];
+  const major: number[] = [];
+  for (let i = -GRID_HALF; i <= GRID_HALF; i++) {
+    const m = i % 5 === 0 ? 1 : 0;
+    pos.push(i, 0, -GRID_HALF, i, 0, GRID_HALF, -GRID_HALF, 0, i, GRID_HALF, 0, i);
+    major.push(m, m, m, m);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('major', new THREE.Float32BufferAttribute(major, 1));
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: { offset: { value: new THREE.Vector2() } },
+    vertexShader: `
+      attribute float major;
+      uniform vec2 offset;
+      varying float vMajor;
+      varying vec2 vLocal;
+      void main() {
+        vMajor = major;
+        vLocal = position.xz + offset;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      varying float vMajor;
+      varying vec2 vLocal;
+      void main() {
+        float fade = 1.0 - smoothstep(${(GRID_HALF * 0.35).toFixed(1)}, ${(GRID_HALF * 0.95).toFixed(1)}, length(vLocal));
+        gl_FragColor = vec4(1.0, 1.0, 1.0, fade * mix(0.22, 0.5, vMajor));
+      }`,
+  });
+  const grid = new THREE.LineSegments(g, material);
+  grid.renderOrder = 2;
+  grid.frustumCulled = false;
+  grid.visible = false;
+  return grid;
+}
+
+/**
+ * Centres the grid near p, keeping its lines on whole cells of the map: one zoning cell apart up close,
+ * five cells when zoomed out.
+ */
+function placeGrid(grid: THREE.LineSegments, p: Vec2, distance: number): void {
+  const step = distance > 600 ? CELL * 5 : CELL;
+  const snap = step * 5;
+  const x = Math.round(p.x / snap) * snap;
+  const y = Math.round(p.y / snap) * snap;
+  grid.scale.set(step, 1, step);
+  grid.position.x = x;
+  grid.position.z = y;
+  // Fade around p itself, not the snapped centre
+  (grid.material as THREE.ShaderMaterial).uniforms.offset.value.set((x - p.x) / step, (y - p.y) / step);
 }
 
 /** Sharp junctions are hard to drive through: warn under 30°, mark right angles. */
