@@ -5,12 +5,12 @@ import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/a
 import type { City, RoadStyle } from '../sim/city';
 import { LEVELS, UNLOCK } from '../sim/levels';
 import { type GuideLine, alignToGuides } from '../sim/guides';
-import { type Vec2, lerp, quadPoint } from '../sim/geometry';
+import { type Vec2, dist, lerp, quadPoint } from '../sim/geometry';
 import { HOUR_STEPS, ROUNDABOUT_RADIUS, type RoundaboutSize } from '../sim/city';
 import { RAIL_SPECS, type RailKind } from '../sim/rail';
 import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type RoadNetwork, type Snap, TUNNEL_DEPTH } from '../sim/roads';
 import { LINE_COLORS, type PathPiece, type Transit } from '../sim/transit';
-import { ZONES, Zone } from '../sim/zoning';
+import { ZONES, Zone, cellCenter } from '../sim/zoning';
 import type { World } from '../render/world';
 
 export type Tool =
@@ -447,12 +447,16 @@ export class ToolController {
     return street.kind !== 'free' ? street : own;
   }
 
-  /** Road-tool snap: existing roads first, then alignment with other road ends. */
+  /**
+   * Road-tool snap: existing roads first, then alignment with other road ends, and a free end always
+   * lands in the middle of a grid square. Guides only show when that still keeps the point on them.
+   */
   private snapRoad(p: Vec2): { snap: Snap; guides: GuideLine[] } {
     const s = this.snap(p);
     if (s.kind !== 'free') return { snap: s, guides: [] };
     const a = alignToGuides(this.net, p, this.world.rig.snapRadius * 0.6);
-    return { snap: { kind: 'free', p: a.p }, guides: a.lines };
+    const c = cellCenter(a.p);
+    return { snap: { kind: 'free', p: c }, guides: dist(c, a.p) < 0.5 ? a.lines : [] };
   }
 
   hint(): string {

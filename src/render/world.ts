@@ -861,15 +861,13 @@ function buildGrid(): THREE.LineSegments {
   return grid;
 }
 
-/**
- * Centres the grid near p, keeping its lines on whole cells of the map: one zoning cell apart up close,
- * five cells when zoomed out.
- */
+/** Centres the grid near p: lines one zoning cell apart up close, five cells when zoomed out. */
 function placeGrid(grid: THREE.LineSegments, p: Vec2, distance: number): void {
   const step = distance > 600 ? CELL * 5 : CELL;
   const snap = step * 5;
-  const x = Math.round(p.x / snap) * snap;
-  const y = Math.round(p.y / snap) * snap;
+  // Lines sit half a square off whole cells, so road ends (put on whole cells) fall in the middle of a square
+  const x = Math.round(p.x / snap) * snap + step / 2;
+  const y = Math.round(p.y / snap) * snap + step / 2;
   grid.scale.set(step, 1, step);
   grid.position.x = x;
   grid.position.z = y;

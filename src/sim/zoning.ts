@@ -3,6 +3,9 @@ import { ROAD_WIDTH, type RoadNetwork, type RoadSegment, roadWidth } from './roa
 
 /** Zoning cell size, as in Cities: Skylines (8 m × 8 m). */
 export const CELL = 8;
+
+/** Middle of the drawing-grid square a point is in: free road ends go there, never onto a grid line. */
+export const cellCenter = (p: Vec2): Vec2 => ({ x: Math.round(p.x / CELL) * CELL, y: Math.round(p.y / CELL) * CELL });
 /** Cells per row behind the road. */
 export const DEPTH = 4;
 
