@@ -1,4 +1,6 @@
 import { angleGuides } from '../sim/angles';
+import { FACILITIES, type FacilityKind, type LandmarkKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners } from '../sim/facilities';
+import { ntd } from '../sim/format';
 import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
 import type { City } from '../sim/city';
 import { type GuideLine, alignToGuides } from '../sim/guides';
@@ -10,7 +12,24 @@ import { LINE_COLORS, type PathPiece, type Transit } from '../sim/transit';
 import { ZONES, Zone } from '../sim/zoning';
 import type { World } from '../render/world';
 
-export type Tool = 'pan' | 'road' | 'curve' | 'roundabout' | 'zone' | 'bulldoze' | 'traffic' | 'bus' | RailKind | 'airport' | 'streetName' | 'district';
+export type Tool =
+  | 'pan'
+  | 'road'
+  | 'curve'
+  | 'roundabout'
+  | 'zone'
+  | 'bulldoze'
+  | 'traffic'
+  | 'bus'
+  | RailKind
+  | 'airport'
+  | 'streetName'
+  | 'district'
+  | ServiceKind
+  | 'landmark';
+
+/** Tools that place a public service or landmark. */
+export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' => t === 'landmark' || (SERVICE_KINDS as string[]).includes(t);
 
 /** Train tools either lay track or plan lines through stations. */
 export type RailAction = 'track' | 'line';
@@ -53,6 +72,8 @@ export class ToolController {
   private draftPath: PathPiece[] = [];
   /** line picked in the dock, to rename, recolour or delete it */
   selectedLine: number | null = null;
+  /** which landmark the landmark tool builds */
+  landmark: LandmarkKind = 'tower85';
   /** taps pick a line on the map, and a second tap on it removes it */
   removingLines = false;
   railAction: RailAction = 'track';
@@ -289,7 +310,7 @@ export class ToolController {
       if (r.reason) this.events.toast(r.reason);
       return;
     }
-    this.events.toast(`${t.mode.label}路線開通！${this.lineDraft.length} 站，花費 $${r.cost.toLocaleString()}`);
+    this.events.toast(`${t.mode.label}路線開通！${this.lineDraft.length} 站，花費 ${ntd(r.cost)}`);
     this.lineDraft = [];
     this.draftPath = [];
     this.events.changed();
@@ -395,7 +416,7 @@ export class ToolController {
         return this.zone === Zone.None ? '在格子上塗抹以清除分區' : `塗抹道路旁的格子設為「${ZONES[this.zone].name}」；雙指移動地圖`;
       case 'roundabout': {
         const cost = this.city.roundaboutCost(this.roundaboutSize);
-        return `${this.roundaboutSize} 通圓環 · 約 $${cost.toLocaleString()}　靠近路口或道路會自動吸附（橘色圈），壓到的道路自動接上；車輛逆時針單向繞行`;
+        return `${this.roundaboutSize} 通圓環 · 約 ${ntd(cost)}　靠近路口或道路會自動吸附（橘色圈），壓到的道路自動接上；車輛逆時針單向繞行`;
       }
       case 'bulldoze':
         return '點道路、軌道或機場拆除，退還一半費用；藍色是地下的隧道';
@@ -412,6 +433,13 @@ export class ToolController {
         return this.railAction === 'track' ? this.drawHint(`${RAIL_SPECS[this.tool].mode.label}軌道`, '拉軌道') : this.lineHint();
       case 'airport':
         return this.airportHint();
+      case 'park':
+      case 'school':
+      case 'police':
+      case 'fire':
+      case 'hospital':
+      case 'landmark':
+        return this.facilityHint();
       case 'streetName': {
         const seg = this.selectedStreet !== null ? this.city.net.segments.get(this.selectedStreet) : undefined;
         if (seg) return `${seg.name ?? '這條路'}：在上方輸入路名，整條路（直行穿過路口的部分）都會套用`;
@@ -425,6 +453,30 @@ export class ToolController {
     }
   }
 
+  /** The kind of facility the active tool places. */
+  get facilityKind(): FacilityKind | null {
+    if (this.tool === 'landmark') return this.landmark;
+    return isFacilityTool(this.tool) ? this.tool : null;
+  }
+
+  setLandmark(kind: LandmarkKind): void {
+    this.landmark = kind;
+    this.events.changed();
+    this.refresh();
+  }
+
+  private facilityHint(): string {
+    const kind = this.facilityKind!;
+    const spec = FACILITIES[kind];
+    if (this.hover) {
+      const spot = this.city.facilitySpot(kind, this.hover);
+      const problem = this.city.facilityProblem(kind, spot.p, spot.angle);
+      if (problem) return problem;
+    }
+    const tour = spec.tourists ? '・吸引觀光客' : '';
+    return `${spec.label} · ${ntd(spec.cost)} · 每日維護 ${ntd(spec.upkeep)} · 範圍 ${spec.radius} 公尺${tour}　${spec.blurb}；點道路旁的空地興建`;
+  }
+
   /** Hint for drawing a road or track: length and price of the ghost, or how to start. */
   private drawHint(what: string, verb: string): string {
     const { start, control } = this.draft;
@@ -436,7 +488,7 @@ export class ToolController {
       const [ha, hb] = this.city.roadHeights(start, end, this.height, this.net);
       const cost = this.cost(start.p, control, end.p, ha, hb);
       const kind = ha === hb ? (ha > 0 ? '高架 ' : ha < 0 ? '隧道 ' : '') : hb < 0 || ha < 0 ? '隧道入口 ' : '匝道 ';
-      return `${kind}約 ${len} 公尺 · $${cost.toLocaleString()}　點一下完成；再點起點或按右鍵結束${verb}`;
+      return `${kind}約 ${len} 公尺 · ${ntd(cost)}　點一下完成；再點起點或按右鍵結束${verb}`;
     }
     if (this.level === 'elevated' && !start) {
       return `高架${what}：從地面接出會自動做成匝道（至少 ${Math.ceil(ELEVATED_HEIGHT / MAX_GRADE)} 公尺），跨過地面不會形成路口`;
@@ -456,7 +508,7 @@ export class ToolController {
     const t = this.transit!;
     const { label } = t.mode;
     const n = this.lineDraft.length;
-    if (n === 1) return `已設 1 站（每站 $${t.mode.stopCost.toLocaleString()}）；沿著路線點下一站`;
+    if (n === 1) return `已設 1 站（每站 ${ntd(t.mode.stopCost)}）；沿著路線點下一站`;
     if (n > 1) return t.mode.reverses ? `已設 ${n} 站；點「完成路線」開通，列車在兩端折返` : `已設 ${n} 站；點第一站或「完成路線」讓公車繞回起點`;
     const picked = this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
     if (this.removingLines) {
@@ -467,7 +519,7 @@ export class ToolController {
     if (!t.lines.size) {
       if (t.mode.streetsOnly) return '公車：點地面道路設第一個站，依序點下一站，最後點回第一站完成路線';
       if (!t.net.segments.size) return `先用「軌道」拉${label}軌道，再到「路線」設車站`;
-      return `${label}：在軌道上點一下設車站（每站 $${t.mode.stopCost.toLocaleString()}），依序點下一站，再按「完成路線」`;
+      return `${label}：在軌道上點一下設車站（每站 ${ntd(t.mode.stopCost)}），依序點下一站，再按「完成路線」`;
     }
     let riders = 0;
     let waiting = 0;
@@ -481,7 +533,7 @@ export class ToolController {
     const f = this.selectedFlight !== null ? air.flights.get(this.selectedFlight) : undefined;
     if (f) return `${f.name}：已載客 ${f.passengers.toLocaleString()} 人　每班約 ${air.passengersPerFlight(this.city.stats.population)} 人`;
     const cost = AIRPORT_COST[this.runways];
-    const base = `${this.runways === 2 ? '雙' : '四'}跑道機場 · $${cost.toLocaleString()}　點空地蓋機場，「旋轉」調整方向`;
+    const base = `${this.runways === 2 ? '雙' : '四'}跑道機場 · ${ntd(cost)}　點空地蓋機場，「旋轉」調整方向`;
     if (!air.airports.size) return base;
     return `航班 ${air.flights.size} 班 · 每班約 ${air.passengersPerFlight(this.city.stats.population)} 人；按「新增航班」開航，點航班改名稱與機身顏色`;
   }
@@ -510,16 +562,21 @@ export class ToolController {
         this.selectedDistrict = nd.id;
         this.events.toast(`已新增「${nd.name}」，可在上方改名稱`);
       }
+    } else if (this.facilityKind) {
+      const kind = this.facilityKind;
+      const spot = this.city.facilitySpot(kind, p);
+      const r = this.city.buildFacility(kind, spot.p, spot.angle);
+      this.events.toast(r.ok ? `${FACILITIES[kind].label}完成，花費 ${ntd(r.cost)}` : (r.reason ?? '這裡不能蓋'));
     } else if (this.tool === 'airport') {
       const r = this.city.buildAirport(p, this.radians, this.runways);
-      this.events.toast(r.ok ? `機場完成，花費 $${r.cost.toLocaleString()}；按「新增航班」開航` : (r.reason ?? '這裡不能蓋機場'));
+      this.events.toast(r.ok ? `機場完成，花費 ${ntd(r.cost)}；按「新增航班」開航` : (r.reason ?? '這裡不能蓋機場'));
     }
     else if (this.tool === 'roundabout') {
       const r = this.city.buildRoundabout(this.roundaboutCenter(p).p, this.roundaboutSize);
-      this.events.toast(r.ok ? `圓環完成，花費 $${r.cost.toLocaleString()}` : (r.reason ?? '這裡不能蓋圓環'));
+      this.events.toast(r.ok ? `圓環完成，花費 ${ntd(r.cost)}` : (r.reason ?? '這裡不能蓋圓環'));
     } else if (this.tool === 'bulldoze') {
       const r = this.city.bulldoze(p, Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6));
-      if (r.ok) this.events.toast(`${r.what ?? '道路'}已拆除，退還 $${r.refund.toLocaleString()}`);
+      if (r.ok) this.events.toast(`${r.what ?? '道路'}已拆除，退還 ${ntd(r.refund)}`);
       else if (r.reason) this.events.toast(r.reason);
     } else if (this.tool === 'zone') this.onPaint(p);
     this.events.changed();
@@ -642,7 +699,20 @@ export class ToolController {
     if (this.tool === 'airport' && this.hover) {
       const plan: Airport = { id: -1, p: this.hover, angle: this.radians, runways: this.runways };
       w.setFootprint(Aviation.corners(plan), this.city.money >= AIRPORT_COST[this.runways]);
+    } else if (this.facilityKind && this.hover) {
+      const kind = this.facilityKind;
+      const spot = this.city.facilitySpot(kind, this.hover);
+      w.setFootprint(facilityCorners({ kind, ...spot }), !this.city.facilityProblem(kind, spot.p, spot.angle));
     } else w.setFootprint(null, true);
+    // Service areas: the kind being placed, existing ones and the planned one
+    const kind = this.facilityKind;
+    if (kind) {
+      const areas = [...this.city.facilities.values()]
+        .filter((f) => f.kind === kind)
+        .map((f) => ({ p: f.p, r: FACILITIES[f.kind].radius, color: FACILITIES[f.kind].color }));
+      if (this.hover) areas.push({ p: this.city.facilitySpot(kind, this.hover).p, r: FACILITIES[kind].radius, color: 0xffffff });
+      w.setCoverage(areas);
+    } else w.setCoverage([]);
     if (this.tool === 'roundabout') {
       const c = this.hover && this.roundaboutCenter(this.hover);
       w.setBrush(c?.p ?? null, ROUNDABOUT_RADIUS[this.roundaboutSize], c?.snapped ? 0xf2b134 : 0xffffff);
