@@ -234,7 +234,7 @@ describe('traffic lights', () => {
 });
 
 describe('the player car (第一人稱巡查)', () => {
-  it('drives where it is steered but still stops for red lights', () => {
+  it('drives where it is steered and ignores the rules: runs red lights and speeds', () => {
     const city = new City();
     city.buildRoad(free(-200, 0), null, free(200, 0), true);
     city.buildRoad(free(0, -200), null, free(0, 200), true);
@@ -248,14 +248,21 @@ describe('the player car (第一人稱巡查)', () => {
     // Turn left (north, the map's −y) at the crossroads
     car.route = [{ seg: north.id, dir: north.a === west.b ? 1 : -1 }];
     let ranRed = false;
+    let top = 0;
     for (let i = 0; i < 1200 && car.seg === west.id; i++) {
       const light = t.lightFor(west, car.dir);
       const before = car.pos;
       t.step(0.05);
+      top = Math.max(top, car.speed);
       const line = west.length - (t.junctions().get(west.b)?.stopBack ?? 6);
       if (light === 'red' && before <= line && car.seg === west.id && car.pos > line + 0.01) ranRed = true;
+      if (i === 0) {
+        // Hold the light red for it: it goes anyway
+        for (let k = 0; k < 400 && t.lightFor(west, car.dir) !== 'red'; k++) t.step(0.05);
+      }
     }
-    expect(ranRed).toBe(false);
+    expect(ranRed).toBe(true);
+    expect(top).toBeGreaterThan(t.rules.speed);
     expect(car.seg).toBe(north.id);
     expect(t.vehicles).toContain(car);
     // It never "arrives" or gives up, even standing still at the end of the road

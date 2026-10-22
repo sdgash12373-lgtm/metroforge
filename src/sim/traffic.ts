@@ -15,6 +15,8 @@ const MIN_GAP = 2.0;
 export const GIVE_UP_AFTER = 40;
 /** The player's car accelerates this much harder than traffic. */
 const PLAYER_PUNCH = 1.8;
+/** Patrol ignores the rules: it may drive this much faster than the speed limit. */
+const PLAYER_TOP = 1.6;
 
 export type Dir = 1 | -1;
 export type VehicleKind = 'car' | 'truck' | 'bus' | 'metro' | 'train' | 'hsr';
@@ -454,17 +456,19 @@ export class Traffic {
           if (room < len + MIN_GAP) gap = Math.min(gap, seg.length - v.pos + MIN_GAP * 0.5);
           leadSpeed = room === Infinity ? this.rules.speed : 0;
         }
-        const stop = this.stopLine(v, seg);
+        // The patrol car ignores the rules: it runs red lights and drives through the car ahead
+        if (v.player) gap = v.route.length ? Infinity : v.dest - v.pos + MIN_GAP;
+        const stop = v.player ? Infinity : this.stopLine(v, seg);
         if (stop - v.pos < gap) {
           gap = stop - v.pos;
           leadSpeed = 0;
         }
         gap = Math.max(gap, 0.01);
         const { accel, brake } = this.rules;
-        const top = this.topSpeed(seg);
+        const top = this.topSpeed(seg) * (v.player ? PLAYER_TOP : 1);
         const sStar = MIN_GAP + v.speed * HEADWAY + (v.speed * (v.speed - leadSpeed)) / (2 * Math.sqrt(accel * brake));
         let acc = accel * (1 - (v.speed / top) ** 4 - (Math.max(sStar, 0) / gap) ** 2);
-        // The player's car: the controls ask, but it still brakes for lights and the car ahead
+        // The player's car goes as the controls ask
         if (v.player) {
           // A livelier car than the city's traffic, so driving it feels responsive
           const free = acc * PLAYER_PUNCH;
@@ -497,7 +501,7 @@ export class Traffic {
         if (v.pos >= seg.length) {
           const next = v.route[0];
           const entry = this.entryRoom(next);
-          if (entry.room >= len + MIN_GAP) {
+          if (v.player || entry.room >= len + MIN_GAP) {
             v.pos -= seg.length;
             v.seg = next.seg;
             v.dir = next.dir;
