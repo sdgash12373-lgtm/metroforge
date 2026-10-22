@@ -19,10 +19,12 @@ function skies(w: Weather, from: number, days: number) {
 }
 
 describe('time and weather', () => {
-  it('takes ten steps (five seconds) to make a day', () => {
+  it('takes 2,400 half-second steps (20 minutes) to make a day', () => {
     const city = new City();
+    expect(clock(city.day).hour).toBeCloseTo(8);
+    const start = city.day;
     for (let i = 0; i < DAY_STEPS; i++) city.tick(rng());
-    expect(city.day).toBe(1);
+    expect(city.day - start).toBeCloseTo(1);
     expect(clock(0.75).hour).toBe(18);
   });
 

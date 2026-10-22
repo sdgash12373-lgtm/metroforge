@@ -9,7 +9,7 @@ import { latestTicker, markSeen, seenLatest, watchForNewVersion } from './ui/upd
 import { attachInput } from './ui/input';
 import { ToolController } from './ui/tools';
 
-/** Seconds per simulation step at normal speed; DAY_STEPS of them make a 5-second day. */
+/** Seconds per simulation step at normal speed; DAY_STEPS of them make a 20-minute day. */
 const TICK_SECONDS = 0.5;
 const LOCK_KEY = 'skyline-city:build-mode';
 const SETTINGS_KEY = 'skyline-city:settings';

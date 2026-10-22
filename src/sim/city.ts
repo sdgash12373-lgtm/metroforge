@@ -24,8 +24,10 @@ import { CELL, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots,
 
 export const ROAD_COST_PER_M = 20;
 export const BULLDOZE_REFUND = 0.5;
-/** Simulation steps in one game day (each step is half a second at normal speed). */
-export const DAY_STEPS = 10;
+/** Simulation steps in one game day: each is half a second at normal speed, so a day lasts 20 minutes. */
+export const DAY_STEPS = 2400;
+/** Steps in one game hour; the budget shows money per hour. */
+export const HOUR_STEPS = DAY_STEPS / 24;
 
 /** Road upkeep per meter per simulation step. */
 export const ROAD_UPKEEP = 0.004;
@@ -94,7 +96,7 @@ export interface Needs {
   coverage: Record<ServiceKind, number>;
   /** services most residents lack, worst first */
   wants: ServiceKind[];
-  /** visitors to the landmarks yesterday */
+  /** visitors to the landmarks per game hour */
   tourists: number;
 }
 
@@ -162,8 +164,8 @@ export class City {
   money = 80000;
   /** the sky over the city, by the climate of its land */
   readonly weather: Weather;
-  /** simulation steps so far; DAY_STEPS make a day */
-  steps = 0;
+  /** simulation steps so far; DAY_STEPS make a day. A new city starts at 8 in the morning. */
+  steps = DAY_STEPS / 3;
   /** days so far, with the part of today that has passed */
   get day(): number {
     return this.steps / DAY_STEPS;
@@ -171,7 +173,7 @@ export class City {
   demand: Record<DemandKey, number> = { R: 50, C: 30, O: 20, I: 40 };
   stats: CityStats = { population: 0, jobs: 0, buildings: 0, disconnected: 0, riders: 0 };
   taxes: TaxRates = { residential: DEFAULT_TAX, business: DEFAULT_TAX };
-  /** last day's income and expenses */
+  /** income and expenses per game hour, at the current rate */
   budget: Budget = {
     residentialTax: 0,
     businessTax: 0,
@@ -811,9 +813,9 @@ export class City {
   }
 
   /**
-   * One simulation step (a tenth of a day): demand, building growth (needs a road to the highway;
+   * One simulation step (half a second at normal speed): demand, building growth (needs a road to the highway;
    * slowed by jams), new trips onto the roads, then taxes and upkeep. The rates below are per step;
-   * the budget shows them per day.
+   * the budget shows them per hour.
    */
   tick(rng: Rng = Math.random): void {
     const zoned = this.survey();
@@ -871,7 +873,7 @@ export class City {
     }
     // Few visitors come in a storm, none in a typhoon
     tourists *= { clear: 1, cloudy: 1, fog: 0.9, rain: 0.75, storm: 0.5, typhoon: 0 }[this.weather.sky];
-    this.needs.tourists = Math.round(tourists * DAY_STEPS);
+    this.needs.tourists = Math.round(tourists * HOUR_STEPS);
     const step = {
       residentialTax: this.stats.population * this.taxes.residential * 0.005,
       businessTax: this.stats.jobs * this.taxes.business * 0.004,
@@ -881,18 +883,18 @@ export class City {
       servicesUpkeep: services,
       tourism: tourists * TOURIST_SPEND,
     };
-    const perDay = (v: number) => v * DAY_STEPS;
+    const perHour = (v: number) => v * HOUR_STEPS;
     this.budget = {
-      residentialTax: perDay(step.residentialTax),
-      businessTax: perDay(step.businessTax),
-      roadUpkeep: perDay(step.roadUpkeep),
+      residentialTax: perHour(step.residentialTax),
+      businessTax: perHour(step.businessTax),
+      roadUpkeep: perHour(step.roadUpkeep),
       // Fares come in bursts as vehicles reach stops and planes leave; show running averages
-      transitFares: this.budget.transitFares * 0.9 + perDay(fares) * 0.1,
-      transitUpkeep: perDay(step.transitUpkeep),
-      airIncome: this.budget.airIncome * 0.97 + perDay(air.incomeToday) * 0.03,
-      airUpkeep: perDay(step.airUpkeep),
-      servicesUpkeep: perDay(step.servicesUpkeep),
-      tourism: perDay(step.tourism),
+      transitFares: this.budget.transitFares * 0.9 + perHour(fares) * 0.1,
+      transitUpkeep: perHour(step.transitUpkeep),
+      airIncome: this.budget.airIncome * 0.97 + perHour(air.incomeToday) * 0.03,
+      airUpkeep: perHour(step.airUpkeep),
+      servicesUpkeep: perHour(step.servicesUpkeep),
+      tourism: perHour(step.tourism),
     };
     this.money +=
       step.residentialTax + step.businessTax + fares + air.incomeToday + step.tourism - step.roadUpkeep - step.transitUpkeep - step.airUpkeep - step.servicesUpkeep;
