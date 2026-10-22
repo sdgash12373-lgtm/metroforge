@@ -1,22 +1,24 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Conditions } from '../sim/weather';
 import { SkySystem, addWindows } from './sky';
 import type { AngleGuide } from '../sim/angles';
 import type { City, District } from '../sim/city';
 import type { GuideLine } from '../sim/guides';
 import { type Quad, type Vec2, closestOnSamples, bboxNear } from '../sim/geometry';
-import { ROAD_WIDTH } from '../sim/roads';
+import { roadWidth } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { BuildingLayer } from './buildings';
 import { CameraRig } from './cameraRig';
 import type { PathPiece } from '../sim/transit';
-import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay } from './roadMesh';
+import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay, streetTreeSpots } from './roadMesh';
 import { StopLayer } from './transit';
 import { buildFacilityGeometry } from './facilities';
 import { SignalLayer } from './signals';
 import { HILL_TREES, LOWLAND_TREES, MAP_SIZE, type TreeSpot, buildGroundGeometry, treeSpots } from './terrainMesh';
 import { FLAT, type Terrain, WATER_LEVEL } from '../sim/terrain';
 import { VehicleLayer } from './vehicles';
+import { PedestrianLayer } from './pedestrians';
 import { RAIL_KINDS, type RailKind, TRACK_OFFSET } from '../sim/rail';
 import type { RoadNetwork } from '../sim/roads';
 import { buildAirportGeometry, PlaneLayer } from './airport';
@@ -38,6 +40,21 @@ interface RailLayer {
 }
 
 const TREE_COUNT = LOWLAND_TREES + HILL_TREES;
+const STREET_TREES = 4000;
+
+/** A round-crowned street tree in one geometry, coloured per vertex. */
+function mergeTree(): THREE.BufferGeometry {
+  const paint = (g: THREE.BufferGeometry, hex: number) => {
+    const c = new THREE.Color(hex);
+    const n = g.getAttribute('position').count;
+    g.setAttribute('color', new THREE.Float32BufferAttribute(Array.from({ length: n * 3 }, (_, i) => [c.r, c.g, c.b][i % 3]), 3));
+    return g;
+  };
+  const trunk = paint(new THREE.CylinderGeometry(0.18, 0.25, 2.4, 5).translate(0, 1.2, 0).toNonIndexed(), 0x6e5238);
+  const crown = paint(new THREE.IcosahedronGeometry(1.6, 0).translate(0, 3.6, 0), 0x4f8f45);
+  const planter = paint(new THREE.CylinderGeometry(0.9, 0.9, 0.15, 6).translate(0, 0.08, 0).toNonIndexed(), 0x5b4a3a);
+  return mergeGeometries([trunk, crown, planter])!;
+}
 
 export class World {
   readonly renderer: THREE.WebGLRenderer;
@@ -71,6 +88,9 @@ export class World {
   private readonly overlay: THREE.Mesh;
   private overlayAge = Infinity;
   private readonly trees: { trunks: THREE.InstancedMesh; crowns: THREE.InstancedMesh; spots: TreeSpot[] };
+  readonly pedestrians: PedestrianLayer;
+  /** trees planted along wide sidewalks */
+  private readonly streetTrees: THREE.InstancedMesh;
   private terrain: Terrain = FLAT;
   private readonly water: THREE.Mesh;
   private readonly preview: THREE.Mesh;
@@ -143,8 +163,18 @@ export class World {
     this.buildings = new BuildingLayer(shadows);
     this.scene.add(this.buildings.group);
     this.trees = this.makeTrees(shadows);
+    this.streetTrees = new THREE.InstancedMesh(
+      mergeTree(),
+      new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }),
+      STREET_TREES,
+    );
+    this.streetTrees.castShadow = shadows;
+    this.streetTrees.count = 0;
+    this.scene.add(this.streetTrees);
     this.vehicles = new VehicleLayer(shadows);
     this.scene.add(this.vehicles.group);
+    this.pedestrians = new PedestrianLayer(shadows);
+    this.scene.add(this.pedestrians.mesh);
     this.overlay = new THREE.Mesh(
       new THREE.BufferGeometry(),
       new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3 }),
@@ -270,12 +300,11 @@ export class World {
       return false;
     };
     const segs = [...city.net.segments.values()];
-    const clear = ROAD_WIDTH / 2 + 2;
     const m = new THREE.Matrix4();
     let n = 0;
     for (const t of this.trees.spots) {
       if (!t.wild && (near(t.x, t.y) || city.occupied(t))) continue;
-      if (segs.some((s) => bboxNear(s.bbox, t, clear) && closestOnSamples(s.samples, t).d < clear)) continue;
+      if (segs.some((s) => bboxNear(s.bbox, t, roadWidth(s) / 2 + 2) && closestOnSamples(s.samples, t).d < roadWidth(s) / 2 + 2)) continue;
       m.makeScale(t.s, t.s, t.s).setPosition(t.x, t.h, t.y);
       this.trees.trunks.setMatrixAt(n, m);
       this.trees.crowns.setMatrixAt(n, m);
@@ -287,6 +316,14 @@ export class World {
     this.trees.trunks.instanceMatrix.needsUpdate = true;
     this.trees.crowns.instanceMatrix.needsUpdate = true;
     if (this.trees.crowns.instanceColor) this.trees.crowns.instanceColor.needsUpdate = true;
+    const street = streetTreeSpots(city.net).slice(0, STREET_TREES);
+    street.forEach((t, i) => {
+      const k = 0.9 + ((i * 7) % 5) * 0.06;
+      m.makeScale(k, k, k).setPosition(t.x, 0, t.y);
+      this.streetTrees.setMatrixAt(i, m);
+    });
+    this.streetTrees.count = street.length;
+    this.streetTrees.instanceMatrix.needsUpdate = true;
   }
 
   /** Forces a full rebuild on the next sync, e.g. after switching to another city. */
@@ -340,7 +377,9 @@ export class World {
     this.facilities.visible = !on;
     this.trees.trunks.visible = !on;
     this.trees.crowns.visible = !on;
+    this.streetTrees.visible = !on;
     this.vehicles.group.visible = !on;
+    this.pedestrians.mesh.visible = !on;
     this.signals.group.visible = !on;
     const { sidewalk, asphalt, markings, concrete } = this.materials;
     for (const m of [sidewalk, asphalt, markings, concrete]) {
@@ -542,7 +581,8 @@ export class World {
   }
 
   /** Per-frame updates: vehicles always, the traffic colours a few times a second. */
-  animate(city: City, dt: number): void {
+  animate(city: City, dt: number, simDt = dt, hour = 12, rain = 0): void {
+    this.pedestrians.update(city, simDt, hour, rain);
     this.vehicles.update(city.traffic, (v) => city.transit.lines.get(v.line ?? -1)?.color ?? 0xf2b134);
     for (const k of RAIL_KINDS) this.rails[k].trains.update(city.rails[k]);
     this.planes.update(city.aviation);

@@ -1,13 +1,15 @@
 import './style.css';
 import { City, DAY_STEPS } from './sim/city';
 import { TERRAINS, type TerrainName } from './sim/terrain';
+import { clock } from './sim/weather';
 import { AUTO_SLOT, SaveSlots, openStore } from './storage/saves';
 import { Menu, type Settings } from './ui/menu';
 import { World } from './render/world';
 import { Hud, SPEEDS } from './ui/hud';
 import { latestTicker, markSeen, seenLatest, watchForNewVersion } from './ui/updates';
 import { attachInput } from './ui/input';
-import { ToolController } from './ui/tools';
+import { type Tool, ToolController } from './ui/tools';
+import { DriveMode } from './ui/drive';
 
 /** Seconds per simulation step at normal speed; DAY_STEPS of them make a 20-minute day. */
 const TICK_SECONDS = 0.5;
@@ -67,6 +69,23 @@ hud = new Hud(document.getElementById('ui')!, tools, {
     void autosave();
     menu.show('pause');
   },
+  drive: () => {
+    toolBeforeDrive = tools.tool;
+    tools.setTool('pan');
+    if (!patrol.start(city)) tools.setTool(toolBeforeDrive);
+    else {
+      hud!.speed = 1;
+      hud!.render();
+    }
+  },
+});
+let toolBeforeDrive: Tool = 'road';
+const patrol: DriveMode = new DriveMode(document.getElementById('ui')!, world, {
+  toast: (m) => hud?.toast(m),
+  changed: () => {
+    if (!patrol?.active && tools.tool === 'pan') tools.setTool(toolBeforeDrive);
+    hud?.render();
+  },
 });
 attachInput(world.renderer.domElement, world.rig, tools);
 try {
@@ -88,6 +107,7 @@ hud.render();
 
 /** Swaps in another city, keeping the view and tools in step. */
 function setCity(next: City): void {
+  patrol.stop();
   city = next;
   city.maxVehicles = MAX_VEHICLES;
   tools.setCity(city);
@@ -138,6 +158,7 @@ const menu: Menu = new Menu(document.getElementById('ui')!, slots, {
     }
   },
   quit: async () => {
+    patrol.stop();
     await autosave();
     showcase();
   },
@@ -214,9 +235,10 @@ function frame(now: number): void {
     }
   }
   world.sync(city);
-  world.animate(city, dt);
+  patrol.update(dt);
   const days = city.day + acc / TICK_SECONDS / DAY_STEPS;
   const weather = city.weather.at(world.rig.target, days);
+  world.animate(city, dt, Math.min(drive, 0.5), clock(days).hour, weather.precip);
   world.updateSky(days, weather, dt);
   hud!.setWeather(weather);
   if (city.weather.sky !== lastSky) {

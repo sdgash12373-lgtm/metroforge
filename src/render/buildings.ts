@@ -50,6 +50,8 @@ export function buildingShape(lot: Lot): Shape {
     case Zone.Commercial:
       return { w: f, d: f * 0.85, h: 3.5 + lot.level * (2.5 + r * 2) };
     case Zone.Office:
+      // Skyscrapers of a 直轄市: full cells, much taller
+      if (lot.level > 5) return { w: f * 1.08, d: f * 1.02, h: 70 + (lot.level - 5) * (40 + r * 45) };
       return { w: f * (0.75 + r * 0.2), d: f * (0.75 + r * 0.2), h: 8 + lot.level * (7 + r * 6) };
     case Zone.Industrial:
       return { w: f, d: f * 0.9, h: 4 + lot.level * 1.5 + r * 2 };
@@ -111,9 +113,14 @@ export class BuildingLayer {
     let b = 0;
     let r = 0;
     let k = 0;
+    // A skyscraper takes in the skyscraper lot behind it too, for a bigger footprint
+    const tower = (l: Lot | undefined) => !!l && !l.blocked && l.zone === Zone.Office && l.level > 5;
+    const merged = new Set<Lot>();
+    const behind = new Map<Lot, Lot>();
+    for (const seg of city.net.segments.values()) for (const lot of seg.lots) if (lot.front) behind.set(lot.front, lot);
     for (const seg of city.net.segments.values()) {
       for (const lot of seg.lots) {
-        if (lot.blocked) continue;
+        if (lot.blocked || merged.has(lot)) continue;
         if (lot.level === 0) {
           if (t >= MAX) continue;
           if (lot.zone !== Zone.None) this.place(this.tiles, t++, lot, lot.x, 0.12, lot.y, 1, 1, 1, ZONES[lot.zone].color);
@@ -123,10 +130,18 @@ export class BuildingLayer {
         if (b >= MAX) continue;
         const zone = lot.zone as Exclude<Zone, Zone.None>;
         const shape = buildingShape(lot);
+        const back2 = behind.get(lot);
+        let deep = false;
+        if (tower(lot) && tower(back2) && !merged.has(back2!) && lot.depth % 2 === 1) {
+          merged.add(back2!);
+          shape.d = CELL * 1.8;
+          shape.h = Math.max(shape.h, buildingShape(back2!).h) * 1.15;
+          deep = true;
+        }
         const walls = WALLS[zone];
         const wall = walls[Math.floor(lot.seed * walls.length)];
         // Buildings sit toward the road: shift back from cell center by the spare depth
-        const back = (CELL * 0.9 - shape.d) / 2;
+        const back = deep ? -CELL / 2 : (CELL * 0.9 - shape.d) / 2;
         const nx = -lot.dir.y * lot.side;
         const ny = lot.dir.x * lot.side;
         const x = lot.x - nx * back;
@@ -135,6 +150,10 @@ export class BuildingLayer {
         if (zone === Zone.ResidentialLow && r < MAX) {
           const roof = ROOFS[Math.floor(((lot.seed * 7) % 1) * ROOFS.length)];
           this.place(this.roofs, r++, lot, x, shape.h, z, shape.w + 0.6, 2.2, shape.d + 0.6, roof);
+        } else if (zone === Zone.Office && lot.level > 5 && b < MAX) {
+          // Setback crown and a mast on top of a skyscraper
+          this.place(this.bodies, b++, lot, x, shape.h, z, shape.w * 0.7, shape.h * 0.08, shape.d * 0.7, wall);
+          if (k < this.stacks.instanceMatrix.count) this.place(this.stacks, k++, lot, x, shape.h * 1.08, z, 0.6, 8 + lot.seed * 14, 0.6, 0xdfe5ea);
         } else if (zone === Zone.Industrial && k < this.stacks.instanceMatrix.count) {
           this.place(this.stacks, k++, lot, x + lot.dir.x * shape.w * 0.25, shape.h, z + lot.dir.y * shape.w * 0.25, 1.2, 4 + lot.level * 2, 1.2, 0x8d8a85);
         }

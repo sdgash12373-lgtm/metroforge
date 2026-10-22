@@ -1,8 +1,9 @@
 import { angleGuides } from '../sim/angles';
-import { FACILITIES, type FacilityKind, type LandmarkKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners } from '../sim/facilities';
+import { FACILITIES, type FacilityKind, type GreenKind, type LandmarkKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners } from '../sim/facilities';
 import { ntd } from '../sim/format';
 import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
-import type { City } from '../sim/city';
+import type { City, RoadStyle } from '../sim/city';
+import { LEVELS, UNLOCK } from '../sim/levels';
 import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, lerp, quadPoint } from '../sim/geometry';
 import { HOUR_STEPS, ROUNDABOUT_RADIUS, type RoundaboutSize } from '../sim/city';
@@ -17,6 +18,7 @@ export type Tool =
   | 'road'
   | 'curve'
   | 'roundabout'
+  | 'upgradeRoad'
   | 'zone'
   | 'bulldoze'
   | 'traffic'
@@ -26,10 +28,14 @@ export type Tool =
   | 'streetName'
   | 'district'
   | ServiceKind
-  | 'landmark';
+  | 'landmark'
+  | 'greenery'
+  | 'footbridge'
+  | 'demolish';
 
-/** Tools that place a public service or landmark. */
-export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' => t === 'landmark' || (SERVICE_KINDS as string[]).includes(t);
+/** Tools that place a public service, landmark, green space or footbridge. */
+export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' =>
+  t === 'landmark' || t === 'greenery' || t === 'footbridge' || (SERVICE_KINDS as string[]).includes(t);
 
 /** Train tools either lay track or plan lines through stations. */
 export type RailAction = 'track' | 'line';
@@ -42,6 +48,17 @@ export const DISTRICT_MAX = 600;
 
 /** Airports turn in steps of this many degrees. */
 const AIRPORT_TURN = 15;
+
+/** What the road upgrade tool turns a street into. */
+export type StyleChoice = 1 | 2 | 4 | 'walk' | 'nowalk';
+export const STYLE_CHOICES: [StyleChoice, string][] = [
+  [1, '雙向單線道'],
+  [2, '雙向雙線道'],
+  [4, '雙向四線道'],
+  ['walk', '加人行道'],
+  ['nowalk', '移除人行道'],
+];
+const styleOf = (c: StyleChoice): RoadStyle => (c === 'walk' ? { walk: true } : c === 'nowalk' ? { walk: false } : { lanes: c });
 
 /** Which level the road tools build on. */
 export type RoadLevel = 'ground' | 'elevated' | 'tunnel';
@@ -67,6 +84,7 @@ export class ToolController {
   brushRadius = BRUSH_DEFAULT;
   roadLevel: RoadLevel = 'ground';
   roundaboutSize: RoundaboutSize = 4;
+  roadStyle: StyleChoice = 2;
   /** stops of the bus or train line being planned */
   lineDraft: number[] = [];
   private draftPath: PathPiece[] = [];
@@ -74,6 +92,8 @@ export class ToolController {
   selectedLine: number | null = null;
   /** which landmark the landmark tool builds */
   landmark: LandmarkKind = 'tower85';
+  /** which green space the 綠化 tool builds */
+  green: GreenKind = 'plaza';
   /** taps pick a line on the map, and a second tap on it removes it */
   removingLines = false;
   railAction: RailAction = 'track';
@@ -217,6 +237,28 @@ export class ToolController {
     this.selectedFlight = null;
     this.events.toast('航班已取消');
     this.events.changed();
+  }
+
+  setRoadStyle(c: StyleChoice): void {
+    this.roadStyle = c;
+    this.events.changed();
+    this.refresh();
+  }
+
+  /** The street under p, for the upgrade tool. */
+  private streetAt(p: Vec2) {
+    const r = Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6);
+    const hit = this.city.net.segmentAt(p, r, 0);
+    return hit && !hit.seg.oneway ? hit.seg : null;
+  }
+
+  private upgradeHint(): string {
+    if (!this.city.unlocked('roadUpgrade')) return `城市升級為「${LEVELS[UNLOCK.roadUpgrade].name}」後開放道路升級與人行道`;
+    const seg = this.hover && this.streetAt(this.hover);
+    const label = STYLE_CHOICES.find(([c]) => c === this.roadStyle)![1];
+    if (!seg) return `選好樣式後點一條道路：整條路（直行穿過路口的部分）改為「${label}」；拓寬會把兩旁的建築往後移`;
+    const cost = this.city.restyleCost(this.city.net.street(seg), styleOf(this.roadStyle));
+    return `${seg.name ?? '這條路'} → ${label} · ${cost ? `約 ${ntd(cost)}` : '免費'}　點一下套用`;
   }
 
   setRoundaboutSize(size: RoundaboutSize): void {
@@ -414,6 +456,8 @@ export class ToolController {
         return this.drawHint('道路', '拉路');
       case 'zone':
         return this.zone === Zone.None ? '在格子上塗抹以清除分區' : `塗抹道路旁的格子設為「${ZONES[this.zone].name}」；雙指移動地圖`;
+      case 'upgradeRoad':
+        return this.upgradeHint();
       case 'roundabout': {
         const cost = this.city.roundaboutCost(this.roundaboutSize);
         return `${this.roundaboutSize} 通圓環 · 約 ${ntd(cost)}　靠近路口或道路會自動吸附（橘色圈），壓到的道路自動接上；車輛逆時針單向繞行`;
@@ -439,7 +483,14 @@ export class ToolController {
       case 'fire':
       case 'hospital':
       case 'landmark':
+      case 'greenery':
+      case 'footbridge':
         return this.facilityHint();
+      case 'demolish': {
+        const f = this.hover && this.city.facilityAt(this.hover, 2);
+        if (f) return `${FACILITIES[f.kind].label}：點一下拆除，退還 ${ntd(Math.round(FACILITIES[f.kind].cost * 0.5))}`;
+        return '點公共建設、綠化建設或地標拆除，退還一半費用（道路和軌道請用「拆除」）';
+      }
       case 'streetName': {
         const seg = this.selectedStreet !== null ? this.city.net.segments.get(this.selectedStreet) : undefined;
         if (seg) return `${seg.name ?? '這條路'}：在上方輸入路名，整條路（直行穿過路口的部分）都會套用`;
@@ -456,7 +507,14 @@ export class ToolController {
   /** The kind of facility the active tool places. */
   get facilityKind(): FacilityKind | null {
     if (this.tool === 'landmark') return this.landmark;
+    if (this.tool === 'greenery') return this.green;
     return isFacilityTool(this.tool) ? this.tool : null;
+  }
+
+  setGreen(kind: GreenKind): void {
+    this.green = kind;
+    this.events.changed();
+    this.refresh();
   }
 
   setLandmark(kind: LandmarkKind): void {
@@ -474,7 +532,9 @@ export class ToolController {
       if (problem) return problem;
     }
     const tour = spec.tourists ? '・吸引觀光客' : '';
-    return `${spec.label} · ${ntd(spec.cost)} · 每小時維護 ${ntd(spec.upkeep * HOUR_STEPS)} · 範圍 ${spec.radius} 公尺${tour}　${spec.blurb}；點道路旁的空地興建`;
+    const where = kind === 'footbridge' ? '點馬路（離路口遠一點）蓋一座橫跨的天橋' : '點道路旁的空地興建';
+    const park = spec.serves === 'park' ? '・算作公園' : '';
+    return `${spec.label} · ${ntd(spec.cost)} · 每小時維護 ${ntd(spec.upkeep * HOUR_STEPS)} · 範圍 ${spec.radius} 公尺${tour}${park}　${spec.blurb}；${where}`;
   }
 
   /** Hint for drawing a road or track: length and price of the ghost, or how to start. */
@@ -547,7 +607,14 @@ export class ToolController {
     this.hover = p;
     if (this.isRoadTool) this.tapRoad(p);
     else if (this.plansLines) this.tapLine(p);
-    else if (this.tool === 'streetName') {
+    else if (this.tool === 'upgradeRoad') {
+      const seg = this.streetAt(p);
+      if (!seg) this.events.toast('點一條道路來升級（圓環除外）');
+      else {
+        const r = this.city.restyleRoad(seg.id, styleOf(this.roadStyle));
+        this.events.toast(r.ok ? `道路已改為「${STYLE_CHOICES.find(([c]) => c === this.roadStyle)![1]}」，花費 ${ntd(r.cost)}` : (r.reason ?? '不能升級'));
+      }
+    } else if (this.tool === 'streetName') {
       const net = this.city.net;
       const r = Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6);
       const hit = net.segmentAt(p, r, 0) ?? net.segmentAt(p, r);
@@ -574,6 +641,9 @@ export class ToolController {
     else if (this.tool === 'roundabout') {
       const r = this.city.buildRoundabout(this.roundaboutCenter(p).p, this.roundaboutSize);
       this.events.toast(r.ok ? `圓環完成，花費 ${ntd(r.cost)}` : (r.reason ?? '這裡不能蓋圓環'));
+    } else if (this.tool === 'demolish') {
+      const r = this.city.demolish(p);
+      this.events.toast(r.ok ? `${r.what}已拆除，退還 ${ntd(r.refund)}` : (r.reason ?? '這裡沒有建設'));
     } else if (this.tool === 'bulldoze') {
       const r = this.city.bulldoze(p, Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6));
       if (r.ok) this.events.toast(`${r.what ?? '道路'}已拆除，退還 ${ntd(r.refund)}`);
@@ -686,6 +756,11 @@ export class ToolController {
       w.setCursor(near ?? null, true);
     }
     w.setDraftLine(this.plansLines && t ? this.draftPath : null, LINE_COLORS[((t?.nextLine ?? 1) - 1) % LINE_COLORS.length], t?.net);
+    if (this.tool === 'upgradeRoad') {
+      const seg = this.hover && this.city.unlocked('roadUpgrade') ? this.streetAt(this.hover) : null;
+      const path = seg ? this.city.net.street(seg).map((x) => ({ seg: x.id, dir: 1 as const, from: 0, to: x.length })) : null;
+      w.setDraftLine(path, 0x4cc3f2, this.city.net, 0, 6);
+    }
     if (this.tool === 'streetName') {
       const seg = this.selectedStreet !== null ? this.city.net.segments.get(this.selectedStreet) : undefined;
       const path = seg ? this.city.net.street(seg).map((x) => ({ seg: x.id, dir: 1 as const, from: 0, to: x.length })) : null;
@@ -703,6 +778,9 @@ export class ToolController {
       const kind = this.facilityKind;
       const spot = this.city.facilitySpot(kind, this.hover);
       w.setFootprint(facilityCorners({ kind, ...spot }), !this.city.facilityProblem(kind, spot.p, spot.angle));
+    } else if (this.tool === 'demolish' && this.hover) {
+      const f = this.city.facilityAt(this.hover, 2);
+      w.setFootprint(f ? facilityCorners(f) : null, false);
     } else w.setFootprint(null, true);
     // Service areas: the kind being placed, existing ones and the planned one
     const kind = this.facilityKind;

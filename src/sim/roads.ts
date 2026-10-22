@@ -18,6 +18,18 @@ import type { Lot } from './zoning';
 
 /** Two 3.5 m lanes plus 1.5 m sidewalks. */
 export const ROAD_WIDTH = 10;
+export const LANE_WIDTH = 3.5;
+/** Extra width each side for a wide, tree-lined sidewalk (人行道). */
+export const WALK_EXTRA = 2.5;
+/** Lanes each way a road can be upgraded to: 雙向單線道, 雙向雙線道, 雙向四線道. */
+export const LANE_CHOICES = [1, 2, 4] as const;
+export type LaneCount = (typeof LANE_CHOICES)[number];
+
+/** Width of the asphalt: lanes each way, both ways. */
+export const asphaltWidth = (seg: { lanes?: number }): number => (seg.lanes ?? 1) * 2 * LANE_WIDTH;
+/** Full width, kerb to kerb including sidewalks. */
+export const roadWidth = (seg: { lanes?: number; walk?: boolean }): number =>
+  asphaltWidth(seg) + (ROAD_WIDTH - 2 * LANE_WIDTH) + (seg.walk ? WALK_EXTRA * 2 : 0);
 /** Shortest road piece we keep; anything shorter is folded into a junction. */
 export const MIN_SEGMENT = 4;
 /** Deck height of elevated roads, enough for traffic to pass underneath. */
@@ -53,6 +65,10 @@ export interface RoadSegment {
   oneway: boolean;
   /** street name the player gave it */
   name?: string;
+  /** lanes each way (1 when unset) */
+  lanes?: LaneCount;
+  /** wide sidewalks with street trees */
+  walk?: boolean;
 }
 
 export type Snap =
@@ -95,6 +111,8 @@ export class RoadNetwork {
     const seg: RoadSegment = {
       oneway,
       name: from?.name,
+      ...(from?.lanes && from.lanes > 1 ? { lanes: from.lanes } : {}),
+      ...(from?.walk ? { walk: true } : {}),
       id: id ?? this.nextSeg++,
       a,
       b,

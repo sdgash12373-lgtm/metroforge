@@ -158,7 +158,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
   const step = (now: number) => {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
-    if (keys.size) {
+    if (keys.size && !rig.driving) {
       const speed = rig.distance * 1.2 * dt;
       let fx = 0;
       let fy = 0;

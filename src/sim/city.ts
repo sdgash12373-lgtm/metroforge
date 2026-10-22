@@ -15,25 +15,30 @@ import {
 import { ntd } from './format';
 import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, quadPoint, sampleQuad } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
-import { ELEVATED_HEIGHT, MAX_GRADE, ROAD_WIDTH, RoadNetwork, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
+import { ELEVATED_HEIGHT, type LaneCount, MAX_GRADE, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
+import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic } from './traffic';
 import { Transit } from './transit';
 import { CELL, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
+/** Highest office level once a 直轄市 opens skyscrapers (otherwise 5). */
+export const OFFICE_TOWER_LEVEL = 7;
 export const BULLDOZE_REFUND = 0.5;
 /** Simulation steps in one game day: each is half a second at normal speed, so a day lasts 20 minutes. */
 export const DAY_STEPS = 2400;
 /** Steps in one game hour; the budget shows money per hour. */
 export const HOUR_STEPS = DAY_STEPS / 24;
+/** Steps in one game month (30 days); the budget shows money per month. */
+export const MONTH_STEPS = DAY_STEPS * MONTH_DAYS;
 
 /** Road upkeep per meter per simulation step. */
 export const ROAD_UPKEEP = 0.004;
 export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
-const SAVE_VERSION = 6;
+const SAVE_VERSION = 8;
 /** Ring radius of a roundabout by its number of exits. */
 export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
 /** Length of the short roads a new roundabout puts out at each exit. */
@@ -72,20 +77,41 @@ const FACILITY_ROAD_GAP = 4;
 /** Residential levels need this many services in reach: level 2 one service, level 3 two, ... */
 const SERVICES_PER_LEVEL = 1;
 
+/**
+ * The city's finances per game month, at the current rate: what comes in moves with the
+ * population, jobs, tax rates, riders and visitors, never a fixed sum.
+ * 每月收入 = 稅收 + 補助 + 規費 + 其他收入; 每月結餘 = 每月收入 − 營運支出 − 建設支出.
+ */
 export interface Budget {
+  /** 稅收 */
   residentialTax: number;
   businessTax: number;
-  roadUpkeep: number;
-  /** tickets on buses and trains */
+  /** 補助: from the central government, per resident by rank */
+  subsidy: number;
+  /** 規費: tickets on buses and trains, and airport fees */
   transitFares: number;
+  airIncome: number;
+  /** 其他收入: what visitors to the landmarks spend */
+  tourism: number;
+  /** 營運支出 */
+  roadUpkeep: number;
   /** buses, trains and track */
   transitUpkeep: number;
-  airIncome: number;
   airUpkeep: number;
   /** parks, schools, police, fire, hospitals and landmarks */
   servicesUpkeep: number;
-  /** what visitors to the landmarks spend */
-  tourism: number;
+  /** civil servants and city offices, per resident by rank */
+  admin: number;
+  /** 建設支出: roads, track, buildings bought, averaged over the last few days */
+  construction: number;
+}
+
+export function budgetTotals(b: Budget): { income: number; taxes: number; fees: number; other: number; running: number; balance: number } {
+  const taxes = b.residentialTax + b.businessTax;
+  const fees = b.transitFares + b.airIncome;
+  const income = taxes + b.subsidy + fees + b.tourism;
+  const running = b.roadUpkeep + b.transitUpkeep + b.airUpkeep + b.servicesUpkeep + b.admin;
+  return { income, taxes, fees, other: b.tourism, running, balance: income - running - b.construction };
 }
 
 /** How well the city looks after its residents. */
@@ -111,6 +137,8 @@ interface NetSave {
   nodes: ([number, number, number] | [number, number, number, number])[];
   /** id, a, b, control x, control y, per-lot zone * 10 + level, 1 if one-way (v3) */
   segs: ([number, number, number, number, number, number[]] | [number, number, number, number, number, number[], number])[];
+  /** v8: widened roads (segment id, lanes each way, 1 if wide sidewalks) */
+  styles?: [number, number, number][];
 }
 
 /** Stops (id, x, y), lines (id, color, stop ids, name) and the fare of one kind of transport. */
@@ -143,6 +171,8 @@ export interface SaveData extends NetSave {
   /** v5: the land the city stands on (older saves are flat) */
   terrain?: TerrainName;
   name?: string;
+  /** v7: rank */
+  level?: number;
   /** v6: parks, schools, police, fire, hospitals and landmarks (id, kind, x, y, angle) */
   facilities?: [number, FacilityKind, number, number, number][];
 }
@@ -161,7 +191,7 @@ export class City {
   transit = new Transit(this.net, this.traffic);
   /** shown on the start screen and in save slots */
   name = '我的城市';
-  money = 80000;
+  money = 500000;
   /** the sky over the city, by the climate of its land */
   readonly weather: Weather;
   /** simulation steps so far; DAY_STEPS make a day. A new city starts at 8 in the morning. */
@@ -173,18 +203,27 @@ export class City {
   demand: Record<DemandKey, number> = { R: 50, C: 30, O: 20, I: 40 };
   stats: CityStats = { population: 0, jobs: 0, buildings: 0, disconnected: 0, riders: 0 };
   taxes: TaxRates = { residential: DEFAULT_TAX, business: DEFAULT_TAX };
-  /** income and expenses per game hour, at the current rate */
+  /** income and expenses per game month, at the current rate */
   budget: Budget = {
     residentialTax: 0,
     businessTax: 0,
-    roadUpkeep: 0,
+    subsidy: 0,
     transitFares: 0,
-    transitUpkeep: 0,
     airIncome: 0,
+    tourism: 0,
+    roadUpkeep: 0,
+    transitUpkeep: 0,
     airUpkeep: 0,
     servicesUpkeep: 0,
-    tourism: 0,
+    admin: 0,
+    construction: 0,
   };
+  /** rank: index into LEVELS */
+  level = 0;
+  /** bumped when the rank changes */
+  levelVersion = 0;
+  /** money spent building since the last step */
+  private spentThisStep = 0;
   facilities = new Map<number, Facility>();
   nextFacility = 1;
   /** bumped when facilities are built or removed */
@@ -226,6 +265,14 @@ export class City {
   }
 
   private roadsChanged(): void {
+    // Footbridges go with the road under them, and fit it when it is widened
+    for (const f of [...this.facilities.values()]) {
+      if (f.kind !== 'footbridge') continue;
+      const seg = this.footbridgeRoad(f.p);
+      if (!seg) this.facilities.delete(f.id);
+      else f.span = roadWidth(seg) + 6;
+      this.facilitiesVersion++;
+    }
     recomputeBlocked(this.net, (p) => this.occupied(p));
     this.traffic.onNetworkChanged();
     this.transit.onNetworkChanged();
@@ -258,7 +305,8 @@ export class City {
   /** Water, hillside, track or an airfield on this spot, so nothing can be built on it. */
   occupied(p: Vec2): boolean {
     if (!buildable(this.terrain, p)) return true;
-    for (const f of this.facilities.values()) if (footprintContains(f, p, 2)) return true;
+    // Footbridges stand on the sidewalks and leave the lots beside them free
+    for (const f of this.facilities.values()) if (f.kind !== 'footbridge' && footprintContains(f, p, 2)) return true;
     for (const a of this.aviation.airports.values()) if (Aviation.contains(a, p, 2)) return true;
     const clear = ROAD_WIDTH / 2 + CELL * 0.45;
     for (const r of RAIL_KINDS) {
@@ -356,7 +404,7 @@ export class City {
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     const created = this.net.addRoad(start, control, end, height);
     if (!created.length) return { ok: false, cost, reason: '這裡已經有道路了' };
-    this.money -= cost;
+    this.spend(cost);
     this.roadsChanged();
     const last = created[created.length - 1];
     return { ok: true, cost, endNode: last.b };
@@ -388,7 +436,7 @@ export class City {
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     const created = sys.net.addRoad(start, control, end, height);
     if (!created.length) return { ok: false, cost, reason: '這裡已經有軌道了' };
-    this.money -= cost;
+    this.spend(cost);
     this.railChanged(kind);
     return { ok: true, cost, endNode: created[created.length - 1].b };
   }
@@ -414,7 +462,7 @@ export class City {
       }
     }
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
-    this.money -= cost;
+    this.spend(cost);
     const airport = this.aviation.addAirport(p, angle, runways);
     this.landChanged();
     return { ok: true, cost, airport };
@@ -426,7 +474,7 @@ export class City {
    */
   facilitySpot(kind: FacilityKind, p: Vec2, angle = 0): { p: Vec2; angle: number; road: boolean } {
     const { d } = FACILITIES[kind];
-    const hit = this.net.segmentAt(p, d + ROAD_WIDTH, 0);
+    const hit = this.net.segmentAt(p, kind === 'footbridge' ? 30 : d + ROAD_WIDTH, 0);
     if (!hit || !this.net.isStreet(hit.seg)) return { p, angle, road: false };
     const s = hit.seg.samples;
     const i = Math.max(1, s.findIndex((q) => q.t >= hit.t));
@@ -443,7 +491,9 @@ export class City {
       nx = -nx;
       ny = -ny;
     }
-    const back = ROAD_WIDTH / 2 + FACILITY_ROAD_GAP / 2 + d / 2;
+    // A footbridge stands across the road, its stairs on both kerbs
+    if (kind === 'footbridge') return { p: on, angle: Math.atan2(ny, nx) - Math.PI / 2, road: true };
+    const back = roadWidth(hit.seg) / 2 + FACILITY_ROAD_GAP / 2 + d / 2;
     // The footprint's depth axis points away from the road
     return { p: { x: on.x + nx * back, y: on.y + ny * back }, angle: Math.atan2(ny, nx) - Math.PI / 2, road: true };
   }
@@ -451,6 +501,8 @@ export class City {
   /** Why a facility can't go here, or null. */
   facilityProblem(kind: FacilityKind, p: Vec2, angle: number): string | null {
     const spec = FACILITIES[kind];
+    if (spec.unlock && !this.unlocked(spec.unlock)) return `城市升級為「${LEVELS[UNLOCK[spec.unlock]].name}」後才能蓋${spec.label}`;
+    if (kind === 'footbridge') return this.footbridgeProblem(p, angle);
     const plan = { kind, p, angle };
     if (isLandmark(kind) && [...this.facilities.values()].some((f) => f.kind === kind)) return `城市裡已經有${spec.label}了`;
     if (footprintGrid(plan).some((q) => !buildable(this.terrain, q))) return `${spec.label}要蓋在平坦的陸地上`;
@@ -463,9 +515,35 @@ export class City {
         return `這裡已經有${FACILITIES[f.kind].label}`;
       }
     }
-    const reach = Math.max(spec.w, spec.d) / 2 + ROAD_WIDTH / 2 + FACILITY_ROAD_GAP + 2;
+    const reach = Math.max(spec.w, spec.d) / 2 + this.widestRoadNear(p, Math.max(spec.w, spec.d)) / 2 + FACILITY_ROAD_GAP + 2;
     if (!this.net.segmentAt(p, reach, 0)) return `${spec.label}要蓋在道路旁邊`;
     if (spec.cost > this.money) return `資金不足，需要 ${ntd(spec.cost)}`;
+    return null;
+  }
+
+  /** Widest street near p, so facilities set back from wide roads still count as beside one. */
+  private widestRoadNear(p: Vec2, r: number): number {
+    let w = ROAD_WIDTH;
+    for (const seg of this.net.segments.values()) if (bboxNear(seg.bbox, p, r + 40)) w = Math.max(w, roadWidth(seg));
+    return w;
+  }
+
+  /** The road a footbridge at p would cross: a street, away from junctions. */
+  private footbridgeRoad(p: Vec2): RoadSegment | null {
+    const hit = this.net.segmentAt(p, 3, 0);
+    return hit && this.net.isStreet(hit.seg) ? hit.seg : null;
+  }
+
+  private footbridgeProblem(p: Vec2, angle: number): string | null {
+    const seg = this.footbridgeRoad(p);
+    if (!seg) return '天橋要蓋在一般道路上，橫跨馬路';
+    if ([seg.a, seg.b].some((n) => dist(this.net.node(n).p, p) < roadWidth(seg) / 2 + 12)) return '離路口太近';
+    const span = roadWidth(seg) + 6;
+    for (const f of this.facilities.values()) {
+      if (f.kind === 'footbridge' && dist(f.p, p) < 40) return '附近已經有天橋';
+      if (f.kind !== 'footbridge' && facilityCorners({ kind: 'footbridge', p, angle, span }).some((q) => footprintContains(f, q))) return `這裡已經有${FACILITIES[f.kind].label}`;
+    }
+    if (FACILITIES.footbridge.cost > this.money) return `資金不足，需要 ${ntd(FACILITIES.footbridge.cost)}`;
     return null;
   }
 
@@ -473,13 +551,17 @@ export class City {
     const cost = free ? 0 : FACILITIES[kind].cost;
     const problem = this.facilityProblem(kind, p, angle);
     if (problem && !(free && problem.startsWith('資金不足'))) return { ok: false, cost, reason: problem };
-    this.money -= cost;
+    this.spend(cost);
     const facility = this.addFacility(kind, p, angle);
     return { ok: true, cost, facility };
   }
 
   private addFacility(kind: FacilityKind, p: Vec2, angle: number, id?: number): Facility {
     const f: Facility = { id: id ?? this.nextFacility++, kind, p: { x: p.x, y: p.y }, angle };
+    if (kind === 'footbridge') {
+      const seg = this.footbridgeRoad(p);
+      f.span = (seg ? roadWidth(seg) : ROAD_WIDTH) + 6;
+    }
     this.nextFacility = Math.max(this.nextFacility, f.id + 1);
     this.facilities.set(f.id, f);
     this.facilitiesVersion++;
@@ -493,6 +575,16 @@ export class City {
     this.landChanged();
   }
 
+  /** Tears down the facility at p and gives back part of what it cost (建設拆除). */
+  demolish(p: Vec2, pad = 2): { ok: boolean; refund: number; reason?: string; what?: string } {
+    const f = this.facilityAt(p, pad);
+    if (!f) return { ok: false, refund: 0, reason: '點一棟公共建設或地標來拆除' };
+    const refund = Math.round(FACILITIES[f.kind].cost * BULLDOZE_REFUND);
+    this.removeFacility(f.id);
+    this.spend(-refund);
+    return { ok: true, refund, what: FACILITIES[f.kind].label };
+  }
+
   facilityAt(p: Vec2, pad = 0): Facility | null {
     for (const f of this.facilities.values()) if (footprintContains(f, p, pad)) return f;
     return null;
@@ -504,8 +596,11 @@ export class City {
     let landmark = 0;
     for (const f of this.facilities.values()) {
       if (!covers(f, p)) continue;
+      const spec = FACILITIES[f.kind];
       if (isLandmark(f.kind)) landmark += 0.5;
-      else kinds.add(f.kind);
+      else if (f.kind === 'footbridge') landmark += 0.1;
+      else if (spec.serves) kinds.add(spec.serves);
+      else kinds.add(f.kind as ServiceKind);
     }
     return { kinds, landmark: Math.min(1, landmark) };
   }
@@ -527,14 +622,14 @@ export class City {
     if (facility) {
       const refund = Math.round(FACILITIES[facility.kind].cost * BULLDOZE_REFUND);
       this.removeFacility(facility.id);
-      this.money += refund;
+      this.spend(-refund);
       return { ok: true, refund, what: FACILITIES[facility.kind].label };
     }
     const airport = this.aviation.airportAt(p);
     if (airport) {
       const refund = Math.round(AIRPORT_COST[airport.runways] * BULLDOZE_REFUND);
       this.aviation.removeAirport(airport.id);
-      this.money += refund;
+      this.spend(-refund);
       this.landChanged();
       return { ok: true, refund, what: '機場' };
     }
@@ -551,7 +646,7 @@ export class City {
     const sys = this.rails[kind];
     const refund = Math.round(seg.length * sys.spec.costPerM * BULLDOZE_REFUND);
     sys.net.removeSegment(seg.id);
-    this.money += refund;
+    this.spend(-refund);
     this.railChanged(kind);
     return { ok: true, refund, what: `${sys.spec.mode.label}軌道` };
   }
@@ -562,7 +657,7 @@ export class City {
     }
     const refund = Math.round(seg.length * ROAD_COST_PER_M * BULLDOZE_REFUND);
     this.net.removeSegment(seg.id);
-    this.money += refund;
+    this.spend(-refund);
     this.roadsChanged();
     return { ok: true, refund, what: '道路' };
   }
@@ -648,7 +743,38 @@ export class City {
       if (exit.kind === 'free') continue;
       this.net.addRoad(exit, null, { kind: 'free', p: at(a, r + SPOKE_LENGTH) });
     }
-    this.money = spent - cost;
+    this.money = spent;
+    this.spend(cost);
+    this.roadsChanged();
+    return { ok: true, cost };
+  }
+
+  /** Price of restyling a street: widening is paid per metre and per added lane, narrowing is free. */
+  restyleCost(segs: RoadSegment[], style: RoadStyle): number {
+    let cost = 0;
+    for (const seg of segs) {
+      const lanes = style.lanes ?? seg.lanes ?? 1;
+      cost += seg.length * Math.max(0, lanes - (seg.lanes ?? 1)) * ROAD_COST_PER_M * 2;
+      if (style.walk && !seg.walk) cost += seg.length * ROAD_COST_PER_M * 1.5;
+    }
+    return Math.round(cost);
+  }
+
+  /**
+   * Changes the lanes or sidewalks of the street a segment belongs to (opens at 縣轄市). Lots are laid
+   * out again further back from the new kerb and keep their zoning and buildings.
+   */
+  restyleRoad(segId: number, style: RoadStyle): { ok: boolean; cost: number; reason?: string } {
+    const seg = this.net.segments.get(segId);
+    if (!seg) return { ok: false, cost: 0, reason: '找不到道路' };
+    if (!this.unlocked('roadUpgrade')) return { ok: false, cost: 0, reason: `升級為${LEVELS[UNLOCK.roadUpgrade].name}後開放` };
+    if (seg.oneway) return { ok: false, cost: 0, reason: '圓環不能升級' };
+    const segs = this.net.street(seg).filter((s) => (style.lanes ?? s.lanes ?? 1) !== (s.lanes ?? 1) || (style.walk ?? !!s.walk) !== !!s.walk);
+    if (!segs.length) return { ok: false, cost: 0, reason: '已經是這個樣式' };
+    const cost = this.restyleCost(segs, style);
+    if (cost > this.money) return { ok: false, cost, reason: '資金不足' };
+    for (const s of segs) applyStyle(this.net, s, style);
+    this.spend(cost);
     this.roadsChanged();
     return { ok: true, cost };
   }
@@ -717,7 +843,7 @@ export class City {
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     const plan = transit.plan(stops, true);
     if (!plan.ok) return { ok: false, cost, reason: transit.mode.streetsOnly ? '有些站之間沒有道路相連' : '有些車站之間沒有軌道相連' };
-    this.money -= cost;
+    this.spend(cost);
     transit.addLine(stops);
     return { ok: true, cost };
   }
@@ -770,7 +896,7 @@ export class City {
     this.needs = { happiness, coverage, wants, tourists: this.needs.tourists };
     // Happy residents bring more; landmarks' visitors bring shops and offices
     const mood = pop > 60 ? (happiness - 45) * 0.3 : 0;
-    const visitors = Math.min(15, this.needs.tourists / 60);
+    const visitors = Math.min(15, this.needs.tourists / 6);
     const d = (v: number) => clamp(Math.round(v), 0, 100);
     // Demand follows how far supply is from what the city needs, as a share rather than a head
     // count, so the bars keep moving in a big city instead of sticking at full or empty
@@ -794,6 +920,8 @@ export class City {
    */
   levelCap(lot: Lot): number {
     const info = ZONES[lot.zone as Exclude<Zone, Zone.None>];
+    // A 直轄市's office districts keep growing into skyscrapers
+    if (lot.zone === Zone.Office && this.unlocked('tallOffices')) return OFFICE_TOWER_LEVEL;
     if (info.demand !== 'R') return info.maxLevel;
     const served = this.served.get(lot) ?? 0;
     let cap = Math.min(info.maxLevel, 1 + Math.floor(served / SERVICES_PER_LEVEL));
@@ -810,6 +938,38 @@ export class City {
   /** How jammed a segment is in its busier direction, 0..1. */
   congestion(seg: RoadSegment): number {
     return Math.max(this.traffic.congestion(seg, 1), this.traffic.congestion(seg, -1));
+  }
+
+  /** Pays for building (or takes back a refund), counted as 建設支出. */
+  private spend(cost: number): void {
+    this.money -= cost;
+    this.spentThisStep += cost;
+  }
+
+  /** The next rank and how far the city is from each of its bars, or null at the top. */
+  nextLevel(): { level: CityLevel; checks: { label: string; have: number; need: number; ok: boolean }[]; ready: boolean } | null {
+    const level = LEVELS[this.level + 1];
+    if (!level) return null;
+    const t = budgetTotals(this.budget);
+    const checks = [
+      { label: '人口', have: this.stats.population, need: level.population },
+      { label: '每月收入', have: t.income, need: level.income },
+      { label: '每月結餘', have: t.balance, need: level.balance },
+    ].map((c) => ({ ...c, ok: c.have >= c.need }));
+    return { level, checks, ready: checks.every((c) => c.ok) };
+  }
+
+  /** Moves up a rank when every bar is met. */
+  upgrade(): boolean {
+    if (!this.nextLevel()?.ready) return false;
+    this.level++;
+    this.levelVersion++;
+    return true;
+  }
+
+  /** Whether the city's rank has opened a feature. */
+  unlocked(feature: keyof typeof UNLOCK): boolean {
+    return this.level >= UNLOCK[feature];
   }
 
   /**
@@ -869,35 +1029,46 @@ export class City {
     for (const f of this.facilities.values()) {
       const spec = FACILITIES[f.kind];
       services += spec.upkeep;
-      if (spec.tourists) tourists += spec.tourists * (40 + this.stats.population / 100);
+      if (spec.tourists) tourists += (spec.tourists * (20 + this.stats.population / 1000)) / DAY_STEPS;
     }
     // Few visitors come in a storm, none in a typhoon
     tourists *= { clear: 1, cloudy: 1, fog: 0.9, rain: 0.75, storm: 0.5, typhoon: 0 }[this.weather.sky];
     this.needs.tourists = Math.round(tourists * HOUR_STEPS);
+    const rank = LEVELS[this.level];
+    const pop = this.stats.population;
     const step = {
-      residentialTax: this.stats.population * this.taxes.residential * 0.005,
-      businessTax: this.stats.jobs * this.taxes.business * 0.004,
+      subsidy: (pop * rank.subsidy) / MONTH_STEPS,
+      admin: (pop * rank.admin) / MONTH_STEPS,
+      residentialTax: this.stats.population * this.taxes.residential * 0.0025,
+      businessTax: this.stats.jobs * this.taxes.business * 0.002,
       roadUpkeep: roadLength * ROAD_UPKEEP,
       transitUpkeep: upkeep,
       airUpkeep: air.airports.size * AIRPORT_UPKEEP + air.flights.size * FLIGHT_UPKEEP,
       servicesUpkeep: services,
       tourism: tourists * TOURIST_SPEND,
     };
-    const perHour = (v: number) => v * HOUR_STEPS;
+    const perMonth = (v: number) => v * MONTH_STEPS;
+    // Construction averages over about three days so one big build doesn't swing the month
+    const ease = 1 / (3 * DAY_STEPS);
     this.budget = {
-      residentialTax: perHour(step.residentialTax),
-      businessTax: perHour(step.businessTax),
-      roadUpkeep: perHour(step.roadUpkeep),
+      residentialTax: perMonth(step.residentialTax),
+      businessTax: perMonth(step.businessTax),
+      subsidy: perMonth(step.subsidy),
       // Fares come in bursts as vehicles reach stops and planes leave; show running averages
-      transitFares: this.budget.transitFares * 0.9 + perHour(fares) * 0.1,
-      transitUpkeep: perHour(step.transitUpkeep),
-      airIncome: this.budget.airIncome * 0.97 + perHour(air.incomeToday) * 0.03,
-      airUpkeep: perHour(step.airUpkeep),
-      servicesUpkeep: perHour(step.servicesUpkeep),
-      tourism: perHour(step.tourism),
+      transitFares: this.budget.transitFares * 0.9 + perMonth(fares) * 0.1,
+      airIncome: this.budget.airIncome * 0.97 + perMonth(air.incomeToday) * 0.03,
+      tourism: perMonth(step.tourism),
+      roadUpkeep: perMonth(step.roadUpkeep),
+      transitUpkeep: perMonth(step.transitUpkeep),
+      airUpkeep: perMonth(step.airUpkeep),
+      servicesUpkeep: perMonth(step.servicesUpkeep),
+      admin: perMonth(step.admin),
+      construction: this.budget.construction * (1 - ease) + perMonth(this.spentThisStep) * ease,
     };
+    this.spentThisStep = 0;
     this.money +=
-      step.residentialTax + step.businessTax + fares + air.incomeToday + step.tourism - step.roadUpkeep - step.transitUpkeep - step.airUpkeep - step.servicesUpkeep;
+      step.residentialTax + step.businessTax + step.subsidy + fares + air.incomeToday + step.tourism -
+      step.roadUpkeep - step.transitUpkeep - step.airUpkeep - step.servicesUpkeep - step.admin;
     this.stats.riders = riders;
     air.incomeToday = 0;
     air.passengersToday = 0;
@@ -995,6 +1166,7 @@ export class City {
       districts: [...this.districts.values()].map((d) => [d.id, round2(d.p.x), round2(d.p.y), Math.round(d.r), d.name, d.color]),
       terrain: this.terrain.name,
       name: this.name,
+      level: this.level,
       facilities: [...this.facilities.values()].map((f) => [f.id, f.kind, round2(f.p.x), round2(f.p.y), round2(f.angle * 1000) / 1000]),
     };
   }
@@ -1005,6 +1177,7 @@ export class City {
     city.money = data.money;
     city.steps = Math.round(data.day * DAY_STEPS);
     if (data.name) city.name = data.name;
+    city.level = Math.min(LEVELS.length - 1, data.level ?? 0);
     loadNet(city.net, data, true);
     for (const n of data.outside ?? []) city.outside.add(n);
     if (data.taxes) city.taxes = { ...data.taxes };
@@ -1044,13 +1217,37 @@ function saveNet(net: RoadNetwork): NetSave {
       s.lots.map((l) => l.zone * 10 + l.level),
       ...(s.oneway ? [1] : []),
     ] as NetSave['segs'][number]),
+    styles: [...net.segments.values()].filter((s) => s.lanes || s.walk).map((s) => [s.id, s.lanes ?? 1, s.walk ? 1 : 0]),
   };
+}
+
+export interface RoadStyle {
+  lanes?: LaneCount;
+  walk?: boolean;
+}
+
+/** Gives a segment new lanes or sidewalks and lays its lots out again, keeping what stood on each. */
+function applyStyle(net: RoadNetwork, seg: RoadSegment, style: RoadStyle): void {
+  const old = seg.lots;
+  if (style.lanes !== undefined) seg.lanes = style.lanes === 1 ? undefined : style.lanes;
+  if (style.walk !== undefined) seg.walk = style.walk || undefined;
+  seg.lots = generateLots(net, seg);
+  // Same segment, same layout: each lot is the one at the same place in the list, just moved back
+  seg.lots.forEach((l, i) => {
+    const o = old[i];
+    if (!o) return;
+    l.zone = o.zone;
+    l.level = o.level;
+  });
 }
 
 function loadNet(net: RoadNetwork, data: NetSave, lots: boolean): void {
   for (const [id, x, y, h] of data.nodes) net.addNode({ x, y }, id, h ?? 0);
+  const styles = new Map((data.styles ?? []).map(([id, lanes, walk]) => [id, { lanes: lanes as LaneCount, walk: walk === 1 }]));
   for (const [id, a, b, cx, cy, zoning, oneway] of data.segs) {
     const seg = net.createSegment(a, b, { x: cx, y: cy }, undefined, id, oneway === 1);
+    const style = styles.get(id);
+    if (style) applyStyle(net, seg, style);
     if (!lots) continue;
     zoning.forEach((v, i) => {
       const lot = seg.lots[i];

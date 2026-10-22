@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { FACILITIES, type Facility, toWorld } from '../sim/facilities';
+import { type Facility, dims, toWorld } from '../sim/facilities';
 import { Builder } from './roadMesh';
 
 type P3 = [number, number, number];
@@ -251,6 +251,134 @@ function arena(k: Kit, w: number, d: number): void {
   }
 }
 
+/** Glass offices stepping back in green terraces, with a garden on the roof. */
+function greenBuilding(k: Kit, w: number, d: number): void {
+  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0xa7c49a);
+  const glass = 0x7fb0c6;
+  const steps = [
+    [-14, -10, 14, 12, 0, 14],
+    [-12, -6, 12, 12, 14, 28],
+    [-10, -2, 10, 12, 28, 42],
+  ];
+  for (const [u0, v0, u1, v1, z0, z1] of steps) {
+    k.box(u0, v0, u1, v1, z0, z1, glass);
+    for (let z = z0 + 3.5; z < z1; z += 3.5) k.box(u0 - 0.1, v0 - 0.1, u1 + 0.1, v1 + 0.1, z, z + 0.6, 0xe8efe9);
+    // Planted terrace in front of the next step up
+    k.box(u0 - 0.4, v0 - 0.4, u1 + 0.4, v0 + 4, z1, z1 + 1, 0x5aa04e);
+  }
+  // Green wall up one side
+  k.box(14, -10, 14.6, 12, 0, 14, 0x4f8f45);
+  for (const [u, v] of [[-6, 6], [5, 8], [0, 3]]) k.tree(u, v, 0.55);
+  k.box(-6, 6, 6, 9, 42, 43, 0x5aa04e);
+  for (const u of [-13, -6, 6, 13]) k.tree(u, -14, 0.7);
+}
+
+/** Paved square with lawns, a fountain and shade trees. */
+function plaza(k: Kit, w: number, d: number): void {
+  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.12, 0xd9cfbd);
+  for (const [su, sv] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) k.rect(su * 4, sv * 4, su * 16, sv * 16, 0.16, 0x86c062);
+  k.prism(0, 0, 4.5, 4.5, 0.1, 0.9, 0xbfb7a6, 12);
+  k.prism(0, 0, 3.8, 3.8, 0.9, 1, 0x6fb7e0, 12);
+  k.prism(0, 0, 0.5, 0.2, 1, 3.4, 0xe6f4fb, 6);
+  for (const [u, v] of [[-12, -12], [12, -12], [-12, 12], [12, 12], [-16, 0], [16, 0], [0, 16]]) k.tree(u, v, 0.9);
+}
+
+/** Wetland, ponds and woods with a boardwalk through them. */
+function ecoPark(k: Kit, w: number, d: number): void {
+  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.12, 0x7fb860);
+  k.prism(-12, 6, 18, 18, 0.1, 0.24, 0x4f97bf, 14, 0.3);
+  k.prism(20, -8, 10, 10, 0.1, 0.24, 0x4f97bf, 10);
+  k.box(-36, -2, 36, 1, 0.3, 0.7, 0xa47c55);
+  k.box(-2, -d / 2, 1, -2, 0.3, 0.7, 0xa47c55);
+  // Reeds at the water's edge, a bird hide on the pond
+  for (let a = 0; a < 12; a++) k.prism(-12 + Math.cos(a) * 17, 6 + Math.sin(a) * 17, 0.6, 0.1, 0, 1.6, 0x9abf5a, 4);
+  k.box(-14, 4, -9, 8, 0.6, 3.5, 0x8a6a48);
+  const trees: [number, number, number][] = [];
+  for (let i = 0; i < 40; i++) {
+    const u = ((i * 37) % 76) - 38;
+    const v = ((i * 53) % 66) - 33;
+    if (Math.hypot(u + 12, v - 6) < 20 || Math.hypot(u - 20, v + 8) < 12 || Math.abs(v) < 4) continue;
+    trees.push([u, v, 0.8 + ((i * 7) % 5) * 0.12]);
+  }
+  for (const [u, v, sc] of trees) k.tree(u, v, sc);
+}
+
+/** A walkway over the road on two piers, with stairs down to each kerb. */
+function footbridge(k: Kit, w: number, d: number): void {
+  const deck = 5.6;
+  const end = d / 2 - 2.2;
+  k.box(-w / 2, -end, w / 2, end, deck, deck + 0.7, 0xc9c4ba);
+  for (const side of [-1, 1]) {
+    k.box(-w / 2, -end, -w / 2 + 0.2, end, deck + 0.7, deck + 1.9, 0x5e8fa8);
+    k.box(w / 2 - 0.2, -end, w / 2, end, deck + 0.7, deck + 1.9, 0x5e8fa8);
+    const v0 = side * end;
+    const v1 = side * (d / 2);
+    const [lo, hi] = side > 0 ? [v0, v1] : [v1, v0];
+    k.box(-w / 2, lo, w / 2, hi, deck - 0.4, deck + 0.7, 0xc9c4ba);
+    k.box(-1, side * (end - 1) - 0.8, 1, side * (end - 1) + 0.8, 0, deck, 0xa9a49a);
+    // Stairs run down along the kerb
+    k.color(0xb5b0a6).quad([-w / 2, lo, deck + 0.7], [-w / 2 - 11, lo, 0.1], [-w / 2, hi, deck + 0.7], [-w / 2 - 11, hi, 0.1]);
+  }
+}
+
+/** Castle, roller coaster, carousel and a drop tower among paths and trees. */
+function themePark(k: Kit, w: number, d: number): void {
+  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0x9ccc74);
+  k.rect(-4, -d / 2, 4, d / 2 - 10, 0.14, 0xe2cfa6);
+  k.rect(-w / 2 + 8, -6, w / 2 - 8, 2, 0.14, 0xe2cfa6);
+  // Gate
+  k.box(-14, -d / 2 + 2, -6, -d / 2 + 6, 0, 10, 0xff7eb6);
+  k.box(6, -d / 2 + 2, 14, -d / 2 + 6, 0, 10, 0xff7eb6);
+  k.box(-14, -d / 2 + 2, 14, -d / 2 + 6, 10, 13, 0xffd166);
+  // Castle at the end of the main street
+  k.box(-14, 30, 14, 52, 0, 18, 0xf3e9f7);
+  for (const [u, v] of [[-14, 30], [14, 30], [-14, 52], [14, 52]]) {
+    k.prism(u, v, 3.5, 3.5, 0, 26, 0xf3e9f7, 8);
+    k.prism(u, v, 4.2, 0, 26, 36, 0x6a5acd, 8);
+  }
+  k.prism(0, 41, 6, 6, 18, 38, 0xf3e9f7, 8);
+  k.prism(0, 41, 7, 0, 38, 54, 0x6a5acd, 8);
+  // Roller coaster: a looping track on posts
+  const n = 48;
+  const track = (i: number): P3 => {
+    const a = (i / n) * Math.PI * 2;
+    return [-40 + Math.cos(a) * 28, 18 + Math.sin(a) * 20, 6 + 12 * (0.5 + 0.5 * Math.sin(a * 3))];
+  };
+  for (let i = 0; i < n; i++) {
+    const p = track(i);
+    const q = track(i + 1);
+    k.color(0xe4572e).quad([p[0], p[1] - 0.9, p[2]], [p[0], p[1] + 0.9, p[2]], [q[0], q[1] - 0.9, q[2]], [q[0], q[1] + 0.9, q[2]]);
+    if (i % 4 === 0) k.prism(p[0], p[1], 0.35, 0.35, 0, p[2], 0xdddddd, 4);
+  }
+  // Carousel and drop tower
+  k.prism(40, 22, 10, 10, 0, 1, 0xffd166, 12);
+  k.prism(40, 22, 0.8, 0.8, 1, 8, 0xf2f2f2, 8);
+  k.prism(40, 22, 11, 0, 8, 13, 0xe63946, 12);
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    k.box(40 + Math.cos(a) * 7 - 0.8, 22 + Math.sin(a) * 7 - 0.8, 40 + Math.cos(a) * 7 + 0.8, 22 + Math.sin(a) * 7 + 0.8, 1, 3, 0xf4f1de);
+  }
+  k.box(44, -36, 50, -30, 0, 62, 0xd9d9d9);
+  k.box(43, -37, 51, -29, 40, 44, 0x2e86ab);
+  for (const [u, v] of [[-60, -40], [-50, -46], [-20, -40], [20, -40], [60, -10], [62, 40], [-62, 46], [24, 48]]) k.tree(u, v, 1);
+}
+
+/** A big shopping mall: glass atrium between two blocks, signage and a car park. */
+function mall(k: Kit, w: number, d: number): void {
+  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0x8f959a);
+  for (let u = -w / 2 + 4; u < w / 2 - 4; u += 6) k.rect(u, -d / 2 + 2, u + 0.3, -d / 2 + 16, 0.14, 0xf2f2f2);
+  k.box(-50, -18, -10, 38, 0, 26, 0xe8e2d6);
+  k.box(10, -18, 50, 38, 0, 26, 0xe8e2d6);
+  k.box(-10, -14, 10, 34, 0, 30, 0x8fc7dd);
+  k.prism(0, 10, 9, 4, 30, 36, 0xbfe3ef, 8);
+  for (const s of [-1, 1]) {
+    k.box(s * 50, -18.2, s * 10, -18, 18, 22, 0x7ec8e3);
+    k.box(s * 50, -18.3, s * 10, 38.3, 26, 27.4, 0xd0c8b8);
+  }
+  k.box(-12, -19, 12, -18, 24, 29, 0xe63946);
+  for (const u of [-40, -28, 28, 40]) k.tree(u, -22, 0.7);
+}
+
 const MODELS: Record<Facility['kind'], (k: Kit, w: number, d: number) => void> = {
   park,
   school,
@@ -262,13 +390,19 @@ const MODELS: Record<Facility['kind'], (k: Kit, w: number, d: number) => void> =
   dragonTiger,
   ferrisWheel,
   arena,
+  themePark,
+  mall,
+  greenBuilding,
+  plaza,
+  ecoPark,
+  footbridge,
 };
 
 /** Every park, school, station, hospital and landmark as one coloured mesh. */
 export function buildFacilityGeometry(facilities: Iterable<Facility>): THREE.BufferGeometry {
   const b = new Builder(0);
   for (const f of facilities) {
-    const { w, d } = FACILITIES[f.kind];
+    const { w, d } = dims(f);
     MODELS[f.kind](new Kit(b, f), w, d);
   }
   return b.geometry();

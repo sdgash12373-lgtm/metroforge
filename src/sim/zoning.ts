@@ -1,5 +1,5 @@
 import { type Vec2, bboxNear, closestOnSamples, hash01, quadPoint, quadTangent, tAtLength } from './geometry';
-import { ROAD_WIDTH, type RoadNetwork, type RoadSegment } from './roads';
+import { ROAD_WIDTH, type RoadNetwork, type RoadSegment, roadWidth } from './roads';
 
 /** Zoning cell size, as in Cities: Skylines (8 m × 8 m). */
 export const CELL = 8;
@@ -68,7 +68,7 @@ export function generateLots(net: RoadNetwork, seg: RoadSegment): Lot[] {
     for (const side of [-1, 1]) {
       let front: Lot | null = null;
       for (let depth = 1; depth <= DEPTH; depth++) {
-        const off = side * (ROAD_WIDTH / 2 + CELL * (depth - 0.5));
+        const off = side * (roadWidth(seg) / 2 + CELL * (depth - 0.5));
         const x = p.x + n.x * off;
         const y = p.y + n.y * off;
         const lot: Lot = { x, y, dir, side, depth, zone: Zone.None, level: 0, blocked: false, front, seed: hash01(x, y), s };
@@ -107,8 +107,9 @@ export function recomputeBlocked(net: RoadNetwork, occupied?: (p: Vec2) => boole
       let blocked = (lot.front !== null && lot.front.blocked) || !!occupied?.(lot);
       if (!blocked) {
         for (const other of segs) {
-          if (!bboxNear(other.bbox, lot, clearance)) continue;
-          if (closestOnSamples(other.samples, lot).d < clearance) {
+          const clear = clearance + (roadWidth(other) - ROAD_WIDTH) / 2;
+          if (!bboxNear(other.bbox, lot, clear)) continue;
+          if (closestOnSamples(other.samples, lot).d < clear) {
             blocked = true;
             break;
           }

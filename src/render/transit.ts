@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { City } from '../sim/city';
 import { quadPoint, quadTangent, tAtLength } from '../sim/geometry';
-import { ROAD_WIDTH } from '../sim/roads';
+import { roadWidth } from '../sim/roads';
 import type { BusStop } from '../sim/transit';
 
 const MAX_STOPS = 400;
@@ -67,7 +67,7 @@ export class StopLayer {
       const p = quadPoint(q, t);
       const d = quadTangent(q, t);
       // Kerbside on the right of a → b traffic, facing the road
-      const off = ROAD_WIDTH / 2 + 1.1;
+      const off = roadWidth(seg) / 2 + 1.1;
       const x = p.x - d.y * off;
       const z = p.y + d.x * off;
       const angle = Math.atan2(-d.y, d.x);
