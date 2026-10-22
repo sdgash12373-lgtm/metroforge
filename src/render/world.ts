@@ -187,7 +187,7 @@ export class World {
 
     this.preview = new THREE.Mesh(new THREE.BufferGeometry(), this.materials.preview);
     this.preview.visible = false;
-    this.preview.renderOrder = 2;
+    this.preview.renderOrder = 10;
     this.cursor = new THREE.Mesh(
       new THREE.RingGeometry(2.2, 3.4, 24).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0xf2b134, depthTest: false, transparent: true }),
@@ -309,7 +309,7 @@ export class World {
     m.depthWrite = !on;
     m.needsUpdate = true;
     // The ghost road may be under the ground: draw it over everything
-    this.materials.preview.depthTest = !on;
+    this.materials.preview.depthTest = !(on || this.decluttered);
     this.materials.preview.needsUpdate = true;
     this.scene.background = new THREE.Color(on ? 0x5d6b62 : 0xbcd8ea);
   }
@@ -330,6 +330,15 @@ export class World {
       m.depthWrite = !on;
       m.needsUpdate = true;
     }
+    // Track and the ghost of new track are drawn after the faded streets, over them
+    const { ballast, sleepers, steel, railConcrete } = this.materials;
+    for (const m of [ballast, sleepers, steel, railConcrete]) {
+      m.transparent = on;
+      m.depthTest = !on;
+      m.needsUpdate = true;
+    }
+    this.materials.preview.depthTest = !(on || this.xray);
+    this.materials.preview.needsUpdate = true;
   }
 
   /** Shows road and track tunnels on the surface above them. */
@@ -585,7 +594,11 @@ export class World {
       const concrete = new THREE.Mesh(g.concrete, this.materials.railConcrete);
       concrete.castShadow = true;
       concrete.receiveShadow = true;
-      layer.tracks.add(ballast, new THREE.Mesh(g.sleepers, this.materials.sleepers), new THREE.Mesh(g.steel, this.materials.steel), concrete, new THREE.Mesh(g.dark, this.materials.tunnel));
+      const sleepers = new THREE.Mesh(g.sleepers, this.materials.sleepers);
+      const steel = new THREE.Mesh(g.steel, this.materials.steel);
+      // Layered bottom to top, for when track is drawn over the streets without depth testing
+      [concrete, ballast, sleepers, steel].forEach((m, i) => (m.renderOrder = 3 + i));
+      layer.tracks.add(ballast, sleepers, steel, concrete, new THREE.Mesh(g.dark, this.materials.tunnel));
       layer.tunnels.geometry.dispose();
       layer.tunnels.geometry = buildTunnelOverlay(sys.net);
     }

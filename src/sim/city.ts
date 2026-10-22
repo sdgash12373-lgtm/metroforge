@@ -257,7 +257,7 @@ export class City {
       if (h <= 1) {
         if (this.terrain.water(p.x, p.y)) return '這裡是水面，地面蓋不了（改用高架跨過，或從地下穿過）';
         if (this.terrain.height(p.x, p.y) > 0.05) return '這裡是山坡地，地面蓋不了（改用隧道穿過）';
-      } else if (this.terrain.height(p.x, p.y) > h - 3) return '山太高，高架過不去（改用隧道穿過）';
+      } else if (this.terrain.height(p.x, p.y) > Math.max(0.05, h - 3)) return '山太高，高架過不去（改用隧道穿過）';
     }
     return null;
   }

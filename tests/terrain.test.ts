@@ -36,6 +36,8 @@ describe('Kaohsiung terrain', () => {
     expect(r.ok).toBe(false);
     expect(r.reason).toContain('山');
     expect(city.buildRoad(free(plain.x, plain.y), null, free(mountain.x, mountain.y), false, TUNNEL_DEPTH).ok).toBe(true);
+    // A ramp from a viaduct down into a tunnel on the plain
+    expect(city.terrainProblem({ x: 0, y: 0 }, null, { x: 200, y: 0 }, ELEVATED_HEIGHT, TUNNEL_DEPTH)).toBeNull();
     // Lots that would stand in the sea are blocked
     const coast = at(-1150, 300);
     city.buildRoad(free(at(-1050, 200).x, at(-1050, 200).y), null, free(at(-1050, 400).x, at(-1050, 400).y));
