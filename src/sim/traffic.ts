@@ -1,5 +1,6 @@
 import { type Vec2, dist } from './geometry';
 import type { RoadNetwork, RoadSegment } from './roads';
+import { type Junction, type Light, STOP_BACK, findJunctions, lightAt } from './signals';
 
 /** 50 km/h town roads. */
 export const SPEED_LIMIT = 13.9;
@@ -26,12 +27,12 @@ export const laneKey = (seg: number, dir: Dir): number => seg * 2 + (dir === 1 ?
 
 /** Trains are drawn as a row of cars of this length. */
 export const TRAIN_CARS: Partial<Record<VehicleKind, { cars: number; length: number }>> = {
-  metro: { cars: 3, length: 18 },
+  metro: { cars: 3, length: 14 },
   train: { cars: 4, length: 20 },
   hsr: { cars: 6, length: 20 },
 };
 
-export const VEHICLE_LENGTH: Record<VehicleKind, number> = { car: 4.5, truck: 8, bus: 12, metro: 54, train: 80, hsr: 120 };
+export const VEHICLE_LENGTH: Record<VehicleKind, number> = { car: 4.5, truck: 8, bus: 12, metro: 42, train: 80, hsr: 120 };
 
 /** How vehicles drive on one network: roads, or the tracks of one kind of train. */
 export interface DrivingRules {
@@ -43,9 +44,11 @@ export interface DrivingRules {
   laneOffset: number;
   /** vehicles on a line may turn back at a stop instead of driving on */
   reverses: boolean;
+  /** traffic lights at every junction */
+  signals?: boolean;
 }
 
-export const ROAD_RULES: DrivingRules = { speed: SPEED_LIMIT, accel: ACCEL, brake: BRAKE, laneOffset: LANE_OFFSET, reverses: false };
+export const ROAD_RULES: DrivingRules = { speed: SPEED_LIMIT, accel: ACCEL, brake: BRAKE, laneOffset: LANE_OFFSET, reverses: false, signals: true };
 
 export interface Vehicle {
   id: number;
@@ -134,6 +137,8 @@ export class Traffic {
   tripsCompleted = 0;
   tripsAbandoned = 0;
   lineHooks: LineHooks | null = null;
+  /** seconds driven, which runs the traffic lights */
+  time = 0;
   /** vehicles currently on each lane, sorted back to front */
   private lanes = new Map<number, Vehicle[]>();
 
@@ -246,6 +251,39 @@ export class Traffic {
     );
   }
 
+  private junctionCache: { version: number; map: Map<number, Junction> } | null = null;
+
+  /** Junctions with traffic lights, if these rules have them. */
+  junctions(): Map<number, Junction> {
+    if (!this.rules.signals) return new Map();
+    if (this.junctionCache?.version !== this.netVersion) this.junctionCache = { version: this.netVersion, map: findJunctions(this.net) };
+    return this.junctionCache.map;
+  }
+
+  /** The light a lane's traffic sees at the junction it drives into, or null where there is none. */
+  lightFor(seg: RoadSegment, dir: Dir): Light | null {
+    const j = this.junctions().get(dir === 1 ? seg.b : seg.a);
+    const a = j?.approaches.find((x) => x.seg === seg.id && x.end === (dir === 1 ? 'b' : 'a'));
+    return j && a ? lightAt(j, a.phase, this.time) : null;
+  }
+
+  /** The light shown now to one phase of a junction. */
+  lightOf(j: Junction, phase: number): Light {
+    return lightAt(j, phase, this.time);
+  }
+
+  /** Where a vehicle must stop for a light this step, or Infinity if it may go on. */
+  private stopLine(v: Vehicle, seg: RoadSegment): number {
+    if (!v.route.length || !this.rules.signals) return Infinity;
+    const line = seg.length - Math.min(STOP_BACK, seg.length / 2);
+    if (v.pos > line) return Infinity;
+    const light = this.lightFor(seg, v.dir);
+    if (!light || light === 'green') return Infinity;
+    // On yellow, go on if too close to stop comfortably
+    if (light === 'yellow' && line - v.pos < (v.speed * v.speed) / (2 * this.rules.brake)) return Infinity;
+    return line;
+  }
+
   private adjacency(): Map<number, { to: number; seg: RoadSegment; dir: Dir }[]> {
     if (this.adjacencyCache?.version === this.netVersion) return this.adjacencyCache.map;
     const m = new Map<number, { to: number; seg: RoadSegment; dir: Dir }[]>();
@@ -325,10 +363,13 @@ export class Traffic {
 
   step(dt: number): void {
     if (dt <= 0) return;
+    this.time += dt;
     this.index();
     const arrived = new Set<number>();
     const gaveUp = new Set<number>();
     for (const list of this.lanes.values()) {
+      // Queued behind a red light: waiting there does not count towards giving up
+      let held = false;
       // Front to back so each car sees where its leader is this step
       for (let i = list.length - 1; i >= 0; i--) {
         const v = list[i];
@@ -362,13 +403,24 @@ export class Traffic {
           if (room < len + MIN_GAP) gap = Math.min(gap, seg.length - v.pos + MIN_GAP * 0.5);
           leadSpeed = room === Infinity ? this.rules.speed : 0;
         }
+        const stop = this.stopLine(v, seg);
+        if (stop - v.pos < gap) {
+          gap = stop - v.pos;
+          leadSpeed = 0;
+        }
         gap = Math.max(gap, 0.01);
         const { speed: top, accel, brake } = this.rules;
         const sStar = MIN_GAP + v.speed * HEADWAY + (v.speed * (v.speed - leadSpeed)) / (2 * Math.sqrt(accel * brake));
         const acc = accel * (1 - (v.speed / top) ** 4 - (Math.max(sStar, 0) / gap) ** 2);
         v.speed = Math.max(0, Math.min(top, v.speed + acc * dt));
         v.pos += v.speed * dt;
-        v.stuck = v.speed < 0.2 ? v.stuck + dt : 0;
+        if (v.pos > stop) {
+          v.pos = stop;
+          v.speed = 0;
+        }
+        const waiting = v.speed < 0.2;
+        held = waiting && (stop < Infinity || held);
+        v.stuck = waiting && !held ? v.stuck + dt : 0;
         if (v.stuck > GIVE_UP_AFTER) {
           gaveUp.add(v.id);
           continue;

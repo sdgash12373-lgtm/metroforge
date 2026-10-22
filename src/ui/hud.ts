@@ -47,7 +47,8 @@ export interface HudActions {
   setSpeed(i: number): void;
   /** returns the new state */
   toggleBuildMode(): boolean;
-  newCity(): void;
+  /** opens the in-game menu: save, load, settings, back to the start screen */
+  openMenu(): void;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
@@ -144,24 +145,10 @@ export class Hud {
     this.budgetBtn = budgetBtn;
     top.append(budgetBtn);
 
-    const reset = el('button', 'chip ghost', '新城市');
-    reset.type = 'button';
-    let armed = 0;
-    reset.onclick = () => {
-      if (!armed) {
-        reset.textContent = '確定重來？';
-        armed = window.setTimeout(() => {
-          armed = 0;
-          reset.textContent = '新城市';
-        }, 3000);
-        return;
-      }
-      clearTimeout(armed);
-      armed = 0;
-      reset.textContent = '新城市';
-      actions.newCity();
-    };
-    top.append(reset);
+    const menu = el('button', 'chip', '選單');
+    menu.type = 'button';
+    menu.onclick = () => actions.openMenu();
+    top.append(menu);
 
     this.warning = el('div', 'warning panel');
     this.warning.hidden = true;
@@ -251,6 +238,11 @@ export class Hud {
     root.append(top, this.warning, this.budgetPanel, this.editPanel.el, this.toastEl, bottom);
 
     addEventListener('keydown', (e) => {
+      if ((e.target as HTMLElement).closest?.('input, textarea') || document.body.classList.contains('menu-open')) return;
+      if (e.key === 'Escape' && !this.tools.drawing && !this.tools.lineDraft.length) {
+        actions.openMenu();
+        return;
+      }
       const t = TOOLS.find((x) => x.key === e.key);
       if (t) this.selectTool(this.toolFor(t.id));
       if (e.key === ' ') {
@@ -416,9 +408,20 @@ export class Hud {
       option('取消', false, () => t.cancel());
       return;
     }
+    // Removing lines: the controls come first so they are in reach on a phone
+    if (t.removingLines) {
+      option('完成拆除', true, () => t.setRemovingLines(false));
+      const picked = t.selectedLine !== null ? transit.lines.get(t.selectedLine) : undefined;
+      if (picked) option(`確定拆除「${picked.name}」`, false, () => t.removeSelectedLine(), picked.color);
+      this.sub.append(el('span', 'divider'));
+    }
     for (const line of transit.lines.values()) {
       const label = `${line.name} · ${line.stops.length} 站${line.ok ? '' : ' · 中斷'}`;
       option(label, t.selectedLine === line.id, () => t.selectLine(t.selectedLine === line.id ? null : line.id), line.color);
+    }
+    if (transit.lines.size && !t.removingLines) {
+      this.sub.append(el('span', 'divider'));
+      option('拆除路線', false, () => t.setRemovingLines(true));
     }
     if (transit.lines.size) {
       // Two taps, like 新城市, so a stray tap can't wipe every line
@@ -442,7 +445,8 @@ export class Hud {
   private updateEditor(city: City): void {
     const t = this.tools;
     const transit = t.transit;
-    const line = transit && t.selectedLine !== null ? transit.lines.get(t.selectedLine) : undefined;
+    // While removing lines the dock asks to confirm instead, and the map stays clear to tap
+    const line = transit && t.selectedLine !== null && !t.removingLines ? transit.lines.get(t.selectedLine) : undefined;
     const flight = t.tool === 'airport' && t.selectedFlight !== null ? city.aviation.flights.get(t.selectedFlight) : undefined;
     const street = t.tool === 'streetName' && t.selectedStreet !== null ? city.net.segments.get(t.selectedStreet) : undefined;
     const district = t.tool === 'district' && t.selectedDistrict !== null ? city.districts.get(t.selectedDistrict) : undefined;

@@ -1,16 +1,20 @@
 import './style.css';
-import { City, type SaveData } from './sim/city';
+import { City } from './sim/city';
+import { TERRAINS, type TerrainName } from './sim/terrain';
+import { AUTO_SLOT, SaveSlots, openStore } from './storage/saves';
+import { Menu, type Settings } from './ui/menu';
 import { World } from './render/world';
 import { Hud, SPEEDS } from './ui/hud';
 import { attachInput } from './ui/input';
 import { ToolController } from './ui/tools';
 
-const SAVE_KEY = 'skyline-city:save';
 const TICK_SECONDS = 0.5;
 const LOCK_KEY = 'skyline-city:build-mode';
+const SETTINGS_KEY = 'skyline-city:settings';
 
-function newCity(): City {
-  const city = new City();
+function newCity(name = '我的城市', terrain: TerrainName = 'kaohsiung'): City {
+  const city = new City(TERRAINS[terrain]);
+  city.name = name;
   // The highway exit the city grows from
   const gate = { x: -480, y: 60 };
   city.buildRoad({ kind: 'free', p: gate }, { x: -240, y: 40 }, { kind: 'free', p: { x: 0, y: 0 } }, true);
@@ -19,28 +23,21 @@ function newCity(): City {
   return city;
 }
 
-function loadCity(): City {
+function loadSettings(coarse: boolean): Settings {
+  const defaults: Settings = { shadows: !coarse, autosave: 60 };
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (raw) return City.deserialize(JSON.parse(raw) as SaveData);
-  } catch (err) {
-    console.warn('Could not load the saved city', err);
-  }
-  return newCity();
-}
-
-function save(city: City): void {
-  try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify(city.serialize()));
+    return { ...defaults, ...(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as Partial<Settings>) };
   } catch {
-    // Storage can be full or blocked (private mode); the game keeps running
+    return defaults;
   }
 }
 
 const app = document.getElementById('app')!;
 const coarse = matchMedia('(pointer: coarse)').matches;
-const world = new World(app, !coarse);
-let city = loadCity();
+let settings = loadSettings(coarse);
+const world = new World(app, settings.shadows);
+// The map behind the start screen until a game starts
+let city = newCity();
 // Phones get fewer vehicles to keep the frame rate up
 const MAX_VEHICLES = coarse ? 220 : 450;
 city.maxVehicles = MAX_VEHICLES;
@@ -64,15 +61,9 @@ hud = new Hud(document.getElementById('ui')!, tools, {
     hud!.speed = i;
     hud!.render();
   },
-  newCity: () => {
-    city = newCity();
-    city.maxVehicles = MAX_VEHICLES;
-    tools.setCity(city);
-    world.invalidate();
-    tools.setTool('road');
-    focusCity();
-    save(city);
-    hud!.toast('新城市已建立');
+  openMenu: () => {
+    void autosave();
+    menu.show('pause');
   },
 });
 attachInput(world.renderer.domElement, world.rig, tools);
@@ -86,11 +77,98 @@ hud.lockButton.setAttribute('aria-pressed', String(world.rig.locked));
 function focusCity(): void {
   world.rig.target = { x: -60, y: 10 };
   world.rig.distance = coarse ? 360 : 280;
+  world.rig.pitch = 0.85;
   world.rig.apply();
 }
 focusCity();
 tools.setTool('road');
 hud.render();
+
+/** Swaps in another city, keeping the view and tools in step. */
+function setCity(next: City): void {
+  city = next;
+  city.maxVehicles = MAX_VEHICLES;
+  tools.setCity(city);
+  world.invalidate();
+  tools.setTool('road');
+  focusCity();
+  hud!.render();
+}
+
+let saveAcc = 0;
+const slots = new SaveSlots(await openStore());
+try {
+  await slots.migrateLegacy(localStorage);
+} catch {
+  // No localStorage here, so no old save either
+}
+let saving = false;
+/** Writes the game being played to the auto slot; skipped at the start screen or while a save runs. */
+async function autosave(): Promise<void> {
+  if (!menu.inGame || saving) return;
+  saving = true;
+  try {
+    await slots.save(AUTO_SLOT, city, world.thumbnail());
+  } catch (err) {
+    console.warn('Auto-save failed', err);
+    hud!.toast('自動存檔失敗（儲存空間可能已滿）');
+  } finally {
+    saving = false;
+  }
+}
+
+const menu: Menu = new Menu(document.getElementById('ui')!, slots, {
+  play: (next) => {
+    setCity(next);
+    hud!.speed = 1;
+    hud!.render();
+    saveAcc = 0;
+  },
+  newCity: (name, terrain) => newCity(name, terrain),
+  saveTo: async (slot) => {
+    try {
+      await slots.save(slot, city, world.thumbnail());
+    } catch (err) {
+      console.warn('Save failed', err);
+      hud!.toast('存檔失敗（儲存空間可能已滿）');
+    }
+  },
+  quit: async () => {
+    await autosave();
+    showcase();
+  },
+  settings: () => settings,
+  setSettings: (s) => {
+    settings = s;
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+    } catch {
+      // Preference only
+    }
+  },
+  toast: (m) => hud!.toast(m),
+});
+// The start screen shows the last city played, if there is one
+const latest = await slots.latest();
+if (latest) {
+  try {
+    setCity(await slots.load(latest.id));
+  } catch (err) {
+    console.warn('Could not load the latest save', err);
+  }
+}
+/** A wide view of the city behind the start screen. */
+function showcase(): void {
+  world.rig.target = { x: 0, y: 0 };
+  world.rig.distance = coarse ? 1100 : 800;
+  world.rig.pitch = 0.5;
+  world.rig.apply();
+}
+showcase();
+menu.show('home');
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && menu.open && menu.inGame) menu.close();
+});
 
 function resize(): void {
   world.resize(app.clientWidth, app.clientHeight);
@@ -100,11 +178,15 @@ resize();
 
 let last = performance.now();
 let acc = 0;
-let saveAcc = 0;
 function frame(now: number): void {
   const dt = Math.min(0.25, (now - last) / 1000);
   last = now;
-  const speed = SPEEDS[hud!.speed];
+  // Paused under the menu; the start screen slowly circles the city
+  const speed = menu.open ? 0 : SPEEDS[hud!.speed];
+  if (menu.open && !menu.inGame) {
+    world.rig.yaw += dt * 0.04;
+    world.rig.apply();
+  }
   acc += dt * speed;
   while (acc >= TICK_SECONDS) {
     acc -= TICK_SECONDS;
@@ -114,10 +196,12 @@ function frame(now: number): void {
   const drive = dt * speed;
   const steps = Math.ceil(drive / 0.1);
   for (let i = 0; i < steps; i++) city.drive(drive / steps);
-  saveAcc += dt;
-  if (saveAcc > 10) {
-    saveAcc = 0;
-    save(city);
+  if (!menu.open && settings.autosave > 0) {
+    saveAcc += dt;
+    if (saveAcc > settings.autosave) {
+      saveAcc = 0;
+      void autosave();
+    }
   }
   world.sync(city);
   world.animate(city, dt);
@@ -129,5 +213,5 @@ function frame(now: number): void {
 requestAnimationFrame(frame);
 
 addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') save(city);
+  if (document.visibilityState === 'hidden' && !menu.open) void autosave();
 });

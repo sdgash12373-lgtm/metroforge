@@ -2,6 +2,7 @@ import { AIRPORT_COST, AIRPORT_UPKEEP, type Airport, Aviation, FLIGHT_UPKEEP, ty
 import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, quadPoint, sampleQuad } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
 import { ELEVATED_HEIGHT, MAX_GRADE, ROAD_WIDTH, RoadNetwork, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
+import { FLAT, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic } from './traffic';
 import { Transit } from './transit';
 import { CELL, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
@@ -12,7 +13,7 @@ export const BULLDOZE_REFUND = 0.5;
 export const ROAD_UPKEEP = 0.004;
 export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
-const SAVE_VERSION = 4;
+const SAVE_VERSION = 5;
 /** Ring radius of a roundabout by its number of exits. */
 export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
 /** Length of the short roads a new roundabout puts out at each exit. */
@@ -98,6 +99,9 @@ export interface SaveData extends NetSave {
   /** v4: street names (segment id, name) and districts (id, x, y, radius, name, colour) */
   roadNames?: [number, string][];
   districts?: [number, number, number, number, string, number][];
+  /** v5: the land the city stands on (older saves are flat) */
+  terrain?: TerrainName;
+  name?: string;
 }
 
 const RAIL_COST_EXTRA = { elevated: 1, tunnel: 2 };
@@ -112,6 +116,8 @@ export class City {
   net = new RoadNetwork();
   traffic = new Traffic(this.net);
   transit = new Transit(this.net, this.traffic);
+  /** shown on the start screen and in save slots */
+  name = '我的城市';
   money = 80000;
   day = 0;
   demand: Record<DemandKey, number> = { R: 50, C: 30, O: 20, I: 40 };
@@ -136,7 +142,7 @@ export class City {
   /** bumped whenever zoning or buildings change */
   lotsVersion = 0;
 
-  constructor() {
+  constructor(readonly terrain: Terrain = FLAT) {
     this.net.listener = {
       added: (seg, from) => {
         seg.lots = generateLots(this.net, seg);
@@ -181,8 +187,9 @@ export class City {
     }
   }
 
-  /** Track or an airfield on this spot, so nothing can be built on it. */
+  /** Water, hillside, track or an airfield on this spot, so nothing can be built on it. */
   occupied(p: Vec2): boolean {
+    if (!buildable(this.terrain, p)) return true;
     for (const a of this.aviation.airports.values()) if (Aviation.contains(a, p, 2)) return true;
     const clear = ROAD_WIDTH / 2 + CELL * 0.45;
     for (const r of RAIL_KINDS) {
@@ -243,6 +250,27 @@ export class City {
     return `坡度太陡：這段匝道至少要 ${Math.ceil(climb / MAX_GRADE)} 公尺長`;
   }
 
+  /** Why the land won't take a road or track at these heights, or null: streets need flat dry land, viaducts clear water and low ground. */
+  terrainProblem(a: Vec2, c: Vec2 | null, b: Vec2, ha: number, hb: number): string | null {
+    if (this.terrain === FLAT) return null;
+    const pts = sampleQuad({ a, c: c ?? lerp(a, b, 0.5), b }, Math.max(8, Math.ceil(dist(a, b) / 8)));
+    for (const p of pts) {
+      const h = ha + (hb - ha) * p.t;
+      if (h < -1) continue;
+      if (h <= 1) {
+        if (this.terrain.water(p.x, p.y)) return '這裡是水面，地面蓋不了（改用高架跨過，或從地下穿過）';
+        if (this.terrain.height(p.x, p.y) > 0.05) return '這裡是山坡地，地面蓋不了（改用隧道穿過）';
+      } else if (this.terrain.height(p.x, p.y) > Math.max(0.05, h - 3)) return '山太高，高架過不去（改用隧道穿過）';
+    }
+    return null;
+  }
+
+  /** Why a planned road or track can't be built for its slope or the land under it, or null. */
+  buildProblem(start: Snap, control: Vec2 | null, end: Snap, height: number, net = this.net): string | null {
+    const [ha, hb] = this.roadHeights(start, end, height, net);
+    return this.gradeProblem(start, control, end, height, net) ?? this.terrainProblem(start.p, control, end.p, ha, hb);
+  }
+
   buildRoad(
     start: Snap,
     control: Vec2 | null,
@@ -253,7 +281,7 @@ export class City {
     const [ha, hb] = this.roadHeights(start, end, height);
     const cost = free ? 0 : this.roadCost(start.p, control, end.p, ha, hb);
     if (Math.hypot(start.p.x - end.p.x, start.p.y - end.p.y) < 4) return { ok: false, cost, reason: '道路太短' };
-    const steep = this.gradeProblem(start, control, end, height);
+    const steep = this.buildProblem(start, control, end, height);
     if (steep) return { ok: false, cost, reason: steep };
     if (this.crossesAirport(start.p, control, end.p, ha, hb)) return { ok: false, cost, reason: '不能穿過機場（可以從地下穿過）' };
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
@@ -285,7 +313,7 @@ export class City {
     const [ha, hb] = this.roadHeights(start, end, height, sys.net);
     const cost = free ? 0 : this.trackCost(kind, start.p, control, end.p, ha, hb);
     if (Math.hypot(start.p.x - end.p.x, start.p.y - end.p.y) < 4) return { ok: false, cost, reason: '軌道太短' };
-    const steep = this.gradeProblem(start, control, end, height, sys.net);
+    const steep = this.buildProblem(start, control, end, height, sys.net);
     if (steep) return { ok: false, cost, reason: steep };
     if (this.crossesAirport(start.p, control, end.p, ha, hb)) return { ok: false, cost, reason: '不能穿過機場（可以從地下穿過）' };
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
@@ -303,6 +331,12 @@ export class City {
     const inside = (q: Vec2) => Aviation.contains(plan, q, 6);
     const blocked = (net: RoadNetwork) =>
       [...net.segments.values()].some((seg) => seg.samples.some((q) => inside(q) && net.heightAt(seg, q.t) >= 0));
+    const land = Aviation.corners(plan);
+    for (let i = 0; i <= 8; i++) for (let j = 0; j <= 8; j++) {
+      const top = lerp(land[0], land[1], i / 8);
+      const bottom = lerp(land[3], land[2], i / 8);
+      if (!buildable(this.terrain, lerp(top, bottom, j / 8))) return { ok: false, cost, reason: '機場要蓋在平坦的陸地上' };
+    }
     if (blocked(this.net)) return { ok: false, cost, reason: '機場範圍內有道路，請換個空地' };
     if (RAIL_KINDS.some((k) => blocked(this.rails[k].net))) return { ok: false, cost, reason: '機場範圍內有軌道，請換個空地' };
     for (const a of this.aviation.airports.values()) {
@@ -381,6 +415,12 @@ export class City {
     const r = ROUNDABOUT_RADIUS[size];
     const cost = this.roundaboutCost(size);
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 $${cost.toLocaleString()}` };
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      if (!buildable(this.terrain, { x: center.x + Math.cos(a) * (r + 10), y: center.y + Math.sin(a) * (r + 10) })) {
+        return { ok: false, cost, reason: '圓環要蓋在平坦的陸地上' };
+      }
+    }
     for (const seg of this.net.segments.values()) {
       const near = seg.samples.some((p) => dist(p, center) < r + 12);
       if (!near) continue;
@@ -722,14 +762,17 @@ export class City {
       airFare: air.fare,
       roadNames: [...this.net.segments.values()].filter((s) => s.name).map((s) => [s.id, s.name!]),
       districts: [...this.districts.values()].map((d) => [d.id, round2(d.p.x), round2(d.p.y), Math.round(d.r), d.name, d.color]),
+      terrain: this.terrain.name,
+      name: this.name,
     };
   }
 
   static deserialize(data: SaveData): City {
     if (data.v < 1 || data.v > SAVE_VERSION) throw new Error(`unsupported save version ${data.v}`);
-    const city = new City();
+    const city = new City(TERRAINS[data.terrain ?? 'flat'] ?? FLAT);
     city.money = data.money;
     city.day = data.day;
+    if (data.name) city.name = data.name;
     loadNet(city.net, data, true);
     for (const n of data.outside ?? []) city.outside.add(n);
     if (data.taxes) city.taxes = { ...data.taxes };

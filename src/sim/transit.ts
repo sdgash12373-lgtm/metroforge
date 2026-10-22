@@ -73,7 +73,7 @@ export const METRO: TransitMode = {
   metersPerVehicle: 1200,
   maxVehicles: 6,
   dwell: 10,
-  margin: 30,
+  margin: 22,
   streetsOnly: false,
   reverses: true,
   shareAtFree: 0.85,
@@ -288,6 +288,37 @@ export class Transit {
     if (change.name !== undefined) line.name = change.name.trim().slice(0, 20) || this.defaultName(line.id);
     if (change.color !== undefined) line.color = change.color;
     this.version++;
+  }
+
+  /** The line whose route or stops pass nearest to p, within r. */
+  lineAt(p: Vec2, r: number): BusLine | null {
+    let best: BusLine | null = null;
+    let bestD = r;
+    for (const line of this.lines.values()) {
+      for (const id of line.stops) {
+        const s = this.stops.get(id);
+        if (s && dist(s.p, p) < bestD) {
+          bestD = dist(s.p, p);
+          best = line;
+        }
+      }
+      for (const piece of line.path) {
+        const seg = this.net.segments.get(piece.seg);
+        if (!seg || !bboxNear(seg.bbox, p, bestD)) continue;
+        const lo = Math.min(piece.from, piece.to);
+        const hi = Math.max(piece.from, piece.to);
+        for (const q of seg.samples) {
+          const along = piece.dir === 1 ? q.s : seg.length - q.s;
+          if (along < lo - 4 || along > hi + 4) continue;
+          const d = dist(q, p);
+          if (d < bestD) {
+            bestD = d;
+            best = line;
+          }
+        }
+      }
+    }
+    return best;
   }
 
   removeLine(id: number): void {

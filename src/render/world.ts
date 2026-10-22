@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { AngleGuide } from '../sim/angles';
 import type { City, District } from '../sim/city';
 import type { GuideLine } from '../sim/guides';
-import { type Quad, type Vec2, closestOnSamples, bboxNear, hash01 } from '../sim/geometry';
+import { type Quad, type Vec2, closestOnSamples, bboxNear } from '../sim/geometry';
 import { ROAD_WIDTH } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { BuildingLayer } from './buildings';
@@ -10,6 +10,9 @@ import { CameraRig } from './cameraRig';
 import type { PathPiece } from '../sim/transit';
 import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay } from './roadMesh';
 import { StopLayer } from './transit';
+import { SignalLayer } from './signals';
+import { HILL_TREES, LOWLAND_TREES, MAP_SIZE, type TreeSpot, buildGroundGeometry, treeSpots } from './terrainMesh';
+import { FLAT, type Terrain, WATER_LEVEL } from '../sim/terrain';
 import { VehicleLayer } from './vehicles';
 import { RAIL_KINDS, type RailKind, TRACK_OFFSET } from '../sim/rail';
 import type { RoadNetwork } from '../sim/roads';
@@ -31,9 +34,7 @@ interface RailLayer {
   transitVersion: number;
 }
 
-const MAP_SIZE = 4000;
-const TREE_COUNT = 6000;
-const TREE_AREA = 1400;
+const TREE_COUNT = LOWLAND_TREES + HILL_TREES;
 
 export class World {
   readonly renderer: THREE.WebGLRenderer;
@@ -43,6 +44,8 @@ export class World {
   private readonly roadGroup = new THREE.Group();
   private readonly buildings: BuildingLayer;
   private readonly vehicles: VehicleLayer;
+  private decluttered = false;
+  private xray = false;
   private readonly stops: StopLayer;
   /** bus routes, shown while the bus tool is active */
   private readonly linePaths: THREE.Mesh;
@@ -56,12 +59,15 @@ export class World {
   private readonly rails: Record<RailKind, RailLayer>;
   private readonly airports: THREE.Mesh;
   private readonly planes: PlaneLayer;
+  private readonly signals: SignalLayer;
   private aviationVersion = -1;
   /** which kind of transport's lines are shown, if any */
   private lineView: 'bus' | RailKind | null = null;
   private readonly overlay: THREE.Mesh;
   private overlayAge = Infinity;
-  private readonly trees: { trunks: THREE.InstancedMesh; crowns: THREE.InstancedMesh; spots: { x: number; y: number; s: number; color: THREE.Color }[] };
+  private readonly trees: { trunks: THREE.InstancedMesh; crowns: THREE.InstancedMesh; spots: TreeSpot[] };
+  private terrain: Terrain = FLAT;
+  private readonly water: THREE.Mesh;
   private readonly preview: THREE.Mesh;
   private readonly cursor: THREE.Mesh;
   private readonly brush: THREE.Mesh;
@@ -87,6 +93,8 @@ export class World {
     markings: new THREE.MeshBasicMaterial({ color: 0xf2e6b0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
     preview: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }),
     concrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
+    /** viaducts of track, kept solid when the streets fade */
+    railConcrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
     tunnel: new THREE.MeshBasicMaterial({ color: 0x1c1f24, side: THREE.DoubleSide }),
     ballast: new THREE.MeshLambertMaterial({ color: 0x968d82, side: THREE.DoubleSide }),
     sleepers: new THREE.MeshLambertMaterial({ color: 0x6b5a48, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }),
@@ -103,7 +111,7 @@ export class World {
     this.rig = new CameraRig(1);
     const sky = 0xbcd8ea;
     this.scene.background = new THREE.Color(sky);
-    this.scene.fog = new THREE.Fog(sky, 900, 2600);
+    this.scene.fog = new THREE.Fog(sky, 1500, 4200);
 
     this.scene.add(new THREE.HemisphereLight(0xe8f2ff, 0x7b9a5a, 1.5));
     this.sun = new THREE.DirectionalLight(0xfff1dc, 2.1);
@@ -112,8 +120,14 @@ export class World {
     this.sun.shadow.bias = -0.0005;
     this.scene.add(this.sun, this.sun.target);
 
-    this.ground = this.makeGround();
-    this.scene.add(this.ground);
+    this.ground = new THREE.Mesh(buildGroundGeometry(FLAT), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+    this.ground.receiveShadow = true;
+    this.water = new THREE.Mesh(
+      new THREE.PlaneGeometry(MAP_SIZE, MAP_SIZE).rotateX(-Math.PI / 2).translate(0, WATER_LEVEL, 0),
+      new THREE.MeshLambertMaterial({ color: 0x4f97bf, transparent: true, opacity: 0.88 }),
+    );
+    this.water.visible = false;
+    this.scene.add(this.ground, this.water);
     this.scene.add(this.roadGroup);
     this.buildings = new BuildingLayer(shadows);
     this.scene.add(this.buildings.group);
@@ -168,11 +182,12 @@ export class World {
     this.airports.receiveShadow = true;
     this.airports.castShadow = false;
     this.planes = new PlaneLayer(shadows);
-    this.scene.add(this.airports, this.planes.group);
+    this.signals = new SignalLayer(shadows);
+    this.scene.add(this.airports, this.planes.group, this.signals.group);
 
     this.preview = new THREE.Mesh(new THREE.BufferGeometry(), this.materials.preview);
     this.preview.visible = false;
-    this.preview.renderOrder = 2;
+    this.preview.renderOrder = 10;
     this.cursor = new THREE.Mesh(
       new THREE.RingGeometry(2.2, 3.4, 24).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: 0xf2b134, depthTest: false, transparent: true }),
@@ -206,25 +221,6 @@ export class World {
     this.scene.add(this.districtRings);
   }
 
-  private makeGround(): THREE.Mesh {
-    const seg = 160;
-    const g = new THREE.PlaneGeometry(MAP_SIZE, MAP_SIZE, seg, seg).rotateX(-Math.PI / 2).toNonIndexed();
-    const pos = g.getAttribute('position');
-    const colors: number[] = [];
-    const base = new THREE.Color(0x9cbf74);
-    const c = new THREE.Color();
-    // One flat color per triangle for the low-poly look
-    for (let i = 0; i < pos.count; i += 3) {
-      const v = hash01(pos.getX(i) + pos.getX(i + 1), pos.getZ(i) + pos.getZ(i + 2));
-      c.copy(base).offsetHSL((v - 0.5) * 0.02, 0, (v - 0.5) * 0.025);
-      for (let k = 0; k < 3; k++) colors.push(c.r, c.g, c.b);
-    }
-    g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true }));
-    mesh.receiveShadow = true;
-    return mesh;
-  }
-
   private makeTrees(shadows: boolean) {
     const trunks = new THREE.InstancedMesh(
       new THREE.CylinderGeometry(0.25, 0.35, 2, 5).translate(0, 1, 0),
@@ -236,18 +232,7 @@ export class World {
       new THREE.MeshLambertMaterial({ flatShading: true }),
       TREE_COUNT,
     );
-    const spots: { x: number; y: number; s: number; color: THREE.Color }[] = [];
-    // Clumped forest: trees cluster around a few hundred seeds
-    let i = 0;
-    while (spots.length < TREE_COUNT && i < TREE_COUNT * 4) {
-      i++;
-      const cx = (hash01(i, 1) - 0.5) * TREE_AREA * 2;
-      const cy = (hash01(1, i) - 0.5) * TREE_AREA * 2;
-      if (hash01(Math.floor(cx / 120), Math.floor(cy / 120)) < 0.45) continue;
-      const s = 1.1 + hash01(cx, cy) * 1.1;
-      const color = new THREE.Color().setHSL(0.27 + (s - 1.6) * 0.04, 0.42, 0.32 + hash01(cy, cx) * 0.1);
-      spots.push({ x: cx, y: cy, s, color });
-    }
+    const spots = treeSpots(FLAT);
     for (const m of [trunks, crowns]) {
       m.castShadow = shadows;
       this.scene.add(m);
@@ -272,9 +257,9 @@ export class World {
     const m = new THREE.Matrix4();
     let n = 0;
     for (const t of this.trees.spots) {
-      if (near(t.x, t.y) || city.occupied(t)) continue;
+      if (!t.wild && (near(t.x, t.y) || city.occupied(t))) continue;
       if (segs.some((s) => bboxNear(s.bbox, t, clear) && closestOnSamples(s.samples, t).d < clear)) continue;
-      m.makeScale(t.s, t.s, t.s).setPosition(t.x, 0, t.y);
+      m.makeScale(t.s, t.s, t.s).setPosition(t.x, t.h, t.y);
       this.trees.trunks.setMatrixAt(n, m);
       this.trees.crowns.setMatrixAt(n, m);
       this.trees.crowns.setColorAt(n, t.color);
@@ -317,14 +302,43 @@ export class World {
   setXray(on: boolean): void {
     const m = this.ground.material as THREE.MeshLambertMaterial;
     if (m.transparent === on) return;
+    this.xray = on;
+    this.water.visible = !on && this.terrain !== FLAT;
     m.transparent = on;
     m.opacity = on ? 0.3 : 1;
     m.depthWrite = !on;
     m.needsUpdate = true;
     // The ghost road may be under the ground: draw it over everything
-    this.materials.preview.depthTest = !on;
+    this.materials.preview.depthTest = !(on || this.decluttered);
     this.materials.preview.needsUpdate = true;
     this.scene.background = new THREE.Color(on ? 0x5d6b62 : 0xbcd8ea);
+  }
+
+  /** Hides buildings, trees and traffic and fades the streets, so metro track is never hidden by the city. */
+  setDeclutter(on: boolean): void {
+    if (this.decluttered === on) return;
+    this.decluttered = on;
+    this.buildings.group.visible = !on;
+    this.trees.trunks.visible = !on;
+    this.trees.crowns.visible = !on;
+    this.vehicles.group.visible = !on;
+    this.signals.group.visible = !on;
+    const { sidewalk, asphalt, markings, concrete } = this.materials;
+    for (const m of [sidewalk, asphalt, markings, concrete]) {
+      m.transparent = on;
+      m.opacity = on ? 0.35 : 1;
+      m.depthWrite = !on;
+      m.needsUpdate = true;
+    }
+    // Track and the ghost of new track are drawn after the faded streets, over them
+    const { ballast, sleepers, steel, railConcrete } = this.materials;
+    for (const m of [ballast, sleepers, steel, railConcrete]) {
+      m.transparent = on;
+      m.depthTest = !on;
+      m.needsUpdate = true;
+    }
+    this.materials.preview.depthTest = !(on || this.xray);
+    this.materials.preview.needsUpdate = true;
   }
 
   /** Shows road and track tunnels on the surface above them. */
@@ -489,6 +503,7 @@ export class World {
     this.vehicles.update(city.traffic, (v) => city.transit.lines.get(v.line ?? -1)?.color ?? 0xf2b134);
     for (const k of RAIL_KINDS) this.rails[k].trains.update(city.rails[k]);
     this.planes.update(city.aviation);
+    this.signals.update(city.traffic, city.net);
     this.peopleAge += dt;
     if (this.peopleAge > 0.5) {
       this.peopleAge = 0;
@@ -504,8 +519,21 @@ export class World {
 
   private cityRef: City | null = null;
 
+  /** Reshapes the ground, sea and forests for the land a city stands on. */
+  private setTerrain(terrain: Terrain): void {
+    this.terrain = terrain;
+    this.ground.geometry.dispose();
+    this.ground.geometry = buildGroundGeometry(terrain);
+    this.water.visible = terrain !== FLAT && !this.xray;
+    this.trees.spots = treeSpots(terrain);
+  }
+
   sync(city: City): void {
     this.cityRef = city;
+    if (city.terrain !== this.terrain) {
+      this.setTerrain(city.terrain);
+      this.updateTrees(city);
+    }
     if (city.transit.version !== this.transitVersion || city.roadsVersion !== this.roadsVersion) {
       this.transitVersion = city.transit.version;
       this.stops.rebuild(city);
@@ -563,10 +591,14 @@ export class World {
       const g = buildTrackGeometries(sys.net, kind !== 'metro');
       const ballast = new THREE.Mesh(g.ballast, this.materials.ballast);
       ballast.receiveShadow = true;
-      const concrete = new THREE.Mesh(g.concrete, this.materials.concrete);
+      const concrete = new THREE.Mesh(g.concrete, this.materials.railConcrete);
       concrete.castShadow = true;
       concrete.receiveShadow = true;
-      layer.tracks.add(ballast, new THREE.Mesh(g.sleepers, this.materials.sleepers), new THREE.Mesh(g.steel, this.materials.steel), concrete, new THREE.Mesh(g.dark, this.materials.tunnel));
+      const sleepers = new THREE.Mesh(g.sleepers, this.materials.sleepers);
+      const steel = new THREE.Mesh(g.steel, this.materials.steel);
+      // Layered bottom to top, for when track is drawn over the streets without depth testing
+      [concrete, ballast, sleepers, steel].forEach((m, i) => (m.renderOrder = 3 + i));
+      layer.tracks.add(ballast, sleepers, steel, concrete, new THREE.Mesh(g.dark, this.materials.tunnel));
       layer.tunnels.geometry.dispose();
       layer.tunnels.geometry = buildTunnelOverlay(sys.net);
     }
@@ -608,6 +640,25 @@ export class World {
     this.renderer.setSize(w, h);
     this.rig.camera.aspect = w / h;
     this.rig.camera.updateProjectionMatrix();
+  }
+
+  /** A small JPEG of the current view, for save slots. */
+  thumbnail(width = 240, height = 150): string | undefined {
+    try {
+      this.render();
+      const src = this.renderer.domElement;
+      const c = document.createElement('canvas');
+      c.width = width;
+      c.height = height;
+      // Centre crop to the thumbnail's shape
+      const scale = Math.min(src.width / width, src.height / height);
+      const sw = width * scale;
+      const sh = height * scale;
+      c.getContext('2d')?.drawImage(src, (src.width - sw) / 2, (src.height - sh) / 2, sw, sh, 0, 0, width, height);
+      return c.toDataURL('image/jpeg', 0.7);
+    } catch {
+      return undefined;
+    }
   }
 
   render(): void {

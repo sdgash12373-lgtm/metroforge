@@ -182,3 +182,53 @@ describe('gridlock', () => {
     expect(city.traffic.tripsAbandoned).toBeGreaterThan(0);
   });
 });
+
+describe('traffic lights', () => {
+  it('stand at crossroads, giving the two roads green in turn, but not at bends or roundabouts', () => {
+    const city = new City();
+    city.buildRoad(free(-200, 0), null, free(200, 0), true);
+    city.buildRoad(free(0, -200), null, free(0, 200), true);
+    city.buildRoad(free(200, 0), null, free(300, 100), true);
+    const js = [...city.traffic.junctions().values()];
+    expect(js).toHaveLength(1);
+    const j = js[0];
+    expect(j.approaches).toHaveLength(4);
+    expect(j.phases).toBe(2);
+    const ew = segAt(city, -100, 0);
+    const ns = segAt(city, 0, -100);
+    const lights = new Set<string>();
+    for (let t = 0; t < 40; t++) {
+      city.traffic.time = t;
+      const a = city.traffic.lightFor(ew, ew.b === j.node ? 1 : -1);
+      const b = city.traffic.lightFor(ns, ns.b === j.node ? 1 : -1);
+      // Never green both ways at once
+      expect(a === 'red' || b === 'red').toBe(true);
+      lights.add(`${a}`).add(`${b}`);
+    }
+    expect([...lights].sort()).toEqual(['green', 'red', 'yellow']);
+  });
+
+  it('hold cars at the stop line on red and let them go on green', () => {
+    const city = new City();
+    city.buildRoad(free(-200, 0), null, free(200, 0), true);
+    city.buildRoad(free(0, -200), null, free(0, 200), true);
+    const from = segAt(city, -100, 0);
+    const to = segAt(city, 100, 0);
+    const j = [...city.traffic.junctions().values()][0];
+    const dir = from.b === j.node ? 1 : -1;
+    // Start just as the east-west road turns red
+    city.traffic.time = 0;
+    while (city.traffic.lightFor(from, dir) !== 'red') city.traffic.time += 0.5;
+    const v = city.traffic.spawn({ seg: from.id, s: from.length - 40 }, { seg: to.id, s: to.length / 2 }, 'car', 0)!;
+    expect(v).not.toBeNull();
+    let held = 0;
+    for (let i = 0; i < 400 && v.seg === from.id; i++) {
+      if (city.traffic.lightFor(from, dir) === 'red' && v.seg === from.id && v.speed < 1 && v.pos > from.length - 12) held++;
+      city.traffic.step(0.1);
+      if (city.traffic.lightFor(from, dir) === 'red') expect(v.seg).toBe(from.id);
+    }
+    expect(held).toBeGreaterThan(10);
+    expect(v.seg).toBe(to.id);
+    expect(v.stuck).toBe(0);
+  });
+});

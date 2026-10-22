@@ -91,6 +91,20 @@ describe('rail', () => {
     expect(city.budget.transitUpkeep).toBeGreaterThan(0);
   });
 
+  it('find the line under a tap and remove it with its unused stations', () => {
+    const city = new City();
+    city.money = 1e6;
+    const { sys } = railLine(city, 'train', 1200);
+    const line = [...sys.transit.lines.values()][0];
+    city.tick(rng());
+    expect(sys.transit.lineAt({ x: 300, y: 3 }, 12)?.id).toBe(line.id);
+    expect(sys.transit.lineAt({ x: 300, y: 60 }, 12)).toBeNull();
+    sys.transit.removeLine(line.id);
+    expect(sys.transit.lines.size).toBe(0);
+    expect(sys.transit.stops.size).toBe(0);
+    expect(sys.traffic.vehicles.filter((v) => v.line === line.id)).toHaveLength(0);
+  });
+
   it('are saved and loaded with their lines', () => {
     const city = new City();
     city.money = 1e6;

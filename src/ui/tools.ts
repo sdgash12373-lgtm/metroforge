@@ -53,6 +53,8 @@ export class ToolController {
   private draftPath: PathPiece[] = [];
   /** line picked in the dock, to rename, recolour or delete it */
   selectedLine: number | null = null;
+  /** taps pick a line on the map, and a second tap on it removes it */
+  removingLines = false;
   railAction: RailAction = 'track';
   /** track tools draw curves instead of straight track */
   trackCurve = false;
@@ -85,6 +87,7 @@ export class ToolController {
     this.tool = tool;
     this.cancel();
     this.selectedLine = null;
+    this.removingLines = false;
     this.selectedFlight = null;
     this.selectedStreet = null;
     this.selectedDistrict = null;
@@ -116,6 +119,7 @@ export class ToolController {
     this.cancel();
     this.railAction = action;
     this.selectedLine = null;
+    this.removingLines = false;
     this.updatePickHeight();
     this.updateUnderground();
     this.events.changed();
@@ -240,10 +244,12 @@ export class ToolController {
     this.world.rig.pickHeight = this.isRoadTool ? this.height : 0;
   }
 
-  /** See-through ground while building tunnels or metro lines; tunnels marked on the surface while bulldozing. */
+  /** See-through ground while building tunnels or metro lines, and a cleared city for the metro; tunnels marked on the surface while bulldozing. */
   private updateUnderground(): void {
     this.world.setXray((this.isRoadTool && this.level === 'tunnel') || (this.tool === 'metro' && this.railAction === 'line'));
     this.world.setUndergroundView(this.tool === 'bulldoze');
+    // Metro runs over and under the city: buildings and streets would hide the track being laid
+    this.world.setDeclutter(this.tool === 'metro');
   }
 
   setZone(zone: Zone): void {
@@ -305,6 +311,39 @@ export class ToolController {
     this.transit?.removeLine(id);
     this.selectedLine = null;
     this.events.toast('路線已刪除');
+    this.events.changed();
+    this.refresh();
+  }
+
+  setRemovingLines(on: boolean): void {
+    this.cancel();
+    this.removingLines = on;
+    this.selectedLine = null;
+    this.events.changed();
+  }
+
+  removeSelectedLine(): void {
+    const t = this.transit;
+    const line = this.selectedLine !== null ? t?.lines.get(this.selectedLine) : undefined;
+    if (!t || !line) return;
+    t.removeLine(line.id);
+    this.selectedLine = null;
+    this.events.toast(`${line.name}已拆除`);
+    this.events.changed();
+    this.refresh();
+  }
+
+  /** In removal mode: the first tap on a line picks it, a second tap on the same line removes it. */
+  private tapRemoveLine(p: Vec2): void {
+    const t = this.transit!;
+    const line = t.lineAt(p, Math.max(12, this.world.rig.snapRadius));
+    if (!line) {
+      this.selectedLine = null;
+      this.events.toast('點地圖上的路線或車站');
+    } else if (this.selectedLine === line.id) {
+      this.removeSelectedLine();
+      return;
+    } else this.selectedLine = line.id;
     this.events.changed();
     this.refresh();
   }
@@ -391,13 +430,13 @@ export class ToolController {
     const { start, control } = this.draft;
     if (start && this.hover && (!this.curved || control)) {
       const end = this.snapRoad(this.hover).snap;
-      const steep = this.city.gradeProblem(start, control, end, this.height, this.net);
+      const steep = this.city.buildProblem(start, control, end, this.height, this.net);
       if (steep) return steep;
       const len = Math.round(Math.hypot(end.p.x - start.p.x, end.p.y - start.p.y));
       const [ha, hb] = this.city.roadHeights(start, end, this.height, this.net);
       const cost = this.cost(start.p, control, end.p, ha, hb);
       const kind = ha === hb ? (ha > 0 ? '高架 ' : ha < 0 ? '隧道 ' : '') : hb < 0 || ha < 0 ? '隧道入口 ' : '匝道 ';
-      return `${kind}約 ${len} 公尺 · $${cost.toLocaleString()}　點一下完成，再點起點結束${verb}`;
+      return `${kind}約 ${len} 公尺 · $${cost.toLocaleString()}　點一下完成；再點起點或按右鍵結束${verb}`;
     }
     if (this.level === 'elevated' && !start) {
       return `高架${what}：從地面接出會自動做成匝道（至少 ${Math.ceil(ELEVATED_HEIGHT / MAX_GRADE)} 公尺），跨過地面不會形成路口`;
@@ -420,6 +459,10 @@ export class ToolController {
     if (n === 1) return `已設 1 站（每站 $${t.mode.stopCost.toLocaleString()}）；沿著路線點下一站`;
     if (n > 1) return t.mode.reverses ? `已設 ${n} 站；點「完成路線」開通，列車在兩端折返` : `已設 ${n} 站；點第一站或「完成路線」讓公車繞回起點`;
     const picked = this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
+    if (this.removingLines) {
+      if (picked) return `${picked.name}：再點一次路線或按「確定拆除」（沒有其他路線使用的車站會一起移除）`;
+      return t.lines.size ? `拆除路線：點地圖上的${label}路線或車站選取` : `沒有${label}路線可以拆除`;
+    }
     if (picked) return `${picked.name}：${label} ${t.buses(picked.id).length} 列 · 載客 ${picked.riders.toLocaleString()} 人`;
     if (!t.lines.size) {
       if (t.mode.streetsOnly) return '公車：點地面道路設第一個站，依序點下一站，最後點回第一站完成路線';
@@ -545,6 +588,10 @@ export class ToolController {
   }
 
   private tapLine(p: Vec2): void {
+    if (this.removingLines) {
+      this.tapRemoveLine(p);
+      return;
+    }
     const transit = this.transit!;
     const r = this.world.rig.snapRadius;
     const first = this.lineDraft[0];
@@ -607,7 +654,7 @@ export class ToolController {
       const end = hoverSnap.p;
       const [ha, hb] = this.city.roadHeights(start, hoverSnap, this.height, net);
       const cost = this.cost(start.p, ctrl, end, ha, hb);
-      const ok = cost <= this.city.money && !this.city.gradeProblem(start, ctrl, hoverSnap, this.height, net);
+      const ok = cost <= this.city.money && !this.city.buildProblem(start, ctrl, hoverSnap, this.height, net);
       w.setPreview({ a: start.p, c: ctrl ?? lerp(start.p, end, 0.5), b: end }, ok, ha, hb);
       w.setAngleGuides(angleGuides(net, start, ctrl, hoverSnap));
     } else {
