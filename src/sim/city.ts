@@ -758,14 +758,17 @@ export class City {
     const mood = pop > 60 ? (happiness - 45) * 0.3 : 0;
     const visitors = Math.min(15, this.needs.tourists / 60);
     const d = (v: number) => clamp(Math.round(v), 0, 100);
+    // Demand follows how far supply is from what the city needs, as a share rather than a head
+    // count, so the bars keep moving in a big city instead of sticking at full or empty
+    const gap = (want: number, have: number, slack: number) => 42 * Math.tanh((1.6 * (want - have)) / (want + have + slack));
     // Every tax point above the default costs demand
     const rTax = (this.taxes.residential - DEFAULT_TAX) * 3;
     const bTax = (this.taxes.business - DEFAULT_TAX) * 3;
     this.demand = {
-      R: d(45 + (totalJobs * 1.1 - pop) * 0.3 - rTax + mood),
-      C: d(35 + (pop * 0.25 - jobs.C) * 0.5 - bTax + visitors),
-      O: d(20 + (pop * 0.2 - jobs.O) * 0.4 - bTax + visitors * 0.5),
-      I: d(40 + (pop * 0.3 - jobs.I) * 0.4 - bTax),
+      R: d(50 + gap(totalJobs * 1.1 + 40, pop, 80) - rTax + mood),
+      C: d(45 + gap(pop * 0.25 + 15, jobs.C, 40) - bTax + visitors),
+      O: d(35 + gap(pop * 0.2 + 10, jobs.O, 40) - bTax + visitors * 0.5),
+      I: d(45 + gap(pop * 0.3 + 15, jobs.I, 40) - bTax),
     };
     this.stats = { population: pop, jobs: totalJobs, buildings, disconnected, riders: this.stats.riders };
     return zoned;
@@ -807,7 +810,8 @@ export class City {
       const { lot, seg } = zoned[Math.floor(rng() * zoned.length) % zoned.length];
       if (!this.isConnected(seg)) continue;
       const info = ZONES[lot.zone as Exclude<Zone, Zone.None>];
-      const want = this.demand[info.demand] / 100;
+      // Below a quarter the bar means "enough for now": nothing new is built
+      const want = clamp((this.demand[info.demand] - 25) / 75, 0, 1);
       // Back rows only build once the row in front has something on it
       if (lot.front && lot.front.level === 0) continue;
       if (lot.level === 0) {

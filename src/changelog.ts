@@ -8,6 +8,12 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '1.0.1',
+    date: '2026-10-22',
+    title: 'RCOI 需求量表修正',
+    notes: ['修正城市變大後 RCOI 需求量表卡在全滿或全空、看起來不會動的問題', '需求低於約四分之一時表示「暫時夠了」，該類建築不會再新蓋'],
+  },
+  {
     version: '1.0.0',
     date: '2026-10-22',
     title: 'Metroforge：都市創造 正式登場',
