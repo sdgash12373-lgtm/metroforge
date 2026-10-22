@@ -101,6 +101,7 @@ export interface SaveData extends NetSave {
   districts?: [number, number, number, number, string, number][];
   /** v5: the land the city stands on (older saves are flat) */
   terrain?: TerrainName;
+  name?: string;
 }
 
 const RAIL_COST_EXTRA = { elevated: 1, tunnel: 2 };
@@ -115,6 +116,8 @@ export class City {
   net = new RoadNetwork();
   traffic = new Traffic(this.net);
   transit = new Transit(this.net, this.traffic);
+  /** shown on the start screen and in save slots */
+  name = '我的城市';
   money = 80000;
   day = 0;
   demand: Record<DemandKey, number> = { R: 50, C: 30, O: 20, I: 40 };
@@ -760,6 +763,7 @@ export class City {
       roadNames: [...this.net.segments.values()].filter((s) => s.name).map((s) => [s.id, s.name!]),
       districts: [...this.districts.values()].map((d) => [d.id, round2(d.p.x), round2(d.p.y), Math.round(d.r), d.name, d.color]),
       terrain: this.terrain.name,
+      name: this.name,
     };
   }
 
@@ -768,6 +772,7 @@ export class City {
     const city = new City(TERRAINS[data.terrain ?? 'flat'] ?? FLAT);
     city.money = data.money;
     city.day = data.day;
+    if (data.name) city.name = data.name;
     loadNet(city.net, data, true);
     for (const n of data.outside ?? []) city.outside.add(n);
     if (data.taxes) city.taxes = { ...data.taxes };

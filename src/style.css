@@ -422,3 +422,204 @@ button:focus-visible {
     0 1px 3px rgba(0, 0, 0, 0.75),
     0 0 10px rgba(0, 0, 0, 0.45);
 }
+
+/* Start screen and in-game menu: a card over the map, the HUD hidden underneath */
+body.menu-open #ui > :not(.menu),
+body.menu-open .angle-labels {
+  display: none !important;
+}
+.menu {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+  background: linear-gradient(180deg, rgba(20, 26, 23, 0.15), rgba(20, 26, 23, 0.55));
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+.menu-card {
+  width: min(460px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 22px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.menu-card h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.menu-title {
+  text-align: center;
+  margin-bottom: 6px;
+}
+.menu-title h1 {
+  margin: 0;
+  font-size: 40px;
+  letter-spacing: 0.2em;
+  text-indent: 0.2em;
+}
+.menu-title p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+.menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.menu-btn {
+  min-height: 48px;
+  padding: 10px 16px;
+  border: 1px solid var(--panel-line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+.menu-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1d1a12;
+  font-weight: 700;
+}
+.menu-btn small {
+  font-size: 12px;
+  font-weight: 400;
+  opacity: 0.8;
+}
+.menu-row {
+  display: flex;
+  gap: 10px;
+}
+.menu-row > * {
+  flex: 1;
+}
+.menu-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.menu-field > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.menu-input {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--panel-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.menu-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.menu-choice {
+  min-height: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-line);
+  border-radius: 10px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  cursor: pointer;
+}
+.menu-choice small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.menu-choice[aria-pressed='true'] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.menu-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.menu-chips .chip {
+  min-height: 40px;
+  min-width: 56px;
+}
+.menu-empty {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+}
+.slots {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.slot {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 4px 12px;
+  padding: 8px;
+  border: 1px solid var(--panel-line);
+  border-radius: 10px;
+}
+.slot-thumb {
+  grid-row: span 2;
+  width: 96px;
+  height: 60px;
+  border-radius: 6px;
+  background: #4d6b48 center / cover no-repeat;
+}
+.slot-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.slot-text b {
+  color: var(--ink);
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slot-text b.muted {
+  color: var(--muted);
+  font-weight: 400;
+}
+.slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.slot-actions .chip {
+  min-height: 36px;
+}
+.chip.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1d1a12;
+  font-weight: 700;
+}

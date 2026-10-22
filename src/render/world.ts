@@ -642,6 +642,25 @@ export class World {
     this.rig.camera.updateProjectionMatrix();
   }
 
+  /** A small JPEG of the current view, for save slots. */
+  thumbnail(width = 240, height = 150): string | undefined {
+    try {
+      this.render();
+      const src = this.renderer.domElement;
+      const c = document.createElement('canvas');
+      c.width = width;
+      c.height = height;
+      // Centre crop to the thumbnail's shape
+      const scale = Math.min(src.width / width, src.height / height);
+      const sw = width * scale;
+      const sh = height * scale;
+      c.getContext('2d')?.drawImage(src, (src.width - sw) / 2, (src.height - sh) / 2, sw, sh, 0, 0, width, height);
+      return c.toDataURL('image/jpeg', 0.7);
+    } catch {
+      return undefined;
+    }
+  }
+
   render(): void {
     // Keep the shadow camera centered on what the player is looking at
     const t = this.rig.target;

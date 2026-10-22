@@ -47,7 +47,8 @@ export interface HudActions {
   setSpeed(i: number): void;
   /** returns the new state */
   toggleBuildMode(): boolean;
-  newCity(): void;
+  /** opens the in-game menu: save, load, settings, back to the start screen */
+  openMenu(): void;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
@@ -144,24 +145,10 @@ export class Hud {
     this.budgetBtn = budgetBtn;
     top.append(budgetBtn);
 
-    const reset = el('button', 'chip ghost', '新城市');
-    reset.type = 'button';
-    let armed = 0;
-    reset.onclick = () => {
-      if (!armed) {
-        reset.textContent = '確定重來？';
-        armed = window.setTimeout(() => {
-          armed = 0;
-          reset.textContent = '新城市';
-        }, 3000);
-        return;
-      }
-      clearTimeout(armed);
-      armed = 0;
-      reset.textContent = '新城市';
-      actions.newCity();
-    };
-    top.append(reset);
+    const menu = el('button', 'chip', '選單');
+    menu.type = 'button';
+    menu.onclick = () => actions.openMenu();
+    top.append(menu);
 
     this.warning = el('div', 'warning panel');
     this.warning.hidden = true;
@@ -251,6 +238,11 @@ export class Hud {
     root.append(top, this.warning, this.budgetPanel, this.editPanel.el, this.toastEl, bottom);
 
     addEventListener('keydown', (e) => {
+      if ((e.target as HTMLElement).closest?.('input, textarea') || document.body.classList.contains('menu-open')) return;
+      if (e.key === 'Escape' && !this.tools.drawing && !this.tools.lineDraft.length) {
+        actions.openMenu();
+        return;
+      }
       const t = TOOLS.find((x) => x.key === e.key);
       if (t) this.selectTool(this.toolFor(t.id));
       if (e.key === ' ') {
