@@ -24,6 +24,14 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Text boxes must opt back in: iOS Safari won't take typing in an input that inherits user-select: none */
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+  touch-action: manipulation;
+}
+
 #app,
 #app canvas {
   position: fixed;

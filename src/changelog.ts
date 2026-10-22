@@ -8,6 +8,12 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '2.0.4',
+    date: '2026-10-22',
+    title: '路名與區域名可以輸入了',
+    notes: ['修正手機（尤其 iPhone）上路名、區域名、路線與航班名稱輸入框打不了字的問題'],
+  },
+  {
     version: '2.0.3',
     date: '2026-10-22',
     title: '維護費改兩週繳一次',
