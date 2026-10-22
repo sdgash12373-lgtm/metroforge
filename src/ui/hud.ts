@@ -258,10 +258,10 @@ export class Hud {
     group('支出');
     this.budgetRows = {
       ...income,
-      roads: row('道路維護'),
-      transit: row('運輸營運'),
+      roads: row('道路維護（每兩週繳）'),
+      transit: row('運輸營運（每兩週繳）'),
       airUpkeep: row('機場營運'),
-      services: row('公共服務'),
+      services: row('公共服務（每兩週繳）'),
       admin: row('行政人事'),
       running: row('營運支出', 'sub'),
       construction: row('建設支出（近 3 日平均）'),

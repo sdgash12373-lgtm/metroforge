@@ -8,6 +8,15 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '2.0.3',
+    date: '2026-10-22',
+    title: '維護費改兩週繳一次',
+    notes: [
+      '道路、公車、捷運（含火車、高鐵）以及公共建設、綠化與地標的維護費金額不變，但從每小時扣一次改成每兩週扣一次',
+      '預算面板顯示換算後的每月金額',
+    ],
+  },
+  {
     version: '2.0.2',
     date: '2026-10-22',
     title: '分區不再互相蓋掉',

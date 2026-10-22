@@ -93,3 +93,21 @@ describe('format', () => {
     expect(gameDate(365, false)).toBe('2027/01/01');
   });
 });
+
+describe('upkeep of roads and public buildings', () => {
+  it('is billed with the roads in one go every two weeks, an hour\'s worth each time', async () => {
+    const { DAY_STEPS, HOUR_STEPS, UPKEEP_DAYS } = await import('../src/sim/city');
+    const city = street();
+    const spot = city.facilitySpot('hospital', { x: 0, y: 40 });
+    expect(city.buildFacility('hospital', spot.p, spot.angle).ok).toBe(true);
+    const period = UPKEEP_DAYS * DAY_STEPS;
+    // Run up to just before the next bill, then over it
+    while (city.steps % period !== 0) city.tick(rng());
+    const before = city.money;
+    city.tick(rng());
+    const { ROAD_UPKEEP } = await import('../src/sim/city');
+    const roads = [...city.net.segments.values()].reduce((sum, s) => sum + s.length, 0);
+    expect(city.lastUpkeepBill).toBeCloseTo(FACILITIES.hospital.upkeep * HOUR_STEPS + roads * ROAD_UPKEEP * HOUR_STEPS, 3);
+    expect(city.money).toBeLessThan(before - city.lastUpkeepBill * 0.5);
+  });
+});

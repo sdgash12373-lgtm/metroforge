@@ -24,6 +24,8 @@ import { Transit } from './transit';
 import { CELL, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
+/** Upkeep of roads, transit and public buildings is billed once every this many days (each bill is one hour's worth). */
+export const UPKEEP_DAYS = 14;
 /** Highest office level once a 直轄市 opens skyscrapers (otherwise 5). */
 export const OFFICE_TOWER_LEVEL = 7;
 export const BULLDOZE_REFUND = 0.5;
@@ -245,6 +247,8 @@ export class City {
   maxVehicles = 400;
   /** bumped whenever roads change, so the renderer knows to rebuild meshes */
   roadsVersion = 0;
+  /** what the last two-weekly upkeep bill (roads, transit, public buildings) came to */
+  lastUpkeepBill = 0;
   /** bumped whenever zoning or buildings change */
   lotsVersion = 0;
 
@@ -1039,11 +1043,12 @@ export class City {
     }
     for (const k of RAIL_KINDS) upkeep += this.rails[k].trackLength() * TRACK_UPKEEP;
     const air = this.aviation;
-    let services = 0;
+    // Each building's bill, paid every two weeks
+    let bill = 0;
     let tourists = 0;
     for (const f of this.facilities.values()) {
       const spec = FACILITIES[f.kind];
-      services += spec.upkeep;
+      bill += spec.upkeep * HOUR_STEPS;
       if (spec.tourists) tourists += (spec.tourists * (20 + this.stats.population / 1000)) / DAY_STEPS;
     }
     // Few visitors come in a storm, none in a typhoon
@@ -1056,10 +1061,12 @@ export class City {
       admin: (pop * rank.admin) / MONTH_STEPS,
       residentialTax: this.stats.population * this.taxes.residential * 0.0025,
       businessTax: this.stats.jobs * this.taxes.business * 0.002,
-      roadUpkeep: roadLength * ROAD_UPKEEP,
-      transitUpkeep: upkeep,
+      // Roads, transit and public buildings: an hour's upkeep billed once every two weeks,
+      // spread over the two weeks for the monthly budget
+      roadUpkeep: (roadLength * ROAD_UPKEEP * HOUR_STEPS) / (UPKEEP_DAYS * DAY_STEPS),
+      transitUpkeep: (upkeep * HOUR_STEPS) / (UPKEEP_DAYS * DAY_STEPS),
       airUpkeep: air.airports.size * AIRPORT_UPKEEP + air.flights.size * FLIGHT_UPKEEP,
-      servicesUpkeep: services,
+      servicesUpkeep: bill / (UPKEEP_DAYS * DAY_STEPS),
       tourism: tourists * TOURIST_SPEND,
     };
     const perMonth = (v: number) => v * MONTH_STEPS;
@@ -1083,7 +1090,12 @@ export class City {
     this.spentThisStep = 0;
     this.money +=
       step.residentialTax + step.businessTax + step.subsidy + fares + air.incomeToday + step.tourism -
-      step.roadUpkeep - step.transitUpkeep - step.airUpkeep - step.servicesUpkeep - step.admin;
+      step.airUpkeep - step.admin;
+    if (this.steps % (UPKEEP_DAYS * DAY_STEPS) === 0) {
+      const due = (roadLength * ROAD_UPKEEP + upkeep) * HOUR_STEPS + bill;
+      this.money -= due;
+      this.lastUpkeepBill = due;
+    }
     this.stats.riders = riders;
     air.incomeToday = 0;
     air.passengersToday = 0;

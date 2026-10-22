@@ -545,7 +545,7 @@ export class ToolController {
     const tour = spec.tourists ? '・吸引觀光客' : '';
     const where = kind === 'footbridge' ? '點馬路（離路口遠一點）蓋一座橫跨的天橋' : '點道路旁的空地興建';
     const park = spec.serves === 'park' ? '・算作公園' : '';
-    return `${spec.label} · ${ntd(spec.cost)} · 每小時維護 ${ntd(spec.upkeep * HOUR_STEPS)} · 範圍 ${spec.radius} 公尺${tour}${park}　${spec.blurb}；${where}`;
+    return `${spec.label} · ${ntd(spec.cost)} · 每兩週維護 ${ntd(spec.upkeep * HOUR_STEPS)} · 範圍 ${spec.radius} 公尺${tour}${park}　${spec.blurb}；${where}`;
   }
 
   /** Hint for drawing a road or track: length and price of the ghost, or how to start. */
