@@ -814,6 +814,9 @@ body.menu-open .angle-labels {
   font-size: 11px;
   text-align: right;
 }
+.level .ladder .brow span {
+  white-space: nowrap;
+}
 .level .ladder .brow.current span {
   color: var(--accent);
   font-weight: 700;

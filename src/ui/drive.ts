@@ -84,7 +84,11 @@ export class DriveMode {
     };
     pad.addEventListener('pointerdown', (e) => {
       id = e.pointerId;
-      pad.setPointerCapture(e.pointerId);
+      try {
+        pad.setPointerCapture(e.pointerId);
+      } catch {
+        // Synthetic or already-released pointer: the stick still follows moves over it
+      }
       move(e);
       e.stopPropagation();
     });
@@ -100,7 +104,8 @@ export class DriveMode {
     pad.addEventListener('pointerup', release);
     pad.addEventListener('pointercancel', release);
 
-    const hint = el('p', 'drive-hint', '電腦：W 油門、S 煞車、A／D 選擇下個路口左轉或右轉　手機：用左下角的搖桿');
+    const touch = matchMedia('(pointer: coarse)').matches;
+    const hint = el('p', 'drive-hint', touch ? '搖桿往上加速、往下煞車，左右選下個路口轉向' : 'W 油門　S 煞車　A／D 下個路口左轉／右轉　V 切換視角　Esc 離開');
     this.root.append(panel, pad, hint);
     this.root.hidden = true;
     host.append(this.root);
@@ -277,7 +282,7 @@ export class DriveMode {
     const h = Math.max(0, pose.h);
     const hx = pose.heading.x;
     const hy = pose.heading.y;
-    const pos = this.view === 'driver' ? new THREE.Vector3(pose.p.x - hx * 0.3, h + 1.45, pose.p.y - hy * 0.3) : new THREE.Vector3(pose.p.x - hx * 11, h + 4.2, pose.p.y - hy * 11);
+    const pos = this.view === 'driver' ? new THREE.Vector3(pose.p.x + hx * 0.5, h + 1.5, pose.p.y + hy * 0.5) : new THREE.Vector3(pose.p.x - hx * 11, h + 4.2, pose.p.y - hy * 11);
     const look = new THREE.Vector3(pose.p.x + hx * 25, h + (this.view === 'driver' ? 1.2 : 1.5), pose.p.y + hy * 25);
     // Ease the camera so junction turns and lane changes swing smoothly
     const k = snap ? 1 : 1 - Math.exp(-dt * (this.view === 'driver' ? 9 : 5));

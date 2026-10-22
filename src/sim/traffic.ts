@@ -13,6 +13,8 @@ const HEADWAY = 1.2;
 const MIN_GAP = 2.0;
 /** Seconds a vehicle may sit still before it gives up (keeps gridlocked loops from freezing forever). */
 export const GIVE_UP_AFTER = 40;
+/** The player's car accelerates this much harder than traffic. */
+const PLAYER_PUNCH = 1.8;
 
 export type Dir = 1 | -1;
 export type VehicleKind = 'car' | 'truck' | 'bus' | 'metro' | 'train' | 'hsr';
@@ -463,7 +465,12 @@ export class Traffic {
         const sStar = MIN_GAP + v.speed * HEADWAY + (v.speed * (v.speed - leadSpeed)) / (2 * Math.sqrt(accel * brake));
         let acc = accel * (1 - (v.speed / top) ** 4 - (Math.max(sStar, 0) / gap) ** 2);
         // The player's car: the controls ask, but it still brakes for lights and the car ahead
-        if (v.player) acc = Math.min(acc, (v.throttle ?? 0) >= 0 ? (v.throttle ?? 0) * accel * 1.5 - (v.throttle ? 0 : 0.6) : (v.throttle ?? 0) * brake * 2);
+        if (v.player) {
+          // A livelier car than the city's traffic, so driving it feels responsive
+          const free = acc * PLAYER_PUNCH;
+          const t = v.throttle ?? 0;
+          acc = Math.min(free, t > 0 ? t * accel * PLAYER_PUNCH : t < 0 ? t * brake * 2 : -0.6);
+        }
         v.speed = Math.max(0, Math.min(top, v.speed + acc * dt));
         v.pos += v.speed * dt;
         if (v.pos > stop) {
