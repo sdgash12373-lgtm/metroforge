@@ -8,6 +8,12 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '2.1.1',
+    date: '2026-10-22',
+    title: '拉道路有格線輔助',
+    notes: ['選道路或軌道工具時，地面會出現對齊用的格線（每格 8 公尺，每 5 格一條粗線），跟著游標或正在拉的道路移動；拉高架時格線在橋面高度，拉遠時自動放大格距'],
+  },
+  {
     version: '2.1.0',
     date: '2026-10-22',
     title: '國道交流道與方位圖',

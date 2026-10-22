@@ -761,6 +761,7 @@ export class ToolController {
     const net = this.net;
     const markerHeight = hoverSnap ? net.snapHeight(hoverSnap, this.height) : this.draft.start ? net.snapHeight(this.draft.start, this.height) : 0;
     w.setCursor(marker, hoverSnap ? hoverSnap.kind !== 'free' || !!road?.guides.length : isRoad, isRoad ? markerHeight : 0);
+    w.setGrid(isRoad, marker, isRoad ? markerHeight : 0);
     const t = this.transit;
     if (this.plansLines && t) {
       const near = this.hover && (t.stopNear(this.hover, this.world.rig.snapRadius)?.p ?? t.locate(this.hover, this.world.rig.snapRadius)?.p);
