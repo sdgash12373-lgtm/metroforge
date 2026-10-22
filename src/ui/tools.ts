@@ -5,7 +5,7 @@ import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/a
 import type { City } from '../sim/city';
 import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, lerp, quadPoint } from '../sim/geometry';
-import { ROUNDABOUT_RADIUS, type RoundaboutSize } from '../sim/city';
+import { DAY_STEPS, ROUNDABOUT_RADIUS, type RoundaboutSize } from '../sim/city';
 import { RAIL_SPECS, type RailKind } from '../sim/rail';
 import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type RoadNetwork, type Snap, TUNNEL_DEPTH } from '../sim/roads';
 import { LINE_COLORS, type PathPiece, type Transit } from '../sim/transit';
@@ -474,7 +474,7 @@ export class ToolController {
       if (problem) return problem;
     }
     const tour = spec.tourists ? '・吸引觀光客' : '';
-    return `${spec.label} · ${ntd(spec.cost)} · 每日維護 ${ntd(spec.upkeep)} · 範圍 ${spec.radius} 公尺${tour}　${spec.blurb}；點道路旁的空地興建`;
+    return `${spec.label} · ${ntd(spec.cost)} · 每日維護 ${ntd(spec.upkeep * DAY_STEPS)} · 範圍 ${spec.radius} 公尺${tour}　${spec.blurb}；點道路旁的空地興建`;
   }
 
   /** Hint for drawing a road or track: length and price of the ghost, or how to start. */

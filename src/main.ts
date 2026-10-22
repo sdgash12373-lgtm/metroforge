@@ -1,5 +1,5 @@
 import './style.css';
-import { City } from './sim/city';
+import { City, DAY_STEPS } from './sim/city';
 import { TERRAINS, type TerrainName } from './sim/terrain';
 import { AUTO_SLOT, SaveSlots, openStore } from './storage/saves';
 import { Menu, type Settings } from './ui/menu';
@@ -9,6 +9,7 @@ import { latestTicker, markSeen, seenLatest, watchForNewVersion } from './ui/upd
 import { attachInput } from './ui/input';
 import { ToolController } from './ui/tools';
 
+/** Seconds per simulation step at normal speed; DAY_STEPS of them make a 5-second day. */
 const TICK_SECONDS = 0.5;
 const LOCK_KEY = 'skyline-city:build-mode';
 const SETTINGS_KEY = 'skyline-city:settings';
@@ -185,6 +186,7 @@ addEventListener('resize', resize);
 resize();
 
 let last = performance.now();
+let lastSky = city.weather.sky;
 let acc = 0;
 function frame(now: number): void {
   const dt = Math.min(0.25, (now - last) / 1000);
@@ -213,7 +215,15 @@ function frame(now: number): void {
   }
   world.sync(city);
   world.animate(city, dt);
-  hud!.update(city, acc / TICK_SECONDS);
+  const days = city.day + acc / TICK_SECONDS / DAY_STEPS;
+  const weather = city.weather.at(world.rig.target, days);
+  world.updateSky(days, weather, dt);
+  hud!.setWeather(weather);
+  if (city.weather.sky !== lastSky) {
+    if (city.weather.sky === 'typhoon' && !menu.open) hud!.ticker('🌀 颱風警報：颱風來襲，觀光客暫停來訪，請注意風雨', { loops: 2 });
+    lastSky = city.weather.sky;
+  }
+  hud!.update(city, acc / TICK_SECONDS / DAY_STEPS);
   hud!.updateHint();
   world.render();
   requestAnimationFrame(frame);

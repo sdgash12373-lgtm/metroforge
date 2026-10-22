@@ -73,11 +73,15 @@ export class BuildingLayer {
   private c = new THREE.Color();
   showEmptyCells = false;
 
+  /** walls, roofs and chimneys share it; lit windows are patched in at night */
+  readonly material: THREE.MeshLambertMaterial;
+
   constructor(shadows: boolean) {
     const tileGeo = new THREE.PlaneGeometry(CELL * 0.9, CELL * 0.9).rotateX(-Math.PI / 2);
     this.tiles = new THREE.InstancedMesh(tileGeo, new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.45, depthWrite: false }), MAX);
     const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
     const mat = new THREE.MeshLambertMaterial({ flatShading: true });
+    this.material = mat;
     this.bodies = new THREE.InstancedMesh(box, mat, MAX);
     this.roofs = new THREE.InstancedMesh(gableGeometry(), mat, MAX);
     this.stacks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.5, 0.6, 1, 6).translate(0, 0.5, 0), mat, MAX / 4);

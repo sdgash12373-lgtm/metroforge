@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import type { Conditions } from '../sim/weather';
+import { SkySystem, addWindows } from './sky';
 import type { AngleGuide } from '../sim/angles';
 import type { City, District } from '../sim/city';
 import type { GuideLine } from '../sim/guides';
@@ -42,6 +44,8 @@ export class World {
   readonly scene = new THREE.Scene();
   readonly rig: CameraRig;
   private readonly sun: THREE.DirectionalLight;
+  /** day and night, clouds, rain and fog */
+  private readonly sky: SkySystem;
   private readonly roadGroup = new THREE.Group();
   private readonly buildings: BuildingLayer;
   private readonly vehicles: VehicleLayer;
@@ -118,12 +122,14 @@ export class World {
     this.scene.background = new THREE.Color(sky);
     this.scene.fog = new THREE.Fog(sky, 1500, 4200);
 
-    this.scene.add(new THREE.HemisphereLight(0xe8f2ff, 0x7b9a5a, 1.5));
+    const hemi = new THREE.HemisphereLight(0xe8f2ff, 0x7b9a5a, 1.5);
+    this.scene.add(hemi);
     this.sun = new THREE.DirectionalLight(0xfff1dc, 2.1);
     this.sun.castShadow = shadows;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.bias = -0.0005;
     this.scene.add(this.sun, this.sun.target);
+    this.sky = new SkySystem(this.scene, this.sun, hemi, matchMedia('(pointer: coarse)').matches);
 
     this.ground = new THREE.Mesh(buildGroundGeometry(FLAT), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
     this.ground.receiveShadow = true;
@@ -190,6 +196,8 @@ export class World {
     this.signals = new SignalLayer(shadows);
     this.facilities = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
     this.facilities.castShadow = shadows;
+    addWindows(this.buildings.material, this.sky.night);
+    addWindows(this.facilities.material as THREE.MeshLambertMaterial, this.sky.night, 0.7);
     this.facilities.receiveShadow = true;
     this.scene.add(this.facilities);
     this.scene.add(this.airports, this.planes.group, this.signals.group);
@@ -701,9 +709,16 @@ export class World {
     }
   }
 
+  /** Time of day and the weather where the camera looks. */
+  updateSky(days: number, w: Conditions, dt: number): void {
+    this.sky.update(days, w, dt, this.rig.target, this.rig.distance, this.xray);
+    // Unlit road paint dims with the light; street lights warm the asphalt at night
+    this.materials.markings.color.setHex(0xf2e6b0).multiplyScalar(this.sky.light);
+    this.materials.asphalt.emissive.setHex(0x3a2a12).multiplyScalar(this.sky.night.value);
+  }
+
   render(): void {
-    // Keep the shadow camera centered on what the player is looking at
-    const t = this.rig.target;
+    // Keep the shadow camera centered on what the player is looking at (the sky aims the sun there)
     const span = Math.min(900, Math.max(150, this.rig.distance * 1.2));
     const cam = this.sun.shadow.camera;
     cam.left = -span;
@@ -713,8 +728,6 @@ export class World {
     cam.near = 1;
     cam.far = 3000;
     cam.updateProjectionMatrix();
-    this.sun.position.set(t.x + 300, 600, t.y + 200);
-    this.sun.target.position.set(t.x, 0, t.y);
     this.renderer.render(this.scene, this.rig.camera);
     this.placeNames();
     if (this.guides.length) {
