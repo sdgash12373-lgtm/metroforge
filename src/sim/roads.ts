@@ -69,6 +69,8 @@ export interface RoadSegment {
   lanes?: LaneCount;
   /** wide sidewalks with street trees */
   walk?: boolean;
+  /** part of the freeway or its ramps: only reached through the interchange, never rebuilt */
+  highway?: boolean;
 }
 
 export type Snap =
@@ -113,6 +115,7 @@ export class RoadNetwork {
       name: from?.name,
       ...(from?.lanes && from.lanes > 1 ? { lanes: from.lanes } : {}),
       ...(from?.walk ? { walk: true } : {}),
+      ...(from?.highway ? { highway: true } : {}),
       id: id ?? this.nextSeg++,
       a,
       b,
@@ -179,7 +182,7 @@ export class RoadNetwork {
     return this.snapLevel(p, radius);
   }
 
-  private snapLevel(p: Vec2, radius: number, h?: number): Snap {
+  snapLevel(p: Vec2, radius: number, h?: number): Snap {
     let bestNode: RoadNode | null = null;
     let bd = radius;
     for (const n of this.nodes.values()) {

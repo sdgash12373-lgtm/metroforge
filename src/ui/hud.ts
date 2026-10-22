@@ -70,6 +70,8 @@ export interface HudActions {
   drive(): void;
   /** moves the view to a spot on the map */
   lookAt(p: { x: number; y: number }): void;
+  /** turns the view so north is up */
+  faceNorth(): void;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
@@ -84,6 +86,9 @@ export class Hud {
   private stats: Record<'pop' | 'jobs' | 'money' | 'day', HTMLElement>;
   private bars: Record<'R' | 'C' | 'O' | 'I', HTMLElement>;
   private hint: HTMLElement;
+  private compass: HTMLButtonElement;
+  private dial: HTMLElement;
+  private heading = NaN;
   private sub: HTMLElement;
   private toastEl: HTMLElement;
   private toolButtons = new Map<DockItem, HTMLButtonElement>();
@@ -336,7 +341,16 @@ export class Hud {
       dock.append(b);
       this.toolButtons.set(t.id, b);
     }
-    bottom.append(this.hint, this.sub, this.kinds, dock);
+    this.compass = el('button', 'compass panel');
+    this.compass.type = 'button';
+    this.compass.title = '方位：點一下讓北方朝上';
+    this.compass.setAttribute('aria-label', '方位圖，點一下讓北方朝上');
+    this.dial = el('span', 'dial');
+    for (const [label, cls] of [['北', 'n'], ['東', 'e'], ['南', 's'], ['西', 'w']] as const) this.dial.append(el('span', `mark ${cls}`, label));
+    this.dial.append(el('span', 'needle'));
+    this.compass.append(this.dial);
+    this.compass.onclick = () => actions.faceNorth();
+    bottom.append(this.compass, this.hint, this.sub, this.kinds, dock);
     this.bottomBar = bottom;
     root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.levelPanel, this.editPanel.el, this.toastEl, bottom);
 
@@ -842,6 +856,16 @@ export class Hud {
   }
 
   /** `dayFraction`: how far through the current day the clock is, 0..1. */
+  /**
+   * Turns the compass with the camera. `yaw` is the camera's heading around the target: north (-y on
+   * the map) shows that many radians clockwise from the top of the screen.
+   */
+  setHeading(yaw: number): void {
+    if (Math.abs(yaw - this.heading) < 0.002) return;
+    this.heading = yaw;
+    this.dial.style.setProperty('--turn', `${yaw}rad`);
+  }
+
   update(city: City, dayFraction = 0): void {
     this.city = city;
     const b = city.budget;

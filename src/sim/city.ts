@@ -15,7 +15,7 @@ import {
 import { ntd } from './format';
 import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, quadPoint, sampleQuad } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
-import { ELEVATED_HEIGHT, type LaneCount, MAX_GRADE, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
+import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
@@ -42,8 +42,13 @@ export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
 const SAVE_VERSION = 8;
 /** Ring radius of a roundabout by its number of exits. */
-/** Where the highway enters a new city's map */
+/** Where the single highway road entered the map in cities from before the freeway */
 export const GATE: Vec2 = { x: -480, y: 60 };
+/**
+ * A new city's freeway: north–south on viaducts west of the plain (north is -y), with an interchange
+ * whose two ramps come down at `exit` and an access road running on into town.
+ */
+export const FREEWAY = { x: -700, north: -1000, south: 700, ramp: 160, exit: { x: -560, y: 0 }, town: { x: -300, y: 0 }, name: '國道 1 號' };
 export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
 /** Length of the short roads a new roundabout puts out at each exit. */
 const SPOKE_LENGTH = 30;
@@ -141,8 +146,8 @@ interface NetSave {
   nodes: ([number, number, number] | [number, number, number, number])[];
   /** id, a, b, control x, control y, per-lot zone * 10 + level, 1 if one-way (v3) */
   segs: ([number, number, number, number, number, number[]] | [number, number, number, number, number, number[], number])[];
-  /** v8: widened roads (segment id, lanes each way, 1 if wide sidewalks) */
-  styles?: [number, number, number][];
+  /** v8: widened roads (segment id, lanes each way, 1 if wide sidewalks, 1 if freeway) */
+  styles?: ([number, number, number] | [number, number, number, number])[];
 }
 
 /** Stops (id, x, y), lines (id, color, stop ids, name) and the fare of one kind of transport. */
@@ -432,7 +437,64 @@ export class City {
   /** Why a planned road or track can't be built for its slope or the land under it, or null. */
   buildProblem(start: Snap, control: Vec2 | null, end: Snap, height: number, net = this.net): string | null {
     const [ha, hb] = this.roadHeights(start, end, height, net);
-    return this.gradeProblem(start, control, end, height, net) ?? this.terrainProblem(start.p, control, end.p, ha, hb);
+    return (
+      this.gradeProblem(start, control, end, height, net) ??
+      this.terrainProblem(start.p, control, end.p, ha, hb) ??
+      (net === this.net ? this.freewayProblem(start, control, end, ha, hb) : null)
+    );
+  }
+
+  /** Roads may pass over or under the freeway but only join it at the interchange, which is already built. */
+  private freewayProblem(start: Snap, control: Vec2 | null, end: Snap, ha: number, hb: number): string | null {
+    const net = this.net;
+    const highways = [...net.segments.values()].filter((s) => s.highway);
+    if (!highways.length) return null;
+    const reason = '高速公路只能從交流道進出，可以從上方或下方穿過';
+    const onFreeway = (s: Snap, h: number): boolean => {
+      const at = s.kind === 'free' ? net.snapLevel(s.p, 0.5, h) : s;
+      if (at.kind === 'segment') return !!at.seg.highway;
+      if (at.kind === 'node') {
+        const touching = [...net.segments.values()].filter((x) => x.a === at.node.id || x.b === at.node.id);
+        return touching.length > 0 && touching.every((x) => x.highway);
+      }
+      return false;
+    };
+    if (onFreeway(start, ha) || onFreeway(end, hb)) return reason;
+    const quad = { a: start.p, c: control ?? lerp(start.p, end.p, 0.5), b: end.p };
+    const samples = sampleQuad(quad, 48);
+    for (const seg of highways) {
+      for (const x of curveIntersections(samples, seg.samples)) {
+        const p = quadPoint(quad, x.ta);
+        if (dist(p, start.p) < MIN_SEGMENT || dist(p, end.p) < MIN_SEGMENT) continue;
+        const t = x.ta * x.ta * (3 - 2 * x.ta);
+        if (Math.abs(ha + (hb - ha) * t - net.heightAt(seg, x.tb)) < LEVEL_TOLERANCE) return reason;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Lays out a new city's freeway, free: the main line on viaducts (two lanes each way) leaving the map at
+   * both ends, two ramps down to the interchange, and an access road into town.
+   */
+  buildFreeway(): void {
+    const net = this.net;
+    const { x, north, south, ramp, exit, town } = FREEWAY;
+    const free = (p: Vec2): Snap => ({ kind: 'free', p });
+    const main = net.addRoad(free({ x, y: north }), null, free({ x, y: south }), ELEVATED_HEIGHT);
+    for (const s of main) Object.assign(s, { lanes: 2, highway: true, name: FREEWAY.name });
+    const ends = [main[0].a, main[main.length - 1].b];
+    const access = net.addRoad(free(exit), null, free(town), 0);
+    for (const s of access) applyStyle(net, s, { lanes: 2 });
+    const g = net.node(access[0].a);
+    for (const dir of [-1, 1]) {
+      const on = net.snap({ x, y: exit.y + dir * ramp }, 1, ELEVATED_HEIGHT);
+      const control = { x: x + 10, y: exit.y + dir * ramp * 0.3 };
+      for (const s of net.addRoad({ kind: 'node', node: g, p: g.p }, control, on, 0)) s.highway = true;
+    }
+    for (const n of ends) this.outside.add(n);
+    this.labelsVersion++;
+    this.roadsChanged();
   }
 
   buildRoad(
@@ -699,6 +761,7 @@ export class City {
   }
 
   private bulldozeRoad(seg: RoadSegment): { ok: boolean; refund: number; reason?: string; what?: string } {
+    if (seg.highway) return { ok: false, refund: 0, reason: '高速公路和交流道不能拆除' };
     if (this.outside.has(seg.a) || this.outside.has(seg.b)) {
       return { ok: false, refund: 0, reason: '這段是對外的高速公路，不能拆除' };
     }
@@ -821,6 +884,7 @@ export class City {
     if (!seg) return { ok: false, cost: 0, reason: '找不到道路' };
     if (!this.unlocked('roadUpgrade')) return { ok: false, cost: 0, reason: `升級為${LEVELS[UNLOCK.roadUpgrade].name}後開放` };
     if (seg.oneway) return { ok: false, cost: 0, reason: '圓環不能升級' };
+    if (seg.highway) return { ok: false, cost: 0, reason: '高速公路不能改建' };
     const segs = this.net.street(seg).filter((s) => (style.lanes ?? s.lanes ?? 1) !== (s.lanes ?? 1) || (style.walk ?? !!s.walk) !== !!s.walk);
     if (!segs.length) return { ok: false, cost: 0, reason: '已經是這個樣式' };
     const cost = this.restyleCost(segs, style);
@@ -1278,7 +1342,8 @@ function saveNet(net: RoadNetwork): NetSave {
       s.lots.map((l) => l.zone * 10 + l.level),
       ...(s.oneway ? [1] : []),
     ] as NetSave['segs'][number]),
-    styles: [...net.segments.values()].filter((s) => s.lanes || s.walk).map((s) => [s.id, s.lanes ?? 1, s.walk ? 1 : 0]),
+    styles: [...net.segments.values()].filter((s) => s.lanes || s.walk || s.highway)
+      .map((s) => (s.highway ? [s.id, s.lanes ?? 1, s.walk ? 1 : 0, 1] : [s.id, s.lanes ?? 1, s.walk ? 1 : 0])),
   };
 }
 
@@ -1304,10 +1369,11 @@ function applyStyle(net: RoadNetwork, seg: RoadSegment, style: RoadStyle): void 
 
 function loadNet(net: RoadNetwork, data: NetSave, lots: boolean): void {
   for (const [id, x, y, h] of data.nodes) net.addNode({ x, y }, id, h ?? 0);
-  const styles = new Map((data.styles ?? []).map(([id, lanes, walk]) => [id, { lanes: lanes as LaneCount, walk: walk === 1 }]));
+  const styles = new Map((data.styles ?? []).map(([id, lanes, walk, highway]) => [id, { lanes: lanes as LaneCount, walk: walk === 1, highway: highway === 1 }]));
   for (const [id, a, b, cx, cy, zoning, oneway] of data.segs) {
     const seg = net.createSegment(a, b, { x: cx, y: cy }, undefined, id, oneway === 1);
     const style = styles.get(id);
+    if (style?.highway) seg.highway = true;
     if (style) applyStyle(net, seg, style);
     if (!lots) continue;
     zoning.forEach((v, i) => {

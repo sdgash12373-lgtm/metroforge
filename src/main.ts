@@ -1,5 +1,5 @@
 import './style.css';
-import { City, DAY_STEPS, GATE } from './sim/city';
+import { City, DAY_STEPS, FREEWAY } from './sim/city';
 import { TERRAINS, type TerrainName } from './sim/terrain';
 import { clock } from './sim/weather';
 import { AUTO_SLOT, SaveSlots, openStore } from './storage/saves';
@@ -19,11 +19,8 @@ const SETTINGS_KEY = 'skyline-city:settings';
 function newCity(name = '我的城市', terrain: TerrainName = 'kaohsiung'): City {
   const city = new City(TERRAINS[terrain]);
   city.name = name;
-  // The highway exit the city grows from
-  const gate = GATE;
-  city.buildRoad({ kind: 'free', p: gate }, { x: -240, y: 40 }, { kind: 'free', p: { x: 0, y: 0 } }, true);
-  const node = [...city.net.nodes.values()].find((n) => n.p.x === gate.x && n.p.y === gate.y);
-  if (node) city.addOutsideConnection(node.id);
+  // The freeway and interchange the city grows from
+  city.buildFreeway();
   return city;
 }
 
@@ -69,6 +66,10 @@ hud = new Hud(document.getElementById('ui')!, tools, {
     void autosave();
     menu.show('pause');
   },
+  faceNorth: () => {
+    world.rig.yaw = 0;
+    world.rig.apply();
+  },
   lookAt: (p) => {
     world.rig.target = { x: p.x, y: p.y };
     world.rig.distance = Math.min(world.rig.distance, 320);
@@ -100,8 +101,20 @@ try {
 }
 hud.lockButton.setAttribute('aria-pressed', String(world.rig.locked));
 
+/** Looks at the built-up part of town, or at the interchange and the road into town in a new city. */
 function focusCity(): void {
-  world.rig.target = { x: -60, y: 10 };
+  let x = 0;
+  let y = 0;
+  let n = 0;
+  for (const seg of city.net.segments.values()) {
+    for (const l of seg.lots) {
+      if (!l.level) continue;
+      x += l.x;
+      y += l.y;
+      n++;
+    }
+  }
+  world.rig.target = n ? { x: x / n, y: y / n } : { x: (FREEWAY.exit.x + FREEWAY.town.x) / 2 - 40, y: FREEWAY.exit.y };
   world.rig.distance = coarse ? 360 : 280;
   world.rig.pitch = 0.85;
   world.rig.apply();
@@ -251,6 +264,7 @@ function frame(now: number): void {
     lastSky = city.weather.sky;
   }
   hud!.update(city, acc / TICK_SECONDS / DAY_STEPS);
+  hud!.setHeading(world.rig.yaw);
   hud!.updateHint();
   world.render();
   requestAnimationFrame(frame);
