@@ -143,6 +143,9 @@ export interface SaveData extends NetSave {
   /** v5: the land the city stands on (older saves are flat) */
   terrain?: TerrainName;
   name?: string;
+  /** stable id for player statistics, and real seconds played */
+  uid?: string;
+  played?: number;
   /** v6: parks, schools, police, fire, hospitals and landmarks (id, kind, x, y, angle) */
   facilities?: [number, FacilityKind, number, number, number][];
 }
@@ -161,6 +164,10 @@ export class City {
   transit = new Transit(this.net, this.traffic);
   /** shown on the start screen and in save slots */
   name = '我的城市';
+  /** stable id for this city in the player statistics */
+  uid = randomId();
+  /** real seconds the city has been played (unpaused) */
+  played = 0;
   money = 80000;
   /** the sky over the city, by the climate of its land */
   readonly weather: Weather;
@@ -995,6 +1002,8 @@ export class City {
       districts: [...this.districts.values()].map((d) => [d.id, round2(d.p.x), round2(d.p.y), Math.round(d.r), d.name, d.color]),
       terrain: this.terrain.name,
       name: this.name,
+      uid: this.uid,
+      played: Math.round(this.played),
       facilities: [...this.facilities.values()].map((f) => [f.id, f.kind, round2(f.p.x), round2(f.p.y), round2(f.angle * 1000) / 1000]),
     };
   }
@@ -1005,6 +1014,8 @@ export class City {
     city.money = data.money;
     city.steps = Math.round(data.day * DAY_STEPS);
     if (data.name) city.name = data.name;
+    if (data.uid) city.uid = data.uid;
+    city.played = data.played ?? 0;
     loadNet(city.net, data, true);
     for (const n of data.outside ?? []) city.outside.add(n);
     if (data.taxes) city.taxes = { ...data.taxes };
@@ -1076,3 +1087,10 @@ function loadTransit(t: Transit, data: TransitSave): void {
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/** A random id such as 'k3j9x2…', for telling cities and players apart in statistics. */
+export function randomId(): string {
+  const bytes = new Uint8Array(12);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => (b % 36).toString(36)).join('');
+}
