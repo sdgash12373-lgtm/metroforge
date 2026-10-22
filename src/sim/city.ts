@@ -42,6 +42,8 @@ export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
 const SAVE_VERSION = 8;
 /** Ring radius of a roundabout by its number of exits. */
+/** Where the highway enters a new city's map */
+export const GATE: Vec2 = { x: -480, y: 60 };
 export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
 /** Length of the short roads a new roundabout puts out at each exit. */
 const SPOKE_LENGTH = 30;
@@ -351,6 +353,32 @@ export class City {
 
   isConnected(seg: RoadSegment): boolean {
     return this.connected.has(seg.a);
+  }
+
+  /**
+   * Puts the highway back if every entry to it has been removed (an earlier version let a roundabout
+   * clear it away): joins the nearest road to the gate, with a short free stub when it's not right there.
+   */
+  restoreGate(): boolean {
+    if (!this.outside.size || [...this.outside].some((n) => this.net.nodes.has(n))) return false;
+    this.outside.clear();
+    let best: { id: number; d: number } | null = null;
+    for (const n of this.net.nodes.values()) {
+      if (n.h !== 0) continue;
+      const d = dist(n.p, GATE);
+      if (!best || d < best.d) best = { id: n.id, d };
+    }
+    if (!best) return false;
+    if (best.d < 12) this.outside.add(best.id);
+    else {
+      const pieces = this.net.addRoad({ kind: 'free', p: GATE }, null, { kind: 'node', node: this.net.node(best.id), p: this.net.node(best.id).p });
+      const gate = pieces.find((s) => dist(this.net.node(s.a).p, GATE) < 0.5)?.a ?? pieces[0]?.a;
+      if (gate === undefined) return false;
+      this.outside.add(gate);
+      this.roadsChanged();
+    }
+    this.computeConnectivity();
+    return true;
   }
 
   /** Marks a road end as the highway into the city. */
@@ -706,6 +734,11 @@ export class City {
       if (!near) continue;
       if (seg.oneway) return { ok: false, cost, reason: '離另一個圓環太近' };
       if (!this.net.isStreet(seg)) return { ok: false, cost, reason: '圓環要蓋在平地上，不能壓到高架或隧道' };
+    }
+    // The ring clears the roads inside it, which would cut the city off from the highway
+    for (const id of this.outside) {
+      const n = this.net.nodes.get(id);
+      if (n && dist(n.p, center) < r + 12) return { ok: false, cost, reason: '離高速公路出入口太近，圓環會把它拆掉' };
     }
     // Line the exits up with the first road that crosses the ring, if any
     const circle: Sample[] = [];
@@ -1226,6 +1259,7 @@ export class City {
     }
     for (const [id, x, y, r, name, color] of data.districts ?? []) city.addDistrict({ x, y }, r, { id, name, color });
     for (const [id, kind, x, y, angle] of data.facilities ?? []) if (FACILITIES[kind]) city.addFacility(kind, { x, y }, angle, id);
+    city.restoreGate();
     city.roadsChanged();
     city.measure();
     return city;
