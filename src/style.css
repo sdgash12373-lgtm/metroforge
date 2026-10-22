@@ -776,3 +776,8 @@ body.menu-open .angle-labels {
 .menu-news li {
   margin: 2px 0;
 }
+.stat.weather {
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}

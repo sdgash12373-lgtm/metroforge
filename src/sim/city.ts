@@ -16,6 +16,7 @@ import { ntd } from './format';
 import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, quadPoint, sampleQuad } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
 import { ELEVATED_HEIGHT, MAX_GRADE, ROAD_WIDTH, RoadNetwork, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
+import { Weather } from './weather';
 import { FLAT, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic } from './traffic';
 import { Transit } from './transit';
@@ -23,7 +24,12 @@ import { CELL, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots,
 
 export const ROAD_COST_PER_M = 20;
 export const BULLDOZE_REFUND = 0.5;
-/** Road upkeep per meter per day. */
+/** Simulation steps in one game day: each is half a second at normal speed, so a day lasts 20 minutes. */
+export const DAY_STEPS = 2400;
+/** Steps in one game hour; the budget shows money per hour. */
+export const HOUR_STEPS = DAY_STEPS / 24;
+
+/** Road upkeep per meter per simulation step. */
 export const ROAD_UPKEEP = 0.004;
 export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
@@ -90,7 +96,7 @@ export interface Needs {
   coverage: Record<ServiceKind, number>;
   /** services most residents lack, worst first */
   wants: ServiceKind[];
-  /** visitors to the landmarks yesterday */
+  /** visitors to the landmarks per game hour */
   tourists: number;
 }
 
@@ -156,11 +162,18 @@ export class City {
   /** shown on the start screen and in save slots */
   name = '我的城市';
   money = 80000;
-  day = 0;
+  /** the sky over the city, by the climate of its land */
+  readonly weather: Weather;
+  /** simulation steps so far; DAY_STEPS make a day. A new city starts at 8 in the morning. */
+  steps = DAY_STEPS / 3;
+  /** days so far, with the part of today that has passed */
+  get day(): number {
+    return this.steps / DAY_STEPS;
+  }
   demand: Record<DemandKey, number> = { R: 50, C: 30, O: 20, I: 40 };
   stats: CityStats = { population: 0, jobs: 0, buildings: 0, disconnected: 0, riders: 0 };
   taxes: TaxRates = { residential: DEFAULT_TAX, business: DEFAULT_TAX };
-  /** last day's income and expenses */
+  /** income and expenses per game hour, at the current rate */
   budget: Budget = {
     residentialTax: 0,
     businessTax: 0,
@@ -197,6 +210,7 @@ export class City {
   lotsVersion = 0;
 
   constructor(readonly terrain: Terrain = FLAT) {
+    this.weather = new Weather(terrain);
     this.net.listener = {
       added: (seg, from) => {
         seg.lots = generateLots(this.net, seg);
@@ -799,8 +813,9 @@ export class City {
   }
 
   /**
-   * One simulation day: demand, building growth (needs a road to the highway; slowed by jams),
-   * new trips onto the roads, then taxes and upkeep.
+   * One simulation step (half a second at normal speed): demand, building growth (needs a road to the highway;
+   * slowed by jams), new trips onto the roads, then taxes and upkeep. The rates below are per step;
+   * the budget shows them per hour.
    */
   tick(rng: Rng = Math.random): void {
     const zoned = this.survey();
@@ -856,26 +871,38 @@ export class City {
       services += spec.upkeep;
       if (spec.tourists) tourists += spec.tourists * (40 + this.stats.population / 100);
     }
-    this.needs.tourists = Math.round(tourists);
-    this.budget = {
+    // Few visitors come in a storm, none in a typhoon
+    tourists *= { clear: 1, cloudy: 1, fog: 0.9, rain: 0.75, storm: 0.5, typhoon: 0 }[this.weather.sky];
+    this.needs.tourists = Math.round(tourists * HOUR_STEPS);
+    const step = {
       residentialTax: this.stats.population * this.taxes.residential * 0.005,
       businessTax: this.stats.jobs * this.taxes.business * 0.004,
       roadUpkeep: roadLength * ROAD_UPKEEP,
-      // Fares come in bursts as vehicles reach stops and planes leave; show running averages
-      transitFares: this.budget.transitFares * 0.9 + fares * 0.1,
       transitUpkeep: upkeep,
-      airIncome: this.budget.airIncome * 0.97 + air.incomeToday * 0.03,
       airUpkeep: air.airports.size * AIRPORT_UPKEEP + air.flights.size * FLIGHT_UPKEEP,
       servicesUpkeep: services,
       tourism: tourists * TOURIST_SPEND,
     };
-    const b = this.budget;
+    const perHour = (v: number) => v * HOUR_STEPS;
+    this.budget = {
+      residentialTax: perHour(step.residentialTax),
+      businessTax: perHour(step.businessTax),
+      roadUpkeep: perHour(step.roadUpkeep),
+      // Fares come in bursts as vehicles reach stops and planes leave; show running averages
+      transitFares: this.budget.transitFares * 0.9 + perHour(fares) * 0.1,
+      transitUpkeep: perHour(step.transitUpkeep),
+      airIncome: this.budget.airIncome * 0.97 + perHour(air.incomeToday) * 0.03,
+      airUpkeep: perHour(step.airUpkeep),
+      servicesUpkeep: perHour(step.servicesUpkeep),
+      tourism: perHour(step.tourism),
+    };
     this.money +=
-      b.residentialTax + b.businessTax + fares + air.incomeToday + b.tourism - b.roadUpkeep - b.transitUpkeep - b.airUpkeep - b.servicesUpkeep;
+      step.residentialTax + step.businessTax + fares + air.incomeToday + step.tourism - step.roadUpkeep - step.transitUpkeep - step.airUpkeep - step.servicesUpkeep;
     this.stats.riders = riders;
     air.incomeToday = 0;
     air.passengersToday = 0;
-    this.day++;
+    this.steps++;
+    this.weather.step(this.day, 1 / DAY_STEPS, rng);
   }
 
   /** Moves every vehicle, train and plane on by dt seconds. */
@@ -976,7 +1003,7 @@ export class City {
     if (data.v < 1 || data.v > SAVE_VERSION) throw new Error(`unsupported save version ${data.v}`);
     const city = new City(TERRAINS[data.terrain ?? 'flat'] ?? FLAT);
     city.money = data.money;
-    city.day = data.day;
+    city.steps = Math.round(data.day * DAY_STEPS);
     if (data.name) city.name = data.name;
     loadNet(city.net, data, true);
     for (const n of data.outside ?? []) city.outside.add(n);

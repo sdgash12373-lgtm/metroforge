@@ -4,6 +4,7 @@ import { gameDate, ntd } from '../sim/format';
 import { type City, MAX_TAX } from '../sim/city';
 import { FACILITIES, LANDMARK_KINDS, SERVICE_KINDS } from '../sim/facilities';
 import { RAIL_KINDS } from '../sim/rail';
+import type { Conditions } from '../sim/weather';
 import { ZONES, Zone } from '../sim/zoning';
 import { BUS, LINE_COLORS, MODES, type Transit } from '../sim/transit';
 import { EditPanel } from './editPanel';
@@ -121,6 +122,8 @@ export class Hud {
     };
     this.stats = { pop: stat('人口'), jobs: stat('工作'), money: stat('資金'), day: stat('') };
     this.stats.day.parentElement!.classList.add('clock');
+    this.weatherEl = el('div', 'stat weather');
+    top.append(this.weatherEl);
     const rci = el('div', 'rci');
     rci.title = '需求：住宅 / 商業 / 辦公 / 工業';
     const bar = (k: string, color: string) => {
@@ -195,7 +198,7 @@ export class Hud {
     // Budget: last day's income and spending, and the two tax sliders
     this.budgetPanel = el('section', 'budget panel');
     this.budgetPanel.hidden = true;
-    this.budgetPanel.append(el('h2', '', '每日收支'));
+    this.budgetPanel.append(el('h2', '', '每小時收支'));
     const row = (label: string) => {
       const r = el('div', 'brow');
       const v = el('b');
@@ -213,7 +216,7 @@ export class Hud {
       transit: row('運輸營運'),
       airUpkeep: row('機場營運'),
       services: row('公共服務'),
-      net: row('每日淨額'),
+      net: row('每小時淨額'),
     };
     this.budgetRows.net.parentElement!.classList.add('total');
     const slider = (id: string, label: string, onInput: (v: number) => void, max = MAX_TAX, step = 1) => {
@@ -655,6 +658,18 @@ export class Hud {
     done?.();
   }
 
+  private weatherEl: HTMLElement;
+  private weatherShown = '';
+
+  /** Weather where the camera looks, next to the clock. */
+  setWeather(w: Conditions): void {
+    const text = `${w.icon} ${w.label} ${w.temp}°C`;
+    if (text + w.region === this.weatherShown) return;
+    this.weatherShown = text + w.region;
+    this.weatherEl.textContent = text;
+    this.weatherEl.title = `${w.region}：${w.label}，氣溫 ${w.temp}°C`;
+  }
+
   private needsShown = '';
   private renderNeeds(city: City): void {
     const n = city.needs;
@@ -679,7 +694,7 @@ export class Hud {
     if (!city.stats.population) rows.push(el('p', 'note', '還沒有居民。'));
     else if (!n.wants.length) rows.push(el('p', 'note', '居民對公共服務很滿意！'));
     for (const k of n.wants) rows.push(el('p', 'want', `「${FACILITIES[k].need}」 → 蓋${FACILITIES[k].label}`));
-    if (n.tourists) rows.push(el('p', 'note', `今日觀光客 ${n.tourists.toLocaleString()} 人`));
+    if (n.tourists) rows.push(el('p', 'note', `每小時觀光客 ${n.tourists.toLocaleString()} 人`));
     this.needsBody.replaceChildren(...rows);
   }
 
