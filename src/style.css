@@ -729,6 +729,10 @@ body.menu-open .angle-labels {
   margin: 6px 0;
   font-size: 13px;
 }
+.needs .meter.wide {
+  grid-template-columns: 6.6em 1fr 3.2em;
+  white-space: nowrap;
+}
 .needs .meter b {
   text-align: right;
   font-variant-numeric: tabular-nums;

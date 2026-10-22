@@ -8,6 +8,8 @@ import { Zone } from '../sim/zoning';
 const MAX = 900;
 /** One walker on the street per this many residents. */
 const PER_RESIDENTS = 30;
+/** One cyclist on the street per this many residents who ride to work. */
+const PER_CYCLIST = 25;
 const CLOTHES = [0xe4572e, 0x2e86ab, 0xf2f2f2, 0x3b3b3b, 0xf2b134, 0x6a994e, 0xa23b72, 0x4f8fd6, 0xd98ab0];
 
 interface Walker {
@@ -23,6 +25,8 @@ interface Walker {
   phase: number;
   /** walking over a footbridge: its id, and how far across */
   bridge?: number;
+  /** riding a bicycle (residents who can't afford a scooter or car) */
+  bike?: boolean;
 }
 
 /** A little person, about 1.7 m tall, facing +x. */
@@ -33,12 +37,23 @@ function person(): THREE.BufferGeometry {
   return mergeGeometries([legs, body, head])!;
 }
 
+/** A bicycle and its rider, facing +x. */
+function cyclist(): THREE.BufferGeometry {
+  const wheels = [-0.55, 0.55].map((x) => new THREE.BoxGeometry(0.62, 0.62, 0.08).translate(x, 0.31, 0));
+  const frame = new THREE.BoxGeometry(1.1, 0.1, 0.08).translate(0, 0.62, 0);
+  const rider = new THREE.BoxGeometry(0.34, 0.65, 0.45).translate(-0.1, 1.15, 0);
+  const head = new THREE.BoxGeometry(0.24, 0.24, 0.24).translate(-0.02, 1.62, 0);
+  return mergeGeometries([...wheels, frame, rider, head])!;
+}
+
 /**
- * People walking along the sidewalks: more where more people live and work, fewer at night and in the rain,
+ * People walking and cycling along the sidewalks: more where more people live and work, fewer at night and in the rain,
  * and a few crossing each footbridge. Purely for looks; they don't affect the simulation.
  */
 export class PedestrianLayer {
-  readonly mesh: THREE.InstancedMesh;
+  readonly group = new THREE.Group();
+  private readonly mesh: THREE.InstancedMesh;
+  private readonly bikes: THREE.InstancedMesh;
   private walkers: Walker[] = [];
   private m = new THREE.Matrix4();
   private q = new THREE.Quaternion();
@@ -49,10 +64,15 @@ export class PedestrianLayer {
   private seed = 1;
 
   constructor(shadows: boolean) {
-    this.mesh = new THREE.InstancedMesh(person(), new THREE.MeshLambertMaterial({ flatShading: true }), MAX);
-    this.mesh.count = 0;
-    this.mesh.frustumCulled = false;
-    this.mesh.castShadow = shadows;
+    const mat = new THREE.MeshLambertMaterial({ flatShading: true });
+    this.mesh = new THREE.InstancedMesh(person(), mat, MAX);
+    this.bikes = new THREE.InstancedMesh(cyclist(), mat, MAX);
+    for (const m of [this.mesh, this.bikes]) {
+      m.count = 0;
+      m.frustumCulled = false;
+      m.castShadow = shadows;
+      this.group.add(m);
+    }
   }
 
   private rand(): number {
@@ -75,23 +95,33 @@ export class PedestrianLayer {
     const net = city.net;
     // Fewer people out late at night and in the rain
     const night = hour < 5 ? 0.15 : hour < 7 ? 0.5 : hour >= 22 ? 0.35 : 1;
-    const want = Math.min(MAX - 40, Math.round((city.stats.population / PER_RESIDENTS) * night * (1 - rain * 0.6)));
+    const out = night * (1 - rain * 0.6);
+    const wantWalkers = Math.min(MAX - 40, Math.round((city.stats.population / PER_RESIDENTS) * out));
+    const wantBikes = Math.min(MAX - 40, Math.round((city.households.people.bike / PER_CYCLIST) * out));
     this.walkers = this.walkers.filter((w) => (w.bridge !== undefined ? city.facilities.has(w.bridge) : net.segments.has(w.seg)));
-    if (this.walkers.length < want) {
-      const streets = this.busyStreets(city);
-      for (let k = 0; k < 20 && streets.length && this.walkers.length < want; k++) {
-        const seg = streets[Math.floor(this.rand() * streets.length)];
-        this.walkers.push({
-          seg: seg.id,
-          s: this.rand() * seg.length,
-          dir: this.rand() < 0.5 ? 1 : -1,
-          side: this.rand() < 0.5 ? 1 : -1,
-          speed: 1.1 + this.rand() * 0.6,
-          color: CLOTHES[Math.floor(this.rand() * CLOTHES.length)],
-          phase: this.rand() * 6,
-        });
+    for (const bike of [false, true]) {
+      const want = bike ? wantBikes : wantWalkers;
+      const mine = this.walkers.filter((w) => !!w.bike === bike && w.bridge === undefined);
+      if (mine.length < want) {
+        const streets = this.busyStreets(city);
+        for (let k = 0, have = mine.length; k < 20 && streets.length && have < want; k++, have++) {
+          const seg = streets[Math.floor(this.rand() * streets.length)];
+          this.walkers.push({
+            seg: seg.id,
+            s: this.rand() * seg.length,
+            dir: this.rand() < 0.5 ? 1 : -1,
+            side: this.rand() < 0.5 ? 1 : -1,
+            speed: bike ? 3.5 + this.rand() * 2 : 1.1 + this.rand() * 0.6,
+            color: CLOTHES[Math.floor(this.rand() * CLOTHES.length)],
+            phase: this.rand() * 6,
+            ...(bike ? { bike } : {}),
+          });
+        }
+      } else if (mine.length > want + 20) {
+        const drop = new Set(mine.slice(want));
+        this.walkers = this.walkers.filter((w) => !drop.has(w));
       }
-    } else if (this.walkers.length > want + 20) this.walkers.length = want;
+    }
     // Two people crossing each footbridge
     const bridges = [...city.facilities.values()].filter((f) => f.kind === 'footbridge');
     for (const f of bridges) {
@@ -101,10 +131,11 @@ export class PedestrianLayer {
       }
     }
     let n = 0;
+    let nb = 0;
     for (const w of this.walkers) {
       w.s += w.speed * dt * w.dir;
       w.phase += dt * 8;
-      if (n >= MAX) break;
+      if (w.bike ? nb >= MAX : n >= MAX) continue;
       let x: number;
       let y: number;
       let h = 0;
@@ -156,14 +187,18 @@ export class PedestrianLayer {
         hy = ty * w.dir;
       }
       this.q.setFromAxisAngle(this.up, Math.atan2(-hy, hx));
-      this.p.set(x, h + 0.1 + Math.abs(Math.sin(w.phase)) * 0.06, y);
+      this.p.set(x, h + 0.1 + (w.bike ? 0 : Math.abs(Math.sin(w.phase)) * 0.06), y);
       this.m.compose(this.p, this.q, this.one);
-      this.mesh.setMatrixAt(n, this.m);
-      this.mesh.setColorAt(n, this.c.setHex(w.color));
-      n++;
+      const mesh = w.bike ? this.bikes : this.mesh;
+      const i = w.bike ? nb++ : n++;
+      mesh.setMatrixAt(i, this.m);
+      mesh.setColorAt(i, this.c.setHex(w.color));
     }
     this.mesh.count = n;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    this.bikes.count = nb;
+    for (const m of [this.mesh, this.bikes]) {
+      m.instanceMatrix.needsUpdate = true;
+      if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    }
   }
 }
