@@ -3,7 +3,7 @@ import logoUrl from '../assets/logo.png';
 import { gameDate, ntd } from '../sim/format';
 import { type City, MAX_TAX, budgetTotals } from '../sim/city';
 import { LEVELS, ntdShort } from '../sim/levels';
-import { FACILITIES, LANDMARK_KINDS, SERVICE_KINDS } from '../sim/facilities';
+import { FACILITIES, GREEN_KINDS, LANDMARK_KINDS, SERVICE_KINDS } from '../sim/facilities';
 import { RAIL_KINDS } from '../sim/rail';
 import type { Conditions } from '../sim/weather';
 import { ZONES, Zone } from '../sim/zoning';
@@ -30,6 +30,9 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
   build: [
     ...SERVICE_KINDS.map((k) => ({ id: k as Tool, label: FACILITIES[k].label })),
     { id: 'landmark', label: '地標' },
+    { id: 'greenery', label: '綠化' },
+    { id: 'footbridge', label: '天橋' },
+    { id: 'demolish', label: '拆除建設' },
   ],
   names: [
     { id: 'streetName', label: '路名' },
@@ -434,8 +437,19 @@ export class Hud {
       const t = this.tools;
       const built = new Set([...(this.city?.facilities.values() ?? [])].map((f) => f.kind));
       for (const k of LANDMARK_KINDS) {
-        option(`${FACILITIES[k].label}${built.has(k) ? ' · 已興建' : ''}`, t.landmark === k, () => {
+        const unlock = FACILITIES[k].unlock;
+        const lock = unlock && !this.city?.unlocked(unlock) ? '🔒 ' : '';
+        option(`${lock}${FACILITIES[k].label}${built.has(k) ? ' · 已興建' : ''}`, t.landmark === k, () => {
           t.setLandmark(k);
+          this.render();
+        }, FACILITIES[k].color);
+      }
+    } else if (this.tools.tool === 'greenery') {
+      const t = this.tools;
+      const lock = this.city?.unlocked('greenery') ? '' : '🔒 ';
+      for (const k of GREEN_KINDS) {
+        option(`${lock}${FACILITIES[k].label}`, t.green === k, () => {
+          t.setGreen(k);
           this.render();
         }, FACILITIES[k].color);
       }

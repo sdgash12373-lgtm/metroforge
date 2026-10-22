@@ -15,7 +15,7 @@ import {
 import { ntd } from './format';
 import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, quadPoint, sampleQuad } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
-import { ELEVATED_HEIGHT, type LaneCount, MAX_GRADE, ROAD_WIDTH, RoadNetwork, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
+import { ELEVATED_HEIGHT, type LaneCount, MAX_GRADE, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
@@ -24,6 +24,8 @@ import { Transit } from './transit';
 import { CELL, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
+/** Highest office level once a 直轄市 opens skyscrapers (otherwise 5). */
+export const OFFICE_TOWER_LEVEL = 7;
 export const BULLDOZE_REFUND = 0.5;
 /** Simulation steps in one game day: each is half a second at normal speed, so a day lasts 20 minutes. */
 export const DAY_STEPS = 2400;
@@ -263,6 +265,14 @@ export class City {
   }
 
   private roadsChanged(): void {
+    // Footbridges go with the road under them, and fit it when it is widened
+    for (const f of [...this.facilities.values()]) {
+      if (f.kind !== 'footbridge') continue;
+      const seg = this.footbridgeRoad(f.p);
+      if (!seg) this.facilities.delete(f.id);
+      else f.span = roadWidth(seg) + 6;
+      this.facilitiesVersion++;
+    }
     recomputeBlocked(this.net, (p) => this.occupied(p));
     this.traffic.onNetworkChanged();
     this.transit.onNetworkChanged();
@@ -295,7 +305,8 @@ export class City {
   /** Water, hillside, track or an airfield on this spot, so nothing can be built on it. */
   occupied(p: Vec2): boolean {
     if (!buildable(this.terrain, p)) return true;
-    for (const f of this.facilities.values()) if (footprintContains(f, p, 2)) return true;
+    // Footbridges stand on the sidewalks and leave the lots beside them free
+    for (const f of this.facilities.values()) if (f.kind !== 'footbridge' && footprintContains(f, p, 2)) return true;
     for (const a of this.aviation.airports.values()) if (Aviation.contains(a, p, 2)) return true;
     const clear = ROAD_WIDTH / 2 + CELL * 0.45;
     for (const r of RAIL_KINDS) {
@@ -463,7 +474,7 @@ export class City {
    */
   facilitySpot(kind: FacilityKind, p: Vec2, angle = 0): { p: Vec2; angle: number; road: boolean } {
     const { d } = FACILITIES[kind];
-    const hit = this.net.segmentAt(p, d + ROAD_WIDTH, 0);
+    const hit = this.net.segmentAt(p, kind === 'footbridge' ? 30 : d + ROAD_WIDTH, 0);
     if (!hit || !this.net.isStreet(hit.seg)) return { p, angle, road: false };
     const s = hit.seg.samples;
     const i = Math.max(1, s.findIndex((q) => q.t >= hit.t));
@@ -480,7 +491,9 @@ export class City {
       nx = -nx;
       ny = -ny;
     }
-    const back = ROAD_WIDTH / 2 + FACILITY_ROAD_GAP / 2 + d / 2;
+    // A footbridge stands across the road, its stairs on both kerbs
+    if (kind === 'footbridge') return { p: on, angle: Math.atan2(ny, nx) - Math.PI / 2, road: true };
+    const back = roadWidth(hit.seg) / 2 + FACILITY_ROAD_GAP / 2 + d / 2;
     // The footprint's depth axis points away from the road
     return { p: { x: on.x + nx * back, y: on.y + ny * back }, angle: Math.atan2(ny, nx) - Math.PI / 2, road: true };
   }
@@ -488,6 +501,8 @@ export class City {
   /** Why a facility can't go here, or null. */
   facilityProblem(kind: FacilityKind, p: Vec2, angle: number): string | null {
     const spec = FACILITIES[kind];
+    if (spec.unlock && !this.unlocked(spec.unlock)) return `城市升級為「${LEVELS[UNLOCK[spec.unlock]].name}」後才能蓋${spec.label}`;
+    if (kind === 'footbridge') return this.footbridgeProblem(p, angle);
     const plan = { kind, p, angle };
     if (isLandmark(kind) && [...this.facilities.values()].some((f) => f.kind === kind)) return `城市裡已經有${spec.label}了`;
     if (footprintGrid(plan).some((q) => !buildable(this.terrain, q))) return `${spec.label}要蓋在平坦的陸地上`;
@@ -500,9 +515,35 @@ export class City {
         return `這裡已經有${FACILITIES[f.kind].label}`;
       }
     }
-    const reach = Math.max(spec.w, spec.d) / 2 + ROAD_WIDTH / 2 + FACILITY_ROAD_GAP + 2;
+    const reach = Math.max(spec.w, spec.d) / 2 + this.widestRoadNear(p, Math.max(spec.w, spec.d)) / 2 + FACILITY_ROAD_GAP + 2;
     if (!this.net.segmentAt(p, reach, 0)) return `${spec.label}要蓋在道路旁邊`;
     if (spec.cost > this.money) return `資金不足，需要 ${ntd(spec.cost)}`;
+    return null;
+  }
+
+  /** Widest street near p, so facilities set back from wide roads still count as beside one. */
+  private widestRoadNear(p: Vec2, r: number): number {
+    let w = ROAD_WIDTH;
+    for (const seg of this.net.segments.values()) if (bboxNear(seg.bbox, p, r + 40)) w = Math.max(w, roadWidth(seg));
+    return w;
+  }
+
+  /** The road a footbridge at p would cross: a street, away from junctions. */
+  private footbridgeRoad(p: Vec2): RoadSegment | null {
+    const hit = this.net.segmentAt(p, 3, 0);
+    return hit && this.net.isStreet(hit.seg) ? hit.seg : null;
+  }
+
+  private footbridgeProblem(p: Vec2, angle: number): string | null {
+    const seg = this.footbridgeRoad(p);
+    if (!seg) return '天橋要蓋在一般道路上，橫跨馬路';
+    if ([seg.a, seg.b].some((n) => dist(this.net.node(n).p, p) < roadWidth(seg) / 2 + 12)) return '離路口太近';
+    const span = roadWidth(seg) + 6;
+    for (const f of this.facilities.values()) {
+      if (f.kind === 'footbridge' && dist(f.p, p) < 40) return '附近已經有天橋';
+      if (f.kind !== 'footbridge' && facilityCorners({ kind: 'footbridge', p, angle, span }).some((q) => footprintContains(f, q))) return `這裡已經有${FACILITIES[f.kind].label}`;
+    }
+    if (FACILITIES.footbridge.cost > this.money) return `資金不足，需要 ${ntd(FACILITIES.footbridge.cost)}`;
     return null;
   }
 
@@ -517,6 +558,10 @@ export class City {
 
   private addFacility(kind: FacilityKind, p: Vec2, angle: number, id?: number): Facility {
     const f: Facility = { id: id ?? this.nextFacility++, kind, p: { x: p.x, y: p.y }, angle };
+    if (kind === 'footbridge') {
+      const seg = this.footbridgeRoad(p);
+      f.span = (seg ? roadWidth(seg) : ROAD_WIDTH) + 6;
+    }
     this.nextFacility = Math.max(this.nextFacility, f.id + 1);
     this.facilities.set(f.id, f);
     this.facilitiesVersion++;
@@ -530,6 +575,16 @@ export class City {
     this.landChanged();
   }
 
+  /** Tears down the facility at p and gives back part of what it cost (建設拆除). */
+  demolish(p: Vec2, pad = 2): { ok: boolean; refund: number; reason?: string; what?: string } {
+    const f = this.facilityAt(p, pad);
+    if (!f) return { ok: false, refund: 0, reason: '點一棟公共建設或地標來拆除' };
+    const refund = Math.round(FACILITIES[f.kind].cost * BULLDOZE_REFUND);
+    this.removeFacility(f.id);
+    this.spend(-refund);
+    return { ok: true, refund, what: FACILITIES[f.kind].label };
+  }
+
   facilityAt(p: Vec2, pad = 0): Facility | null {
     for (const f of this.facilities.values()) if (footprintContains(f, p, pad)) return f;
     return null;
@@ -541,8 +596,11 @@ export class City {
     let landmark = 0;
     for (const f of this.facilities.values()) {
       if (!covers(f, p)) continue;
+      const spec = FACILITIES[f.kind];
       if (isLandmark(f.kind)) landmark += 0.5;
-      else kinds.add(f.kind);
+      else if (f.kind === 'footbridge') landmark += 0.1;
+      else if (spec.serves) kinds.add(spec.serves);
+      else kinds.add(f.kind as ServiceKind);
     }
     return { kinds, landmark: Math.min(1, landmark) };
   }
@@ -838,7 +896,7 @@ export class City {
     this.needs = { happiness, coverage, wants, tourists: this.needs.tourists };
     // Happy residents bring more; landmarks' visitors bring shops and offices
     const mood = pop > 60 ? (happiness - 45) * 0.3 : 0;
-    const visitors = Math.min(15, this.needs.tourists / 60);
+    const visitors = Math.min(15, this.needs.tourists / 6);
     const d = (v: number) => clamp(Math.round(v), 0, 100);
     // Demand follows how far supply is from what the city needs, as a share rather than a head
     // count, so the bars keep moving in a big city instead of sticking at full or empty
@@ -862,6 +920,8 @@ export class City {
    */
   levelCap(lot: Lot): number {
     const info = ZONES[lot.zone as Exclude<Zone, Zone.None>];
+    // A 直轄市's office districts keep growing into skyscrapers
+    if (lot.zone === Zone.Office && this.unlocked('tallOffices')) return OFFICE_TOWER_LEVEL;
     if (info.demand !== 'R') return info.maxLevel;
     const served = this.served.get(lot) ?? 0;
     let cap = Math.min(info.maxLevel, 1 + Math.floor(served / SERVICES_PER_LEVEL));
@@ -969,7 +1029,7 @@ export class City {
     for (const f of this.facilities.values()) {
       const spec = FACILITIES[f.kind];
       services += spec.upkeep;
-      if (spec.tourists) tourists += spec.tourists * (40 + this.stats.population / 100);
+      if (spec.tourists) tourists += (spec.tourists * (20 + this.stats.population / 1000)) / DAY_STEPS;
     }
     // Few visitors come in a storm, none in a typhoon
     tourists *= { clear: 1, cloudy: 1, fog: 0.9, rain: 0.75, storm: 0.5, typhoon: 0 }[this.weather.sky];

@@ -1,6 +1,7 @@
 import './style.css';
 import { City, DAY_STEPS } from './sim/city';
 import { TERRAINS, type TerrainName } from './sim/terrain';
+import { clock } from './sim/weather';
 import { AUTO_SLOT, SaveSlots, openStore } from './storage/saves';
 import { Menu, type Settings } from './ui/menu';
 import { World } from './render/world';
@@ -214,9 +215,9 @@ function frame(now: number): void {
     }
   }
   world.sync(city);
-  world.animate(city, dt);
   const days = city.day + acc / TICK_SECONDS / DAY_STEPS;
   const weather = city.weather.at(world.rig.target, days);
+  world.animate(city, dt, Math.min(drive, 0.5), clock(days).hour, weather.precip);
   world.updateSky(days, weather, dt);
   hud!.setWeather(weather);
   if (city.weather.sky !== lastSky) {
