@@ -8,6 +8,15 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '2.0.1',
+    date: '2026-10-22',
+    title: '找出沒接上高速公路的道路',
+    notes: [
+      '「分區沒有道路連到高速公路」警告出現時，沒接上的道路會在地圖上標成紅色',
+      '點警告會直接把畫面移到沒接上的分區，再點一次前往下一處',
+    ],
+  },
+  {
     version: '2.0.0',
     date: '2026-10-22',
     title: '城市等級',

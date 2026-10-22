@@ -73,6 +73,9 @@ export class World {
   private readonly linePaths: THREE.Mesh;
   /** route of the bus line being drawn */
   private readonly draftLine: THREE.Mesh;
+  /** roads cut off from the highway, in red while the warning shows */
+  private readonly cutOff: THREE.Mesh;
+  private cutOffKey = '';
   private transitVersion = -1;
   private readonly ground: THREE.Mesh;
   /** tunnels shown on the surface while building underground */
@@ -193,6 +196,10 @@ export class World {
     this.draftLine.visible = false;
     this.draftLine.renderOrder = 2;
     this.scene.add(this.linePaths, this.draftLine);
+    this.cutOff = new THREE.Mesh(new THREE.BufferGeometry(), pathMaterial());
+    this.cutOff.visible = false;
+    this.cutOff.renderOrder = 2;
+    this.scene.add(this.cutOff);
     this.tunnels = new THREE.Mesh(
       new THREE.BufferGeometry(),
       new THREE.MeshBasicMaterial({ color: 0x3f8fd8, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide }),
@@ -421,6 +428,19 @@ export class World {
     this.draftLine.geometry = buildLinePaths(net ?? this.cityRef!.net, [{ color, path }], width, offset ?? (rail ? TRACK_OFFSET : undefined));
   }
 
+  /** Paints the roads that can't reach the highway red (both ways along each), or hides them. */
+  private syncCutOff(city: City): void {
+    const segs = city.stats.disconnected ? city.disconnectedRoads() : [];
+    const key = `${city.roadsVersion}:${segs.length}`;
+    if (key === this.cutOffKey) return;
+    this.cutOffKey = key;
+    this.cutOff.visible = segs.length > 0;
+    this.cutOff.geometry.dispose();
+    this.cutOff.geometry = segs.length
+      ? buildLinePaths(city.net, [{ color: 0xe5483b, path: segs.map((x) => ({ seg: x.id, dir: 1 as const, from: 0, to: x.length })) }], 3, 0)
+      : new THREE.BufferGeometry();
+  }
+
   /** Outlines of the districts (the district tool's view); the selected one is drawn bolder. */
   setDistrictRings(list: District[] | null, selected: number | null): void {
     for (const c of [...this.districtRings.children]) {
@@ -644,6 +664,7 @@ export class World {
       this.updateTrees(city);
     }
     for (const k of RAIL_KINDS) this.syncRail(city, k);
+    this.syncCutOff(city);
     if (city.labelsVersion + city.roadsVersion * 1e6 !== this.labelsVersion) {
       this.labelsVersion = city.labelsVersion + city.roadsVersion * 1e6;
       this.rebuildNames(city);

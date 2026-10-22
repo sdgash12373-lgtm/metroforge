@@ -69,6 +69,11 @@ hud = new Hud(document.getElementById('ui')!, tools, {
     void autosave();
     menu.show('pause');
   },
+  lookAt: (p) => {
+    world.rig.target = { x: p.x, y: p.y };
+    world.rig.distance = Math.min(world.rig.distance, 320);
+    world.rig.apply();
+  },
   drive: () => {
     toolBeforeDrive = tools.tool;
     tools.setTool('pan');

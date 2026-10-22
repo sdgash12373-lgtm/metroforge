@@ -96,3 +96,26 @@ describe('road upgrades', () => {
     expect([...subs].every((s) => s === 0 || s === 1)).toBe(true);
   });
 });
+
+describe('highway connection', () => {
+  it('stays connected through road upgrades and footbridges, and finds the roads that are cut off', () => {
+    const city = street();
+    city.level = 4;
+    city.buildRoad(free(0, 0), null, free(0, 200), true);
+    city.buildRoad(free(300, 300), null, free(500, 300), true);
+    city.paint({ x: 20, y: 100 }, 40, Zone.ResidentialLow);
+    city.paint({ x: 400, y: 320 }, 40, Zone.ResidentialLow);
+    const side = city.net.segmentAt({ x: 0, y: 100 }, 3)!.seg;
+    city.restyleRoad(side.id, { lanes: 4, walk: true });
+    const spot = city.facilitySpot('footbridge', { x: 0, y: 100 });
+    expect(city.buildFacility('footbridge', spot.p, spot.angle).ok).toBe(true);
+    city.tick(rng());
+    const cut = city.disconnectedRoads();
+    expect(cut).toHaveLength(1);
+    expect(city.net.node(cut[0].a).p.y).toBe(300);
+    expect(city.isConnected(city.net.segmentAt({ x: 0, y: 100 }, 3)!.seg)).toBe(true);
+    const lots = city.disconnectedLots({ x: 0, y: 0 });
+    expect(lots.length).toBe(city.stats.disconnected);
+    expect(lots.every((p) => p.x >= 290)).toBe(true);
+  });
+});
