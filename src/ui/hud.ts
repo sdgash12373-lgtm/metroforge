@@ -9,7 +9,7 @@ import type { Conditions } from '../sim/weather';
 import { ZONES, Zone } from '../sim/zoning';
 import { BUS, LINE_COLORS, MODES, type Transit } from '../sim/transit';
 import { EditPanel } from './editPanel';
-import { BRUSH_MAX, BRUSH_MIN, DISTRICT_MAX, DISTRICT_MIN, type Tool, type ToolController, isRail } from './tools';
+import { BRUSH_MAX, BRUSH_MIN, DISTRICT_MAX, DISTRICT_MIN, type Tool, type ToolController, STYLE_CHOICES, isRail } from './tools';
 
 /** Tools that share one dock button and are picked on a second row. */
 type Group = 'roads' | 'transport' | 'build' | 'names';
@@ -18,6 +18,7 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
     { id: 'road', label: '直線' },
     { id: 'curve', label: '曲線' },
     { id: 'roundabout', label: '圓環' },
+    { id: 'upgradeRoad', label: '升級' },
   ],
   transport: [
     { id: 'bus', label: '公車' },
@@ -403,6 +404,15 @@ export class Hud {
       this.sub.append(size);
     } else if (this.tools.tool === 'road' || this.tools.tool === 'curve') {
       this.levelOptions(option, '結束拉路');
+    } else if (this.tools.tool === 'upgradeRoad') {
+      const t = this.tools;
+      const open = this.city?.unlocked('roadUpgrade') ?? false;
+      for (const [c, label] of STYLE_CHOICES) {
+        option(open ? label : `🔒 ${label}`, t.roadStyle === c, () => {
+          t.setRoadStyle(c);
+          this.render();
+        });
+      }
     } else if (this.tools.tool === 'roundabout') {
       option('4 通', this.tools.roundaboutSize === 4, () => this.tools.setRoundaboutSize(4));
       option('6 通', this.tools.roundaboutSize === 6, () => this.tools.setRoundaboutSize(6));

@@ -1,5 +1,5 @@
 import type { Vec2 } from './geometry';
-import type { RoadNetwork, RoadSegment } from './roads';
+import { type RoadNetwork, type RoadSegment, roadWidth } from './roads';
 
 /** Seconds of green, then yellow, for each direction in turn. */
 export const GREEN_TIME = 12;
@@ -24,6 +24,8 @@ export interface Junction {
   node: number;
   approaches: Approach[];
   phases: number;
+  /** how far back from the centre traffic waits: further where wide roads cross */
+  stopBack: number;
   /** staggers neighbouring junctions so they do not all change together */
   offset: number;
 }
@@ -66,7 +68,8 @@ export function findJunctions(net: RoadNetwork): Map<number, Junction> {
       return { seg: seg.id, end, out: o, phase };
     });
     const cycle = axes.length * (GREEN_TIME + YELLOW_TIME);
-    out.set(node, { node, approaches, phases: axes.length, offset: (node * 7.31) % cycle });
+    const stopBack = Math.max(STOP_BACK, Math.max(...list.map((e) => roadWidth(e.seg))) / 2 + 1);
+    out.set(node, { node, approaches, phases: axes.length, stopBack, offset: (node * 7.31) % cycle });
   }
   return out;
 }

@@ -1,10 +1,9 @@
 import * as THREE from 'three';
 import { type Quad, type Sample, type Vec2, normalize, sampleQuad } from '../sim/geometry';
-import { ROAD_WIDTH, type RoadNetwork, type RoadSegment } from '../sim/roads';
+import { LANE_WIDTH, ROAD_WIDTH, type RoadNetwork, type RoadSegment, asphaltWidth, roadWidth } from '../sim/roads';
 import { LANE_OFFSET } from '../sim/traffic';
 import type { PathPiece } from '../sim/transit';
 
-const ASPHALT_WIDTH = 7;
 const DASH = 3;
 const GAP = 3;
 const MARK_WIDTH = 0.25;
@@ -171,9 +170,9 @@ export function shownHeight(net: RoadNetwork, seg: RoadSegment): Height {
 const segHeight = shownHeight;
 
 /** Low walls along a tunnel ramp up to its portal: two posts, a beam, and the dark opening between them. */
-export function portal(b: Builder, dark: Builder, s: Sample[], depth: Height): void {
+export function portal(b: Builder, dark: Builder, s: Sample[], depth: Height, width = ROAD_WIDTH): void {
   for (const side of [-1, 1]) {
-    const off = side * (ROAD_WIDTH / 2 + 0.2);
+    const off = side * (width / 2 + 0.2);
     for (let i = 1; i < s.length; i++) {
       const h0 = depth(s[i - 1].t);
       const h1 = depth(s[i].t);
@@ -195,7 +194,7 @@ export function portal(b: Builder, dark: Builder, s: Sample[], depth: Height): v
     const p = s[h0 > PORTAL_DEPTH ? i : i - 1];
     const d = normalize({ x: s[i].x - s[i - 1].x, y: s[i].y - s[i - 1].y });
     const n = { x: -d.y, y: d.x };
-    const half = ROAD_WIDTH / 2 + 0.6;
+    const half = width / 2 + 0.6;
     for (const side of [-1, 1]) pillar(b, p.x + n.x * half * side, p.y + n.y * half * side, d.x, d.y, 1.2, 1.6, PORTAL_HEIGHT);
     pillar(b, p.x, p.y, d.x, d.y, half * 2 + 1.2, 1.6, PORTAL_HEIGHT, PORTAL_HEIGHT - 1.2);
     const l = [p.x - n.x * half, p.y - n.y * half];
@@ -205,9 +204,9 @@ export function portal(b: Builder, dark: Builder, s: Sample[], depth: Height): v
 }
 
 /** Girders along both edges and a pillar every so often where the deck is high enough to need one. */
-export function supports(b: Builder, s: Sample[], h: Height): void {
-  wall(b, s, ROAD_WIDTH / 2, GIRDER, h);
-  wall(b, s, -ROAD_WIDTH / 2, GIRDER, h);
+export function supports(b: Builder, s: Sample[], h: Height, width = ROAD_WIDTH): void {
+  wall(b, s, width / 2, GIRDER, h);
+  wall(b, s, -width / 2, GIRDER, h);
   const len = s[s.length - 1].s;
   let j = 1;
   for (let d = PILLAR_EVERY / 2; d < len; d += PILLAR_EVERY) {
@@ -218,8 +217,81 @@ export function supports(b: Builder, s: Sample[], h: Height): void {
     const top = h(a.t + (c.t - a.t) * f);
     if (top < GIRDER + 1.5) continue;
     const dir = normalize({ x: c.x - a.x, y: c.y - a.y });
-    pillar(b, a.x + (c.x - a.x) * f, a.y + (c.y - a.y) * f, dir.x, dir.y, ROAD_WIDTH * 0.5, PILLAR_SIZE, top - GIRDER * 0.5);
+    pillar(b, a.x + (c.x - a.x) * f, a.y + (c.y - a.y) * f, dir.x, dir.y, width * 0.5, PILLAR_SIZE, top - GIRDER * 0.5);
   }
+}
+
+/** Widest road meeting at each node, so junction discs cover every approach. */
+export function nodeWidths(net: RoadNetwork): Map<number, { full: number; asphalt: number }> {
+  const out = new Map<number, { full: number; asphalt: number }>();
+  for (const seg of net.segments.values()) {
+    for (const id of [seg.a, seg.b]) {
+      const w = out.get(id) ?? { full: 0, asphalt: 0 };
+      w.full = Math.max(w.full, roadWidth(seg));
+      w.asphalt = Math.max(w.asphalt, seg.oneway ? asphaltWidth({}) : asphaltWidth(seg));
+      out.set(id, w);
+    }
+  }
+  return out;
+}
+
+/** Spots for street trees along roads with wide sidewalks (人行道), each side, kept clear of junctions. */
+export function streetTreeSpots(net: RoadNetwork, every = 10): { x: number; y: number; h: number }[] {
+  const out: { x: number; y: number; h: number }[] = [];
+  for (const seg of net.segments.values()) {
+    if (!seg.walk || !net.isStreet(seg)) continue;
+    const s = seg.samples;
+    const len = s[s.length - 1].s;
+    const off = asphaltWidth(seg) / 2 + 1.3;
+    let j = 1;
+    for (let d = 9; d < len - 9; d += every) {
+      while (j < s.length - 1 && s[j].s < d) j++;
+      const a = s[j - 1];
+      const c = s[j];
+      const f = (d - a.s) / (c.s - a.s || 1);
+      const n = normalAt(s, j);
+      const x = a.x + (c.x - a.x) * f;
+      const y = a.y + (c.y - a.y) * f;
+      for (const side of [-1, 1]) out.push({ x: x + n.x * off * side, y: y + n.y * off * side, h: 0 });
+    }
+  }
+  return out;
+}
+
+/** Markings: a dashed centre line on two-lane roads, a double centre line and lane dashes on wider ones. */
+function laneMarks(marks: Builder, seg: RoadSegment, h: Height): void {
+  const lanes = seg.lanes ?? 1;
+  const skip = roadWidth(seg) * 0.6;
+  if (lanes === 1) {
+    dashes(marks, seg.samples, skip, MARK_WIDTH, h);
+    return;
+  }
+  const s = trimmed(seg.samples, skip);
+  if (s.length < 2) return;
+  for (const side of [-1, 1]) strip(marks, s, side * 0.15, side * (0.15 + MARK_WIDTH * 0.8), h);
+  for (let k = 1; k < lanes; k++) {
+    for (const side of [-1, 1]) dashes(marks, offsetSamples(seg.samples, side * k * LANE_WIDTH), skip, MARK_WIDTH, h);
+  }
+}
+
+/** The samples between `skip` from each end. */
+function trimmed(s: Sample[], skip: number): Sample[] {
+  const len = s[s.length - 1].s;
+  return s.filter((p) => p.s >= skip && p.s <= len - skip);
+}
+
+/** A curve moved sideways by a signed offset, its distances measured anew. */
+export function offsetSamples(s: Sample[], off: number): Sample[] {
+  const out: Sample[] = [];
+  let d = 0;
+  for (let i = 0; i < s.length; i++) {
+    const n = normalAt(s, i);
+    const p = { x: s[i].x + n.x * off, y: s[i].y + n.y * off, t: s[i].t, s: 0 };
+    if (i > 0) d += Math.hypot(p.x - out[i - 1].x, p.y - out[i - 1].y);
+    p.s = d;
+    out.push(p);
+  }
+  return out;
 }
 
 export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
@@ -231,18 +303,21 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
   for (const seg of net.segments.values()) {
     const h = segHeight(net, seg);
     const raised = net.isRaised(seg);
+    const full = roadWidth(seg);
     // Raised decks go with the concrete so they cast shadows on the streets below
-    ribbon(raised ? concrete : walk, seg.samples, ROAD_WIDTH, h);
-    ribbon(asphalt, seg.samples, ASPHALT_WIDTH, h);
+    ribbon(raised ? concrete : walk, seg.samples, full, h);
+    ribbon(asphalt, seg.samples, seg.oneway ? asphaltWidth({}) : asphaltWidth(seg), h);
     // One-way roads (roundabouts) have no centre line
-    if (!seg.oneway) dashes(marks, seg.samples, ROAD_WIDTH * 0.6, MARK_WIDTH, h);
-    if (raised) supports(concrete, seg.samples, h);
+    if (!seg.oneway) laneMarks(marks, seg, h);
+    if (raised) supports(concrete, seg.samples, h, full);
     // Tunnel mouths: the ramp between street level and a tunnel
-    else if (isTunnelRamp(net, seg)) portal(concrete, dark, seg.samples, (t) => net.heightAt(seg, t));
+    else if (isTunnelRamp(net, seg)) portal(concrete, dark, seg.samples, (t) => net.heightAt(seg, t), full);
   }
+  const widths = nodeWidths(net);
   for (const n of net.nodes.values()) {
-    (n.h > 0 ? concrete : walk).disc(n.p.x, n.p.y, ROAD_WIDTH / 2, n.h);
-    asphalt.disc(n.p.x, n.p.y, ASPHALT_WIDTH / 2, n.h);
+    const w = widths.get(n.id) ?? { full: ROAD_WIDTH, asphalt: asphaltWidth({}) };
+    (n.h > 0 ? concrete : walk).disc(n.p.x, n.p.y, w.full / 2, n.h);
+    asphalt.disc(n.p.x, n.p.y, w.asphalt / 2, n.h);
     // Elevated junctions stand on a pillar of their own
     if (n.h > GIRDER + 1.5) pillar(concrete, n.p.x, n.p.y, 1, 0, PILLAR_SIZE * 1.4, PILLAR_SIZE * 1.4, n.h - GIRDER * 0.5);
   }
@@ -289,8 +364,8 @@ export function congestionColor(level: number, out: THREE.Color): THREE.Color {
 /** Each direction of each road coloured by its congestion, laid over the asphalt. */
 export function buildTrafficOverlay(net: RoadNetwork, level: (seg: RoadSegment, dir: 1 | -1) => number): THREE.BufferGeometry {
   const b = new Builder(0.12);
-  const half = ASPHALT_WIDTH / 2;
   for (const seg of net.segments.values()) {
+    const half = seg.oneway ? asphaltWidth({}) / 2 : asphaltWidth(seg) / 2;
     // Right-hand traffic: travel a → b uses the right side of that direction
     const h = segHeight(net, seg);
     b.color = congestionColor(level(seg, 1), new THREE.Color());
@@ -342,9 +417,10 @@ export function buildTunnelOverlay(net: RoadNetwork): THREE.BufferGeometry {
   const b = new Builder(0.35);
   for (const seg of net.segments.values()) {
     if (net.node(seg.a).h >= 0 && net.node(seg.b).h >= 0) continue;
-    ribbon(b, seg.samples, ROAD_WIDTH);
+    ribbon(b, seg.samples, roadWidth(seg));
     dashes(b, seg.samples, ROAD_WIDTH * 0.6, MARK_WIDTH * 2);
   }
-  for (const n of net.nodes.values()) if (n.h < 0) b.disc(n.p.x, n.p.y, ROAD_WIDTH / 2);
+  const widths = nodeWidths(net);
+  for (const n of net.nodes.values()) if (n.h < 0) b.disc(n.p.x, n.p.y, (widths.get(n.id)?.full ?? ROAD_WIDTH) / 2);
   return b.geometry();
 }

@@ -1,5 +1,5 @@
 import { type Vec2, dist } from './geometry';
-import type { RoadNetwork, RoadSegment } from './roads';
+import { LANE_WIDTH, type RoadNetwork, type RoadSegment } from './roads';
 import { type Junction, type Light, STOP_BACK, findJunctions, lightAt } from './signals';
 
 /** 50 km/h town roads. */
@@ -66,6 +66,12 @@ export interface Vehicle {
   tint: number;
   /** seconds spent stopped in a row */
   stuck: number;
+  /** which of the lanes going this way, 0 = kerbside (wider roads have more) */
+  sub?: number;
+  /** driven by the player: never gives up or arrives, speed set from the controls */
+  player?: boolean;
+  /** player's throttle, −1 (brake) .. 1 */
+  throttle?: number;
   /** buses and trains: the line they run on, the index of the stop they are heading to, and seconds left at a stop */
   line?: number;
   next?: number;
@@ -159,12 +165,23 @@ export class Traffic {
     if (!list?.length) return 0;
     let used = 0;
     for (const v of list) used += VEHICLE_LENGTH[v.kind] + MIN_GAP;
-    return Math.min(1, used / Math.max(seg.length, 1));
+    return Math.min(1, used / Math.max(seg.length * this.laneCount(seg), 1));
+  }
+
+  /** Lanes each way on a segment. */
+  laneCount(seg: RoadSegment): number {
+    return seg.lanes ?? 1;
+  }
+
+  /** Top speed on a segment: wider roads are faster (50, 60, 70 km/h). */
+  topSpeed(seg: RoadSegment): number {
+    const n = this.laneCount(seg);
+    return this.rules.speed * (n >= 4 ? 1.4 : n >= 2 ? 1.2 : 1);
   }
 
   /** Expected seconds to drive a lane, slower when it is busy. */
   private laneTime(seg: RoadSegment, dir: Dir): number {
-    return seg.length / (this.rules.speed * (1 - 0.8 * this.congestion(seg, dir)));
+    return seg.length / (this.topSpeed(seg) * (1 - 0.8 * this.congestion(seg, dir)));
   }
 
   /**
@@ -275,7 +292,8 @@ export class Traffic {
   /** Where a vehicle must stop for a light this step, or Infinity if it may go on. */
   private stopLine(v: Vehicle, seg: RoadSegment): number {
     if (!v.route.length || !this.rules.signals) return Infinity;
-    const line = seg.length - Math.min(STOP_BACK, seg.length / 2);
+    const j = this.junctions().get(v.dir === 1 ? seg.b : seg.a);
+    const line = seg.length - Math.min(j?.stopBack ?? STOP_BACK, seg.length / 2);
     if (v.pos > line) return Infinity;
     const light = this.lightFor(seg, v.dir);
     if (!light || light === 'green') return Infinity;
@@ -315,9 +333,11 @@ export class Traffic {
       tint,
       stuck: 0,
     };
+    const seg = this.net.segments.get(v.seg)!;
+    v.sub = Math.floor(tint * 997) % this.laneCount(seg);
     // Don't drop a vehicle on top of another one
     const lane = this.lanes.get(laneKey(v.seg, v.dir));
-    if (lane?.some((o) => Math.abs(o.pos - v.pos) < VEHICLE_LENGTH[kind] + MIN_GAP)) return null;
+    if (lane?.some((o) => (o.sub ?? 0) === v.sub && Math.abs(o.pos - v.pos) < VEHICLE_LENGTH[kind] + MIN_GAP)) return null;
     this.vehicles.push(v);
     this.index();
     return v;
@@ -353,12 +373,18 @@ export class Traffic {
     for (const l of this.lanes.values()) l.sort((a, b) => a.pos - b.pos);
   }
 
-  /** Space free at the start of a lane (distance to its last vehicle's tail). */
-  private entryRoom(lane: LaneRef): number {
-    const list = this.lanes.get(laneKey(lane.seg, lane.dir));
-    if (!list?.length) return Infinity;
-    const tail = list[0];
-    return tail.pos - VEHICLE_LENGTH[tail.kind];
+  /** Space free at the start of a lane (distance to its last vehicle's tail), in its emptiest sub-lane. */
+  private entryRoom(lane: LaneRef): { room: number; sub: number } {
+    const seg = this.net.segments.get(lane.seg);
+    const n = seg ? this.laneCount(seg) : 1;
+    const list = this.lanes.get(laneKey(lane.seg, lane.dir)) ?? [];
+    let best = { room: -Infinity, sub: 0 };
+    for (let sub = 0; sub < n; sub++) {
+      const tail = list.find((o) => (o.sub ?? 0) === sub);
+      const room = tail ? tail.pos - VEHICLE_LENGTH[tail.kind] : Infinity;
+      if (room > best.room) best = { room, sub };
+    }
+    return best;
   }
 
   step(dt: number): void {
@@ -389,8 +415,12 @@ export class Traffic {
         const len = VEHICLE_LENGTH[v.kind];
         let gap: number;
         let leadSpeed = 0;
-        if (i < list.length - 1) {
-          const lead = list[i + 1];
+        // The car ahead in the same sub-lane
+        const sub = v.sub ?? 0;
+        let li = i + 1;
+        while (li < list.length && (list[li].sub ?? 0) !== sub) li++;
+        if (li < list.length) {
+          const lead = list[li];
           // The leader may have just crossed into its next lane this step
           const ahead = lead.seg === v.seg && lead.dir === v.dir ? lead.pos : seg.length + lead.pos;
           gap = ahead - VEHICLE_LENGTH[lead.kind] - v.pos;
@@ -398,7 +428,7 @@ export class Traffic {
         } else if (!v.route.length) {
           gap = v.dest - v.pos + MIN_GAP;
         } else {
-          const room = this.entryRoom(v.route[0]);
+          const { room } = this.entryRoom(v.route[0]);
           gap = seg.length - v.pos + (room === Infinity ? 200 : room);
           if (room < len + MIN_GAP) gap = Math.min(gap, seg.length - v.pos + MIN_GAP * 0.5);
           leadSpeed = room === Infinity ? this.rules.speed : 0;
@@ -409,9 +439,12 @@ export class Traffic {
           leadSpeed = 0;
         }
         gap = Math.max(gap, 0.01);
-        const { speed: top, accel, brake } = this.rules;
+        const { accel, brake } = this.rules;
+        const top = this.topSpeed(seg);
         const sStar = MIN_GAP + v.speed * HEADWAY + (v.speed * (v.speed - leadSpeed)) / (2 * Math.sqrt(accel * brake));
-        const acc = accel * (1 - (v.speed / top) ** 4 - (Math.max(sStar, 0) / gap) ** 2);
+        let acc = accel * (1 - (v.speed / top) ** 4 - (Math.max(sStar, 0) / gap) ** 2);
+        // The player's car: the controls ask, but it still brakes for lights and the car ahead
+        if (v.player) acc = Math.min(acc, (v.throttle ?? 0) >= 0 ? (v.throttle ?? 0) * accel * 1.5 - (v.throttle ? 0 : 0.6) : (v.throttle ?? 0) * brake * 2);
         v.speed = Math.max(0, Math.min(top, v.speed + acc * dt));
         v.pos += v.speed * dt;
         if (v.pos > stop) {
@@ -420,14 +453,14 @@ export class Traffic {
         }
         const waiting = v.speed < 0.2;
         held = waiting && (stop < Infinity || held);
-        v.stuck = waiting && !held ? v.stuck + dt : 0;
+        v.stuck = waiting && !held && !v.player ? v.stuck + dt : 0;
         if (v.stuck > GIVE_UP_AFTER) {
           gaveUp.add(v.id);
           continue;
         }
 
         if (!v.route.length) {
-          if (v.pos < v.dest - 0.5) continue;
+          if (v.pos < v.dest - 0.5 || v.player) continue;
           if (v.line !== undefined && this.lineHooks) {
             v.pos = Math.min(v.pos, v.dest);
             v.speed = 0;
@@ -437,10 +470,12 @@ export class Traffic {
         }
         if (v.pos >= seg.length) {
           const next = v.route[0];
-          if (this.entryRoom(next) >= len + MIN_GAP) {
+          const entry = this.entryRoom(next);
+          if (entry.room >= len + MIN_GAP) {
             v.pos -= seg.length;
             v.seg = next.seg;
             v.dir = next.dir;
+            v.sub = v.player ? Math.min(v.sub ?? 0, entry.sub) : entry.sub;
             v.route.shift();
             // Joined the tail of the next lane: keep the index right for cars behind
             const k = laneKey(next.seg, next.dir);
@@ -496,7 +531,7 @@ export class Traffic {
       dir = best.dir;
       along += seg.length;
     }
-    return this.laneSample(seg, dir, Math.max(0, along));
+    return this.laneSample(seg, dir, Math.max(0, along), seg.id === v.seg ? (v.sub ?? 0) : 0);
   }
 
   private headingAt(seg: RoadSegment, dir: Dir, along: number): Vec2 {
@@ -504,7 +539,7 @@ export class Traffic {
   }
 
   /** Point on a lane, `along` meters from where the lane starts. */
-  private laneSample(seg: RoadSegment, dir: Dir, along: number): { p: Vec2; h: number; heading: Vec2 } {
+  laneSample(seg: RoadSegment, dir: Dir, along: number, sub = 0): { p: Vec2; h: number; heading: Vec2 } {
     const s = dir === 1 ? along : seg.length - along;
     const S = seg.samples;
     let i = 1;
@@ -517,8 +552,8 @@ export class Traffic {
     const hl = Math.hypot(hx, hy) || 1;
     hx /= hl;
     hy /= hl;
-    // Right of travel direction (x east, y south)
-    const off = this.rules.laneOffset;
+    // Right of travel direction (x east, y south); wider roads have more lanes further out
+    const off = this.rules.laneOffset + ((seg.lanes ?? 1) - 1 - sub) * LANE_WIDTH;
     return {
       p: { x: a.x + (b.x - a.x) * f - hy * off, y: a.y + (b.y - a.y) * f + hx * off },
       h: this.net.heightAt(seg, a.t + (b.t - a.t) * f),

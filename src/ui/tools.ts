@@ -2,7 +2,8 @@ import { angleGuides } from '../sim/angles';
 import { FACILITIES, type FacilityKind, type LandmarkKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners } from '../sim/facilities';
 import { ntd } from '../sim/format';
 import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
-import type { City } from '../sim/city';
+import type { City, RoadStyle } from '../sim/city';
+import { LEVELS, UNLOCK } from '../sim/levels';
 import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, lerp, quadPoint } from '../sim/geometry';
 import { HOUR_STEPS, ROUNDABOUT_RADIUS, type RoundaboutSize } from '../sim/city';
@@ -17,6 +18,7 @@ export type Tool =
   | 'road'
   | 'curve'
   | 'roundabout'
+  | 'upgradeRoad'
   | 'zone'
   | 'bulldoze'
   | 'traffic'
@@ -43,6 +45,17 @@ export const DISTRICT_MAX = 600;
 /** Airports turn in steps of this many degrees. */
 const AIRPORT_TURN = 15;
 
+/** What the road upgrade tool turns a street into. */
+export type StyleChoice = 1 | 2 | 4 | 'walk' | 'nowalk';
+export const STYLE_CHOICES: [StyleChoice, string][] = [
+  [1, '雙向單線道'],
+  [2, '雙向雙線道'],
+  [4, '雙向四線道'],
+  ['walk', '加人行道'],
+  ['nowalk', '移除人行道'],
+];
+const styleOf = (c: StyleChoice): RoadStyle => (c === 'walk' ? { walk: true } : c === 'nowalk' ? { walk: false } : { lanes: c });
+
 /** Which level the road tools build on. */
 export type RoadLevel = 'ground' | 'elevated' | 'tunnel';
 const LEVEL_HEIGHT: Record<RoadLevel, number> = { ground: 0, elevated: ELEVATED_HEIGHT, tunnel: TUNNEL_DEPTH };
@@ -67,6 +80,7 @@ export class ToolController {
   brushRadius = BRUSH_DEFAULT;
   roadLevel: RoadLevel = 'ground';
   roundaboutSize: RoundaboutSize = 4;
+  roadStyle: StyleChoice = 2;
   /** stops of the bus or train line being planned */
   lineDraft: number[] = [];
   private draftPath: PathPiece[] = [];
@@ -217,6 +231,28 @@ export class ToolController {
     this.selectedFlight = null;
     this.events.toast('航班已取消');
     this.events.changed();
+  }
+
+  setRoadStyle(c: StyleChoice): void {
+    this.roadStyle = c;
+    this.events.changed();
+    this.refresh();
+  }
+
+  /** The street under p, for the upgrade tool. */
+  private streetAt(p: Vec2) {
+    const r = Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6);
+    const hit = this.city.net.segmentAt(p, r, 0);
+    return hit && !hit.seg.oneway ? hit.seg : null;
+  }
+
+  private upgradeHint(): string {
+    if (!this.city.unlocked('roadUpgrade')) return `城市升級為「${LEVELS[UNLOCK.roadUpgrade].name}」後開放道路升級與人行道`;
+    const seg = this.hover && this.streetAt(this.hover);
+    const label = STYLE_CHOICES.find(([c]) => c === this.roadStyle)![1];
+    if (!seg) return `選好樣式後點一條道路：整條路（直行穿過路口的部分）改為「${label}」；拓寬會把兩旁的建築往後移`;
+    const cost = this.city.restyleCost(this.city.net.street(seg), styleOf(this.roadStyle));
+    return `${seg.name ?? '這條路'} → ${label} · ${cost ? `約 ${ntd(cost)}` : '免費'}　點一下套用`;
   }
 
   setRoundaboutSize(size: RoundaboutSize): void {
@@ -414,6 +450,8 @@ export class ToolController {
         return this.drawHint('道路', '拉路');
       case 'zone':
         return this.zone === Zone.None ? '在格子上塗抹以清除分區' : `塗抹道路旁的格子設為「${ZONES[this.zone].name}」；雙指移動地圖`;
+      case 'upgradeRoad':
+        return this.upgradeHint();
       case 'roundabout': {
         const cost = this.city.roundaboutCost(this.roundaboutSize);
         return `${this.roundaboutSize} 通圓環 · 約 ${ntd(cost)}　靠近路口或道路會自動吸附（橘色圈），壓到的道路自動接上；車輛逆時針單向繞行`;
@@ -547,7 +585,14 @@ export class ToolController {
     this.hover = p;
     if (this.isRoadTool) this.tapRoad(p);
     else if (this.plansLines) this.tapLine(p);
-    else if (this.tool === 'streetName') {
+    else if (this.tool === 'upgradeRoad') {
+      const seg = this.streetAt(p);
+      if (!seg) this.events.toast('點一條道路來升級（圓環除外）');
+      else {
+        const r = this.city.restyleRoad(seg.id, styleOf(this.roadStyle));
+        this.events.toast(r.ok ? `道路已改為「${STYLE_CHOICES.find(([c]) => c === this.roadStyle)![1]}」，花費 ${ntd(r.cost)}` : (r.reason ?? '不能升級'));
+      }
+    } else if (this.tool === 'streetName') {
       const net = this.city.net;
       const r = Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6);
       const hit = net.segmentAt(p, r, 0) ?? net.segmentAt(p, r);
@@ -686,6 +731,11 @@ export class ToolController {
       w.setCursor(near ?? null, true);
     }
     w.setDraftLine(this.plansLines && t ? this.draftPath : null, LINE_COLORS[((t?.nextLine ?? 1) - 1) % LINE_COLORS.length], t?.net);
+    if (this.tool === 'upgradeRoad') {
+      const seg = this.hover && this.city.unlocked('roadUpgrade') ? this.streetAt(this.hover) : null;
+      const path = seg ? this.city.net.street(seg).map((x) => ({ seg: x.id, dir: 1 as const, from: 0, to: x.length })) : null;
+      w.setDraftLine(path, 0x4cc3f2, this.city.net, 0, 6);
+    }
     if (this.tool === 'streetName') {
       const seg = this.selectedStreet !== null ? this.city.net.segments.get(this.selectedStreet) : undefined;
       const path = seg ? this.city.net.street(seg).map((x) => ({ seg: x.id, dir: 1 as const, from: 0, to: x.length })) : null;

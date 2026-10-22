@@ -15,7 +15,7 @@ import {
 import { ntd } from './format';
 import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, quadPoint, sampleQuad } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
-import { ELEVATED_HEIGHT, MAX_GRADE, ROAD_WIDTH, RoadNetwork, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
+import { ELEVATED_HEIGHT, type LaneCount, MAX_GRADE, ROAD_WIDTH, RoadNetwork, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
@@ -36,7 +36,7 @@ export const MONTH_STEPS = DAY_STEPS * MONTH_DAYS;
 export const ROAD_UPKEEP = 0.004;
 export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
-const SAVE_VERSION = 7;
+const SAVE_VERSION = 8;
 /** Ring radius of a roundabout by its number of exits. */
 export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
 /** Length of the short roads a new roundabout puts out at each exit. */
@@ -135,6 +135,8 @@ interface NetSave {
   nodes: ([number, number, number] | [number, number, number, number])[];
   /** id, a, b, control x, control y, per-lot zone * 10 + level, 1 if one-way (v3) */
   segs: ([number, number, number, number, number, number[]] | [number, number, number, number, number, number[], number])[];
+  /** v8: widened roads (segment id, lanes each way, 1 if wide sidewalks) */
+  styles?: [number, number, number][];
 }
 
 /** Stops (id, x, y), lines (id, color, stop ids, name) and the fare of one kind of transport. */
@@ -689,6 +691,36 @@ export class City {
     return { ok: true, cost };
   }
 
+  /** Price of restyling a street: widening is paid per metre and per added lane, narrowing is free. */
+  restyleCost(segs: RoadSegment[], style: RoadStyle): number {
+    let cost = 0;
+    for (const seg of segs) {
+      const lanes = style.lanes ?? seg.lanes ?? 1;
+      cost += seg.length * Math.max(0, lanes - (seg.lanes ?? 1)) * ROAD_COST_PER_M * 2;
+      if (style.walk && !seg.walk) cost += seg.length * ROAD_COST_PER_M * 1.5;
+    }
+    return Math.round(cost);
+  }
+
+  /**
+   * Changes the lanes or sidewalks of the street a segment belongs to (opens at 縣轄市). Lots are laid
+   * out again further back from the new kerb and keep their zoning and buildings.
+   */
+  restyleRoad(segId: number, style: RoadStyle): { ok: boolean; cost: number; reason?: string } {
+    const seg = this.net.segments.get(segId);
+    if (!seg) return { ok: false, cost: 0, reason: '找不到道路' };
+    if (!this.unlocked('roadUpgrade')) return { ok: false, cost: 0, reason: `升級為${LEVELS[UNLOCK.roadUpgrade].name}後開放` };
+    if (seg.oneway) return { ok: false, cost: 0, reason: '圓環不能升級' };
+    const segs = this.net.street(seg).filter((s) => (style.lanes ?? s.lanes ?? 1) !== (s.lanes ?? 1) || (style.walk ?? !!s.walk) !== !!s.walk);
+    if (!segs.length) return { ok: false, cost: 0, reason: '已經是這個樣式' };
+    const cost = this.restyleCost(segs, style);
+    if (cost > this.money) return { ok: false, cost, reason: '資金不足' };
+    for (const s of segs) applyStyle(this.net, s, style);
+    this.spend(cost);
+    this.roadsChanged();
+    return { ok: true, cost };
+  }
+
   /** Names the street a segment belongs to (blank clears it). */
   nameStreet(segId: number, name: string): void {
     const seg = this.net.segments.get(segId);
@@ -1125,13 +1157,37 @@ function saveNet(net: RoadNetwork): NetSave {
       s.lots.map((l) => l.zone * 10 + l.level),
       ...(s.oneway ? [1] : []),
     ] as NetSave['segs'][number]),
+    styles: [...net.segments.values()].filter((s) => s.lanes || s.walk).map((s) => [s.id, s.lanes ?? 1, s.walk ? 1 : 0]),
   };
+}
+
+export interface RoadStyle {
+  lanes?: LaneCount;
+  walk?: boolean;
+}
+
+/** Gives a segment new lanes or sidewalks and lays its lots out again, keeping what stood on each. */
+function applyStyle(net: RoadNetwork, seg: RoadSegment, style: RoadStyle): void {
+  const old = seg.lots;
+  if (style.lanes !== undefined) seg.lanes = style.lanes === 1 ? undefined : style.lanes;
+  if (style.walk !== undefined) seg.walk = style.walk || undefined;
+  seg.lots = generateLots(net, seg);
+  // Same segment, same layout: each lot is the one at the same place in the list, just moved back
+  seg.lots.forEach((l, i) => {
+    const o = old[i];
+    if (!o) return;
+    l.zone = o.zone;
+    l.level = o.level;
+  });
 }
 
 function loadNet(net: RoadNetwork, data: NetSave, lots: boolean): void {
   for (const [id, x, y, h] of data.nodes) net.addNode({ x, y }, id, h ?? 0);
+  const styles = new Map((data.styles ?? []).map(([id, lanes, walk]) => [id, { lanes: lanes as LaneCount, walk: walk === 1 }]));
   for (const [id, a, b, cx, cy, zoning, oneway] of data.segs) {
     const seg = net.createSegment(a, b, { x: cx, y: cy }, undefined, id, oneway === 1);
+    const style = styles.get(id);
+    if (style) applyStyle(net, seg, style);
     if (!lots) continue;
     zoning.forEach((v, i) => {
       const lot = seg.lots[i];
