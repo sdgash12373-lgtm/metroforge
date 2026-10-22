@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { City } from '../src/sim/city';
+import { City, FREEWAY } from '../src/sim/city';
 import { curveIntersections, quadPoint, sampleQuad, splitQuad } from '../src/sim/geometry';
-import { Zone } from '../src/sim/zoning';
+import { CELL, Zone, cellCenter } from '../src/sim/zoning';
 import { angleGuides } from '../src/sim/angles';
 import { alignToGuides } from '../src/sim/guides';
 
@@ -210,5 +210,18 @@ describe('zoning brush', () => {
     expect(lots().filter((l) => l.zone === Zone.ResidentialLow).length).toBe(0);
     city.paint({ x: 0, y: 20 }, 200, Zone.None);
     expect(lots().every((l) => l.zone === Zone.None)).toBe(true);
+  });
+});
+
+describe('drawing grid', () => {
+  it('puts free road ends in the middle of a square, never on a grid line', () => {
+    for (const p of [{ x: 3.9, y: -4.1 }, { x: 101, y: 97 }, { x: -300, y: 0 }]) {
+      const c = cellCenter(p);
+      expect(Math.abs(c.x % CELL)).toBe(0);
+      expect(Math.abs(c.y % CELL)).toBe(0);
+      expect(Math.abs(c.x - p.x)).toBeLessThanOrEqual(CELL / 2);
+      expect(Math.abs(c.y - p.y)).toBeLessThanOrEqual(CELL / 2);
+    }
+    expect(cellCenter(FREEWAY.town)).toEqual(FREEWAY.town);
   });
 });

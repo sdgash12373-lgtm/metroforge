@@ -48,7 +48,7 @@ export const GATE: Vec2 = { x: -480, y: 60 };
  * A new city's freeway: north–south on viaducts west of the plain (north is -y), with an interchange
  * whose two ramps come down at `exit` and an access road running on into town.
  */
-export const FREEWAY = { x: -700, north: -1000, south: 700, ramp: 160, exit: { x: -560, y: 0 }, town: { x: -300, y: 0 }, name: '國道 1 號' };
+export const FREEWAY = { x: -700, north: -1000, south: 700, ramp: 160, exit: { x: -560, y: 0 }, town: { x: -304, y: 0 }, name: '國道 1 號' };
 export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
 /** Length of the short roads a new roundabout puts out at each exit. */
 const SPOKE_LENGTH = 30;

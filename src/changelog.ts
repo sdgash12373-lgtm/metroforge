@@ -8,6 +8,12 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '2.1.2',
+    date: '2026-10-22',
+    title: '道路端點對齊格子中間',
+    notes: ['拉道路或軌道時，新的端點會自動吸到格子正中間，不會壓在格線上；接到既有道路或路口時照常吸附'],
+  },
+  {
     version: '2.1.1',
     date: '2026-10-22',
     title: '拉道路有格線輔助',
