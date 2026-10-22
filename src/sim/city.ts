@@ -330,6 +330,21 @@ export class City {
     this.landChanged();
   }
 
+  /** Roads with no way through to the highway: shown in red with the warning so they're easy to find. */
+  disconnectedRoads(): RoadSegment[] {
+    return [...this.net.segments.values()].filter((s) => !this.isConnected(s));
+  }
+
+  /** Where the zoning that can't grow for lack of a road out is, nearest `from` first. */
+  disconnectedLots(from: Vec2): Vec2[] {
+    const out: Vec2[] = [];
+    for (const seg of this.net.segments.values()) {
+      if (this.isConnected(seg)) continue;
+      for (const l of seg.lots) if (!l.blocked && l.zone !== Zone.None && !l.level) out.push({ x: l.x, y: l.y });
+    }
+    return out.sort((a, b) => dist(a, from) - dist(b, from));
+  }
+
   isConnected(seg: RoadSegment): boolean {
     return this.connected.has(seg.a);
   }

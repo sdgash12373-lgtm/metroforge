@@ -68,6 +68,8 @@ export interface HudActions {
   openMenu(): void;
   /** first-person patrol: drive a car through the city */
   drive(): void;
+  /** moves the view to a spot on the map */
+  lookAt(p: { x: number; y: number }): void;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
@@ -96,6 +98,8 @@ export class Hud {
   private budgetRows: Record<BudgetRow, HTMLElement>;
   private taxInputs: { res: HTMLInputElement; biz: HTMLInputElement; resLabel: HTMLElement; bizLabel: HTMLElement };
   private city: City | null = null;
+  /** the cut-off zoning the warning last showed */
+  private lastWarnSpot: { x: number; y: number } | null = null;
   private topBar: HTMLElement;
   lockButton: HTMLButtonElement;
   private clearArmed = 0;
@@ -215,8 +219,19 @@ export class Hud {
     this.tickerEl.append(lane, this.tickerAction, close);
     top.append(this.tickerEl);
 
-    this.warning = el('div', 'warning panel');
+    this.warning = el('button', 'warning panel');
+    (this.warning as HTMLButtonElement).type = 'button';
     this.warning.hidden = true;
+    this.warning.onclick = () => {
+      const city = this.city;
+      if (!city) return;
+      // Each tap visits the next cut-off area, starting from the nearest
+      const spots = city.disconnectedLots(this.lastWarnSpot ?? { x: 0, y: 0 });
+      const next = spots.find((p) => !this.lastWarnSpot || Math.hypot(p.x - this.lastWarnSpot.x, p.y - this.lastWarnSpot.y) > 150) ?? spots[0];
+      if (!next) return;
+      this.lastWarnSpot = next;
+      actions.lookAt(next);
+    };
 
     // Budget: last day's income and spending, and the two tax sliders
     this.budgetPanel = el('section', 'budget panel');
@@ -868,7 +883,7 @@ export class Hud {
     const below = `${this.topBar.offsetTop + this.topBar.offsetHeight + 8}px`;
     const lost = city.stats.disconnected;
     this.warning.hidden = lost === 0;
-    if (lost) this.warning.textContent = `${lost} 格分區沒有道路連到高速公路，不會發展`;
+    if (lost) this.warning.textContent = `⚠️ ${lost} 格分區沒有道路連到高速公路，不會發展。紅色是沒接上的道路，點這裡前往`;
     const shift = `calc(${below} + ${this.warning.hidden ? 0 : this.warning.offsetHeight + 8}px)`;
     this.warning.style.top = below;
     this.budgetPanel.style.top = shift;
