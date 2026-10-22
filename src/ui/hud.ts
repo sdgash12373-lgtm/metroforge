@@ -66,6 +66,8 @@ export interface HudActions {
   toggleBuildMode(): boolean;
   /** opens the in-game menu: save, load, settings, back to the start screen */
   openMenu(): void;
+  /** first-person patrol: drive a car through the city */
+  drive(): void;
 }
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
@@ -166,6 +168,12 @@ export class Hud {
     };
     this.lockButton = lock;
     top.append(lock);
+
+    const driveBtn = el('button', 'chip', '🚗 巡查');
+    driveBtn.type = 'button';
+    driveBtn.title = '第一人稱開車巡查城市（電腦 WASD、手機虛擬搖桿）';
+    driveBtn.onclick = () => actions.drive();
+    top.append(driveBtn);
 
     const levelBtn = el('button', 'chip level-chip', LEVELS[0].name);
     levelBtn.type = 'button';
@@ -318,7 +326,8 @@ export class Hud {
     root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.levelPanel, this.editPanel.el, this.toastEl, bottom);
 
     addEventListener('keydown', (e) => {
-      if ((e.target as HTMLElement).closest?.('input, textarea') || document.body.classList.contains('menu-open')) return;
+      const body = document.body.classList;
+      if ((e.target as HTMLElement).closest?.('input, textarea') || body.contains('menu-open') || body.contains('driving')) return;
       if (e.key === 'Escape' && !this.tools.drawing && !this.tools.lineDraft.length) {
         actions.openMenu();
         return;

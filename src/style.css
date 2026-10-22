@@ -831,3 +831,112 @@ body.menu-open .angle-labels {
     box-shadow: 0 0 0 4px rgba(242, 177, 52, 0.35);
   }
 }
+
+/* First-person patrol: the city builder's bars make way for a dashboard and a joystick */
+body.driving .bottom,
+body.driving .hud,
+body.driving .budget,
+body.driving .needs,
+body.driving .level {
+  display: none !important;
+}
+
+#ui > .drive {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.drive-panel {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  max-width: calc(100% - 32px);
+  box-sizing: border-box;
+  flex-wrap: wrap;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.drive-gauge {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 64px;
+}
+
+.drive-speed {
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.drive-gauge small {
+  color: var(--muted);
+}
+
+.drive-info {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.drive-street {
+  font-weight: 700;
+}
+
+.drive-turn {
+  color: var(--accent);
+}
+
+.chip.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.joystick {
+  position: absolute;
+  left: calc(env(safe-area-inset-left) + 24px);
+  bottom: calc(env(safe-area-inset-bottom) + 28px);
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: rgba(28, 34, 31, 0.45);
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  pointer-events: auto;
+  touch-action: none;
+  display: grid;
+  place-items: center;
+}
+
+.joystick .knob {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(238, 242, 234, 0.85);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.drive-hint {
+  position: absolute;
+  right: 16px;
+  bottom: calc(env(safe-area-inset-bottom) + 16px);
+  max-width: min(360px, calc(100% - 200px));
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel);
+  border-radius: 8px;
+}
+
+@media (pointer: fine) {
+  .joystick {
+    display: none;
+  }
+}

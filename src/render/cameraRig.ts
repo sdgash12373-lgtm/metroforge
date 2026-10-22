@@ -12,6 +12,8 @@ export class CameraRig {
   locked = false;
   /** Height of the plane taps land on: raised while drawing elevated roads so the pointer sits on the deck. */
   pickHeight = 0;
+  /** First-person driving moves the camera itself; the orbit controls leave it alone. */
+  driving = false;
   readonly minDistance = 40;
   readonly maxDistance = 1600;
   private readonly ray = new THREE.Raycaster();
@@ -25,6 +27,7 @@ export class CameraRig {
   }
 
   apply(): void {
+    if (this.driving) return;
     this.distance = clamp(this.distance, this.minDistance, this.maxDistance);
     this.pitch = clamp(this.pitch, 0.35, 1.45);
     const lim = 2000;

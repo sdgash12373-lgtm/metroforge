@@ -232,3 +232,35 @@ describe('traffic lights', () => {
     expect(v.stuck).toBe(0);
   });
 });
+
+describe('the player car (第一人稱巡查)', () => {
+  it('drives where it is steered but still stops for red lights', () => {
+    const city = new City();
+    city.buildRoad(free(-200, 0), null, free(200, 0), true);
+    city.buildRoad(free(0, -200), null, free(0, 200), true);
+    const west = segAt(city, -100, 0);
+    const north = segAt(city, 0, -100);
+    const t = city.traffic;
+    // The west arm runs from the map edge (a) to the crossroads (b)
+    expect(city.net.node(west.b).p.x).toBeCloseTo(0, 3);
+    const car = t.spawnPlayer(west, 1, 10);
+    car.throttle = 1;
+    // Turn left (north, the map's −y) at the crossroads
+    car.route = [{ seg: north.id, dir: north.a === west.b ? 1 : -1 }];
+    let ranRed = false;
+    for (let i = 0; i < 1200 && car.seg === west.id; i++) {
+      const light = t.lightFor(west, car.dir);
+      const before = car.pos;
+      t.step(0.05);
+      const line = west.length - (t.junctions().get(west.b)?.stopBack ?? 6);
+      if (light === 'red' && before <= line && car.seg === west.id && car.pos > line + 0.01) ranRed = true;
+    }
+    expect(ranRed).toBe(false);
+    expect(car.seg).toBe(north.id);
+    expect(t.vehicles).toContain(car);
+    // It never "arrives" or gives up, even standing still at the end of the road
+    car.throttle = 0;
+    for (let i = 0; i < 2000; i++) t.step(0.05);
+    expect(t.vehicles).toContain(car);
+  });
+});

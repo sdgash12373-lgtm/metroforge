@@ -343,6 +343,25 @@ export class Traffic {
     return v;
   }
 
+  /** Puts the player's car on a lane; the drive controls then pick its next lane as it goes. */
+  spawnPlayer(seg: RoadSegment, dir: Dir, pos: number): Vehicle {
+    const v: Vehicle = { id: this.nextId++, kind: 'car', seg: seg.id, dir, pos, speed: 0, route: [], dest: seg.length - 1, tint: 0.05, stuck: 0, sub: 0, player: true, throttle: 0 };
+    this.vehicles.push(v);
+    this.index();
+    return v;
+  }
+
+  /** Whether another vehicle is alongside `v` in sub-lane `sub`, so it can't move over. */
+  laneTaken(v: Vehicle, sub: number): boolean {
+    const list = this.lanes.get(laneKey(v.seg, v.dir)) ?? [];
+    return list.some((o) => o !== v && (o.sub ?? 0) === sub && Math.abs(o.pos - v.pos) < VEHICLE_LENGTH[o.kind] + MIN_GAP + 2);
+  }
+
+  removeVehicle(v: Vehicle): void {
+    this.vehicles = this.vehicles.filter((o) => o !== v);
+    this.index();
+  }
+
   /**
    * Sends a vehicle on from where it is now to a new destination. Road vehicles never turn around on
    * the spot; trains (rules.reverses) may set off the other way.
@@ -534,7 +553,7 @@ export class Traffic {
     return this.laneSample(seg, dir, Math.max(0, along), seg.id === v.seg ? (v.sub ?? 0) : 0);
   }
 
-  private headingAt(seg: RoadSegment, dir: Dir, along: number): Vec2 {
+  headingAt(seg: RoadSegment, dir: Dir, along: number): Vec2 {
     return this.laneSample(seg, dir, along).heading;
   }
 
