@@ -152,7 +152,8 @@ export class World {
     this.sun = new THREE.DirectionalLight(0xfff1dc, 2.1);
     this.sun.castShadow = shadows;
     this.sun.shadow.mapSize.set(2048, 2048);
-    this.sun.shadow.bias = -0.0005;
+    this.sun.shadow.bias = -0.0001;
+    this.sun.shadow.normalBias = 0.03;
     this.scene.add(this.sun, this.sun.target);
     this.sky = new SkySystem(this.scene, this.sun, hemi, matchMedia('(pointer: coarse)').matches);
 
@@ -801,8 +802,10 @@ export class World {
     cam.right = span;
     cam.top = span;
     cam.bottom = -span;
-    cam.near = 1;
-    cam.far = 3000;
+    // A depth range just deep enough for the view keeps the bias small, so cars and people stay in touch with their shadows
+    const reach = this.sun.position.distanceTo(this.sun.target.position);
+    cam.near = Math.max(1, reach - span * 2);
+    cam.far = reach + span * 2;
     cam.updateProjectionMatrix();
     this.renderer.render(this.scene, this.rig.camera);
     this.placeNames();
