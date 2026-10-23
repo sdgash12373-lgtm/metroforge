@@ -4,6 +4,7 @@ import type { City } from '../sim/city';
 import { toWorld } from '../sim/facilities';
 import { type RoadSegment, asphaltWidth, roadWidth } from '../sim/roads';
 import { Zone } from '../sim/zoning';
+import { painted, tint, wheel } from './kit';
 
 const MAX = 900;
 /** One walker on the street per this many residents. */
@@ -48,17 +49,7 @@ interface Walker {
 const SKIN = 0xe8c4a0;
 const HAIR = 0x2a2420;
 
-/** A box painted one colour, for the parts that keep their colour (skin, hair, trousers). */
-function painted(w: number, h: number, d: number, x: number, y: number, z: number, color: number): THREE.BufferGeometry {
-  const g = new THREE.BoxGeometry(w, h, d).translate(x, y, z);
-  const c = new THREE.Color(color);
-  const n = g.getAttribute('position').count;
-  const rgb = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) rgb.set([c.r, c.g, c.b], i * 3);
-  g.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
-  return g;
-}
-const plain = (w: number, h: number, d: number, x: number, y: number, z: number) => painted(w, h, d, x, y, z, 0xffffff);
+const plain = (w: number, h: number, d: number, x: number, y: number, z: number) => painted(w, h, d, x, y, z);
 
 /**
  * Each kind of person in two parts, facing +x: clothes take each walker's colour, the rest (skin, hair, legs)
@@ -121,13 +112,24 @@ function figure(who: Person): { clothes: THREE.BufferGeometry; rest: THREE.Buffe
   }
 }
 
-/** A bicycle and its rider, facing +x. */
-function cyclist(): THREE.BufferGeometry {
-  const wheels = [-0.55, 0.55].map((x) => new THREE.BoxGeometry(0.62, 0.62, 0.08).translate(x, 0.31, 0));
-  const frame = new THREE.BoxGeometry(1.1, 0.1, 0.08).translate(0, 0.62, 0);
-  const rider = new THREE.BoxGeometry(0.34, 0.65, 0.45).translate(-0.1, 1.15, 0);
-  const head = new THREE.BoxGeometry(0.24, 0.24, 0.24).translate(-0.02, 1.62, 0);
-  return mergeGeometries([...wheels, frame, rider, head])!;
+/** A YouBike-style bicycle and its rider, facing +x: the rider's shirt takes the instance colour, the rest keeps its own. */
+function cyclist(): { clothes: THREE.BufferGeometry; rest: THREE.BufferGeometry } {
+  const frame = 0xf2a900;
+  return {
+    clothes: plain(0.34, 0.6, 0.45, -0.12, 1.2, 0),
+    rest: mergeGeometries([
+      wheel(-0.55, 0, 0.33, 0.06),
+      wheel(0.55, 0, 0.33, 0.06),
+      painted(0.95, 0.07, 0.07, 0, 0.55, 0, frame),
+      tint(new THREE.BoxGeometry(0.07, 0.6, 0.07).rotateZ(0.5).translate(0.4, 0.75, 0), frame),
+      painted(0.07, 0.45, 0.07, -0.25, 0.75, 0, frame),
+      painted(0.3, 0.22, 0.4, 0.72, 0.92, 0, 0x3a3d42),
+      painted(0.05, 0.05, 0.55, 0.5, 1.08, 0, 0x2a2c30),
+      painted(0.26, 0.6, 0.32, -0.08, 0.6, 0, 0x2d3a4f),
+      painted(0.24, 0.24, 0.24, -0.02, 1.64, 0, SKIN),
+      painted(0.26, 0.07, 0.26, -0.03, 1.78, 0, HAIR),
+    ])!,
+  };
 }
 
 /** Shares of men, women, elders and children out on a street. */
@@ -149,6 +151,7 @@ export class PedestrianLayer {
   private readonly clothes: THREE.InstancedMesh[] = [];
   private readonly rest: THREE.InstancedMesh[] = [];
   private readonly bikes: THREE.InstancedMesh;
+  private readonly bikeFrames: THREE.InstancedMesh;
   private walkers: Walker[] = [];
   private mixes = new Map<number, Mix>();
   private mixKey = '';
@@ -168,8 +171,10 @@ export class PedestrianLayer {
       this.clothes.push(new THREE.InstancedMesh(g.clothes, mat, MAX));
       this.rest.push(new THREE.InstancedMesh(g.rest, fixed, MAX));
     }
-    this.bikes = new THREE.InstancedMesh(cyclist(), mat, MAX);
-    for (const m of [...this.clothes, ...this.rest, this.bikes]) {
+    const bike = cyclist();
+    this.bikes = new THREE.InstancedMesh(bike.clothes, mat, MAX);
+    this.bikeFrames = new THREE.InstancedMesh(bike.rest, fixed, MAX);
+    for (const m of [...this.clothes, ...this.rest, this.bikes, this.bikeFrames]) {
       m.count = 0;
       m.frustumCulled = false;
       m.castShadow = shadows;
@@ -277,6 +282,7 @@ export class PedestrianLayer {
       if (who === 'bike') {
         if (nb >= MAX) return;
         this.bikes.setMatrixAt(nb, this.m);
+        this.bikeFrames.setMatrixAt(nb, this.m);
         this.bikes.setColorAt(nb++, this.c.setHex(color));
         return;
       }
@@ -358,7 +364,8 @@ export class PedestrianLayer {
       this.rest[who].count = counts[k];
     });
     this.bikes.count = nb;
-    for (const m of [...this.clothes, ...this.rest, this.bikes]) {
+    this.bikeFrames.count = nb;
+    for (const m of [...this.clothes, ...this.rest, this.bikes, this.bikeFrames]) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
     }
