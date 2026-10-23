@@ -3,6 +3,8 @@ import type { City } from '../sim/city';
 import { CELL, type Lot, ZONES, Zone } from '../sim/zoning';
 
 const MAX = 20000;
+/** facade details: arcades, balconies, window grilles, rooftop add-ons */
+const MAX_PARTS = 120000;
 
 /** Triangular prism for gable roofs: 1 × 1 footprint, ridge along x, height 1, base at y = 0. */
 function gableGeometry(): THREE.BufferGeometry {
@@ -24,13 +26,32 @@ function gableGeometry(): THREE.BufferGeometry {
 }
 
 const WALLS: Record<Exclude<Zone, Zone.None>, number[]> = {
-  [Zone.ResidentialLow]: [0xf3e9d8, 0xe9d6b8, 0xdfe7ee, 0xf0dcd2, 0xe4ead6],
-  [Zone.ResidentialHigh]: [0xd9d2c5, 0xc8cfd6, 0xe3d7c3, 0xbfc9c1],
-  [Zone.Commercial]: [0x9cc3e6, 0xb5d3ec, 0x86b2dc, 0xd7e6f2],
-  [Zone.Office]: [0xb9b3d9, 0x9ea6c9, 0xc9c6e0, 0x8f98bd],
-  [Zone.Industrial]: [0xd8c39a, 0xc9b38a, 0xbfae95, 0xe0cfa8],
+  // Tiled facades of 透天厝 and 公寓: white and beige mosaic, pink, grey-green, brown 二丁掛 brick
+  [Zone.ResidentialLow]: [0xf1ede4, 0xe8dcc6, 0xe7c9bf, 0xc9cfc8, 0xb98a6e, 0xd9cbb6, 0xd4d7da],
+  [Zone.ResidentialHigh]: [0xe9e2d4, 0xd6cdbd, 0xc7ccc9, 0xb7927a, 0xdcd3cf, 0xcfc4ae],
+  [Zone.Commercial]: [0xece6da, 0xd8d2c8, 0xe2cbb8, 0xc6ccd1, 0xb98a6e],
+  // 商辦大樓: blue-green glass curtain walls
+  [Zone.Office]: [0x6f97ad, 0x5b7f93, 0x8fb3c2, 0x7d9aa8, 0x4f6f84],
+  // 鐵皮 factories: pale steel cladding
+  [Zone.Industrial]: [0xe9ecee, 0xdfe3e6, 0xd3d9dd, 0xc8d3db],
 };
-const ROOFS = [0xb5523b, 0x8c4a3a, 0x5d6b7a, 0x6e5a4a, 0x9a6b3f];
+/** Red tile roofs of village houses */
+const ROOFS = [0xb5523b, 0x9c4632, 0xa85a3c];
+/** Blue and green 鐵皮 roofs of factories and rooftop add-ons */
+const TIN = [0x4a7fb0, 0x5b8fb9, 0x6d9a6b, 0xb9bcbf, 0x3f6f9a];
+/** Shop signs: bright 招牌 colors */
+const SIGNS = [0xe23b3b, 0xf2c12e, 0x2f7fd1, 0x2fae5e, 0xffffff, 0xf07c24, 0xd6336c];
+/** Water tanks on the roof: stainless, white and blue plastic */
+const TANKS = [0xd8dde0, 0xeef0f0, 0x3c78b5];
+/** Granite and stone podiums under office towers */
+const STONE = [0xc9c1b3, 0x8c8a86, 0xb3a796, 0x9b9fa3];
+const FLOOR = 3.2;
+const ARCADE = 0x5f5a55;
+const GRILLE = 0x8f989c;
+
+/** Hash a lot's seed into another value in 0..1, so features vary independently. */
+const pick = (seed: number, salt: number) => (seed * (salt * 7.13 + 3.7)) % 1;
+const choose = <T>(list: readonly T[], seed: number, salt: number) => list[Math.floor(pick(seed, salt) * list.length)];
 
 interface Shape {
   w: number;
@@ -44,11 +65,12 @@ export function buildingShape(lot: Lot): Shape {
   const f = CELL * 0.82;
   switch (lot.zone) {
     case Zone.ResidentialLow:
-      return { w: f * (0.75 + r * 0.2), d: f * 0.7, h: 3 + lot.level * 0.9 };
+      // a 2-storey village house, then 3- and 4-storey 透天厝
+      return { w: f * (0.75 + r * 0.2), d: f * 0.8, h: (lot.level === 1 ? 2 : lot.level + 1) * FLOOR };
     case Zone.ResidentialHigh:
-      return { w: f, d: f * 0.9, h: 5 + lot.level * (5 + r * 3) };
+      return { w: f, d: f * 0.9, h: Math.round((5 + lot.level * (5 + r * 3)) / FLOOR) * FLOOR };
     case Zone.Commercial:
-      return { w: f, d: f * 0.85, h: 3.5 + lot.level * (2.5 + r * 2) };
+      return { w: f, d: f * 0.85, h: (2 + Math.round(lot.level * (0.8 + r * 0.6))) * FLOOR };
     case Zone.Office:
       // Skyscrapers of a 直轄市: full cells, much taller
       if (lot.level > 5) return { w: f * 1.08, d: f * 1.02, h: 70 + (lot.level - 5) * (40 + r * 45) };
@@ -60,23 +82,42 @@ export function buildingShape(lot: Lot): Shape {
   }
 }
 
-/** Zone tiles plus low-poly buildings, all instanced. */
+/** Shop signs light up after dark. */
+function glowAtNight(mat: THREE.MeshLambertMaterial, night: { value: number }): void {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uNight = night;
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uNight;')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += diffuseColor.rgb * uNight * 0.85;');
+  };
+  mat.customProgramCacheKey = () => 'signs';
+  mat.needsUpdate = true;
+}
+
+/**
+ * Zone tiles plus low-poly buildings in the style of a Taiwanese street, all instanced:
+ * 騎樓 arcades on the ground floor, balconies with 鐵窗 grilles, shop signs, and water tanks
+ * and 鐵皮 add-ons on flat roofs.
+ */
 export class BuildingLayer {
   readonly group = new THREE.Group();
   private tiles: THREE.InstancedMesh;
   private bodies: THREE.InstancedMesh;
   private roofs: THREE.InstancedMesh;
   private stacks: THREE.InstancedMesh;
+  private signs: THREE.InstancedMesh;
   private m = new THREE.Matrix4();
   private q = new THREE.Quaternion();
   private s = new THREE.Vector3();
   private p = new THREE.Vector3();
   private up = new THREE.Vector3(0, 1, 0);
   private c = new THREE.Color();
+  private n = { b: 0, r: 0, k: 0, g: 0 };
   showEmptyCells = false;
 
   /** walls, roofs and chimneys share it; lit windows are patched in at night */
   readonly material: THREE.MeshLambertMaterial;
+  private readonly signMaterial = new THREE.MeshLambertMaterial({ flatShading: true });
 
   constructor(shadows: boolean) {
     const tileGeo = new THREE.PlaneGeometry(CELL * 0.9, CELL * 0.9).rotateX(-Math.PI / 2);
@@ -84,19 +125,25 @@ export class BuildingLayer {
     const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
     const mat = new THREE.MeshLambertMaterial({ flatShading: true });
     this.material = mat;
-    this.bodies = new THREE.InstancedMesh(box, mat, MAX);
+    this.bodies = new THREE.InstancedMesh(box, mat, MAX_PARTS);
     this.roofs = new THREE.InstancedMesh(gableGeometry(), mat, MAX);
-    this.stacks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.5, 0.6, 1, 6).translate(0, 0.5, 0), mat, MAX / 4);
-    for (const mesh of [this.tiles, this.bodies, this.roofs, this.stacks]) {
+    this.stacks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.5, 0.6, 1, 6).translate(0, 0.5, 0), mat, MAX);
+    this.signs = new THREE.InstancedMesh(box, this.signMaterial, MAX);
+    for (const mesh of [this.tiles, this.bodies, this.roofs, this.stacks, this.signs]) {
       mesh.count = 0;
       mesh.frustumCulled = false;
       this.group.add(mesh);
     }
-    for (const mesh of [this.bodies, this.roofs, this.stacks]) {
+    for (const mesh of [this.bodies, this.roofs, this.stacks, this.signs]) {
       mesh.castShadow = shadows;
       mesh.receiveShadow = shadows;
     }
     this.tiles.renderOrder = 1;
+  }
+
+  /** Let shop signs glow at night. */
+  lightSigns(night: { value: number }): void {
+    glowAtNight(this.signMaterial, night);
   }
 
   private place(mesh: THREE.InstancedMesh, i: number, lot: Lot, x: number, y: number, z: number, sx: number, sy: number, sz: number, color: number): void {
@@ -108,11 +155,92 @@ export class BuildingLayer {
     mesh.setColorAt(i, this.c.setHex(color));
   }
 
+  /**
+   * One box of a building, in the building's own frame: `along` runs with the road, `out` away from it
+   * (negative is toward the street), sizes likewise.
+   */
+  private part(kind: 'b' | 'r' | 'k' | 'g', lot: Lot, x: number, z: number, along: number, out: number, y: number, w: number, h: number, d: number, color: number): void {
+    const mesh = kind === 'b' ? this.bodies : kind === 'r' ? this.roofs : kind === 'k' ? this.stacks : this.signs;
+    const cap = kind === 'b' ? MAX_PARTS : MAX;
+    if (this.n[kind] >= cap) return;
+    const nx = -lot.dir.y * lot.side;
+    const ny = lot.dir.x * lot.side;
+    this.place(mesh, this.n[kind]++, lot, x + lot.dir.x * along + nx * out, y, z + lot.dir.y * along + ny * out, w, h, d, color);
+  }
+
+  /** Ground-floor 騎樓: the shops sit back under the floor above, with pillars along the street. */
+  private arcade(lot: Lot, x: number, z: number, w: number, d: number, wall: number): void {
+    const deep = 2;
+    this.part('b', lot, x, z, 0, deep / 2, 0, w, FLOOR, d - deep, ARCADE);
+    for (const a of [-1, 1]) this.part('b', lot, x, z, a * (w / 2 - 0.25), -d / 2 + 0.25, 0, 0.5, FLOOR, 0.5, wall);
+  }
+
+  /** A balcony slab on each upper floor, some closed in by aluminium 鐵窗. */
+  private balconies(lot: Lot, x: number, z: number, w: number, d: number, h: number, from: number): void {
+    const floors = Math.round(h / FLOOR);
+    const step = floors > 12 ? 2 : 1;
+    for (let f = from; f < floors; f += step) {
+      const y = f * FLOOR;
+      this.part('b', lot, x, z, 0, -d / 2 - 0.3, y, w * 0.9, 0.25, 0.6, 0xcfcac2);
+      if (pick(lot.seed, f + 3) < 0.55) this.part('b', lot, x, z, 0, -d / 2 - 0.45, y + 0.25, w * 0.8, 1.6, 0.3, GRILLE);
+    }
+  }
+
+  /** Flat-roof clutter: a water tank, often a 鐵皮 add-on, and the stair housing. */
+  private rooftop(lot: Lot, x: number, z: number, w: number, d: number, h: number, addOn: boolean): void {
+    const tank = choose(TANKS, lot.seed, 5);
+    this.part('k', lot, x, z, w * 0.28, d * 0.25, h, 1.4, 1.5, 1.4, tank);
+    if (addOn && pick(lot.seed, 6) < 0.55) this.part('b', lot, x, z, -w * 0.12, d * 0.18, h, w * 0.7, 2.4, d * 0.55, choose(TIN, lot.seed, 7));
+    else this.part('b', lot, x, z, -w * 0.25, d * 0.2, h, Math.min(2.4, w * 0.3), 2.3, Math.min(2.4, d * 0.3), 0xbdb8b0);
+  }
+
+  /** Shop signs: a band over the arcade and an upright sign sticking out over the street. */
+  private shopSigns(lot: Lot, x: number, z: number, w: number, d: number, h: number): void {
+    this.part('g', lot, x, z, 0, -d / 2 - 0.1, FLOOR - 0.1, w * 0.95, 0.9, 0.2, choose(SIGNS, lot.seed, 8));
+    const tall = Math.min(h - FLOOR - 0.5, FLOOR * 3);
+    if (tall > 2) {
+      const side = pick(lot.seed, 9) < 0.5 ? -1 : 1;
+      this.part('g', lot, x, z, side * (w / 2 - 0.6), -d / 2 - 0.8, FLOOR + 0.4, 0.25, tall, 1.3, choose(SIGNS, lot.seed, 10));
+    }
+  }
+
+  /** 商辦大樓: glass tower on a stone podium, white floor bands, a company sign on the crown. */
+  private office(lot: Lot, x: number, z: number, w: number, d: number, h: number, glass: number): void {
+    const stone = choose(STONE, lot.seed, 12);
+    this.part('b', lot, x, z, 0, 0, 0, w + 0.5, FLOOR * 2, d + 0.5, stone);
+    // a glass canopy over the entrance
+    this.part('b', lot, x, z, 0, -d / 2 - 1, FLOOR - 0.3, w * 0.5, 0.3, 2, 0xdfe5ea);
+    const floors = Math.round(h / FLOOR);
+    const every = Math.max(2, Math.ceil(floors / 8));
+    for (let f = 2 + every; f < floors; f += every) this.part('b', lot, x, z, 0, 0, f * FLOOR, w + 0.15, 0.45, d + 0.15, 0xeef0f0);
+    this.part('g', lot, x, z, 0, -d / 2 - 0.1, h - 2.4, w * 0.6, 1.6, 0.2, choose(SIGNS, lot.seed, 13));
+    if (lot.level > 5) {
+      // Setback crown and a mast on top of a skyscraper
+      this.part('b', lot, x, z, 0, 0, h, w * 0.7, h * 0.08, d * 0.7, glass);
+      this.part('k', lot, x, z, 0, 0, h * 1.08, 0.6, 8 + lot.seed * 14, 0.6, 0xdfe5ea);
+    } else this.part('b', lot, x, z, w * 0.15, d * 0.1, h, w * 0.4, 1.8, d * 0.4, 0xbdb8b0);
+  }
+
+  /** 鐵皮工廠: steel shed with a coloured band and roof, roller shutters, a small office in front, sometimes a stack. */
+  private factory(lot: Lot, x: number, z: number, w: number, d: number, h: number): void {
+    const tin = choose(TIN, lot.seed, 2);
+    this.part('b', lot, x, z, 0, 0, h - 1, w + 0.1, 1, d + 0.1, tin);
+    this.part('r', lot, x, z, 0, 0, h, w + 0.4, 1.2, d + 0.4, tin);
+    // 鐵捲門 on the street side
+    const doors = w > 6 ? 2 : 1;
+    for (let i = 0; i < doors; i++) {
+      const along = doors === 1 ? w * 0.15 : (i ? w * 0.3 : -w * 0.05);
+      this.part('b', lot, x, z, along, -d / 2 - 0.05, 0, 2.8, Math.min(3.6, h - 1.2), 0.15, 0x7c8287);
+    }
+    // two-storey tiled office at the front corner
+    this.part('b', lot, x, z, -w * 0.32, -d * 0.3 - 0.3, 0, w * 0.36, FLOOR * 2, d * 0.4, choose(WALLS[Zone.ResidentialLow], lot.seed, 14));
+    if (pick(lot.seed, 15) < 0.2) this.part('k', lot, x, z, w * 0.3, d * 0.2, h, 1, 3 + lot.level * 1.5, 1, 0x8d8a85);
+    else this.part('k', lot, x, z, w * 0.2, d * 0.15, h + 0.6, 0.9, 1, 0.9, 0xb9bcbf);
+  }
+
   update(city: City): void {
     let t = 0;
-    let b = 0;
-    let r = 0;
-    let k = 0;
+    this.n = { b: 0, r: 0, k: 0, g: 0 };
     // A skyscraper takes in the skyscraper lot behind it too, for a bigger footprint
     const tower = (l: Lot | undefined) => !!l && !l.blocked && l.zone === Zone.Office && l.level > 5;
     const merged = new Set<Lot>();
@@ -127,7 +255,7 @@ export class BuildingLayer {
           else if (this.showEmptyCells) this.place(this.tiles, t++, lot, lot.x, 0.12, lot.y, 1, 1, 1, 0xffffff);
           continue;
         }
-        if (b >= MAX) continue;
+        if (this.n.b >= MAX_PARTS) continue;
         const zone = lot.zone as Exclude<Zone, Zone.None>;
         const shape = buildingShape(lot);
         const back2 = behind.get(lot);
@@ -146,24 +274,33 @@ export class BuildingLayer {
         const ny = lot.dir.x * lot.side;
         const x = lot.x - nx * back;
         const z = lot.y - ny * back;
-        this.place(this.bodies, b++, lot, x, 0, z, shape.w, shape.h, shape.d, wall);
-        if (zone === Zone.ResidentialLow && r < MAX) {
-          const roof = ROOFS[Math.floor(((lot.seed * 7) % 1) * ROOFS.length)];
-          this.place(this.roofs, r++, lot, x, shape.h, z, shape.w + 0.6, 2.2, shape.d + 0.6, roof);
-        } else if (zone === Zone.Office && lot.level > 5 && b < MAX) {
-          // Setback crown and a mast on top of a skyscraper
-          this.place(this.bodies, b++, lot, x, shape.h, z, shape.w * 0.7, shape.h * 0.08, shape.d * 0.7, wall);
-          if (k < this.stacks.instanceMatrix.count) this.place(this.stacks, k++, lot, x, shape.h * 1.08, z, 0.6, 8 + lot.seed * 14, 0.6, 0xdfe5ea);
-        } else if (zone === Zone.Industrial && k < this.stacks.instanceMatrix.count) {
-          this.place(this.stacks, k++, lot, x + lot.dir.x * shape.w * 0.25, shape.h, z + lot.dir.y * shape.w * 0.25, 1.2, 4 + lot.level * 2, 1.2, 0x8d8a85);
+        const { w, d, h } = shape;
+        const village = zone === Zone.ResidentialLow && lot.level === 1;
+        const arcaded = (zone === Zone.ResidentialLow && !village) || zone === Zone.Commercial || (zone === Zone.ResidentialHigh && lot.level <= 3);
+        if (arcaded) {
+          this.arcade(lot, x, z, w, d, wall);
+          this.part('b', lot, x, z, 0, 0, FLOOR, w, h - FLOOR, d, wall);
+        } else this.part('b', lot, x, z, 0, 0, 0, w, h, d, wall);
+        if (village) {
+          this.part('r', lot, x, z, 0, 0, h, w + 0.6, 2.2, d + 0.6, choose(ROOFS, lot.seed, 1));
+        } else if (zone === Zone.ResidentialLow || zone === Zone.ResidentialHigh || zone === Zone.Commercial) {
+          this.balconies(lot, x, z, w, d, h, 1);
+          this.rooftop(lot, x, z, w, d, h, zone !== Zone.Commercial || lot.level < 3);
+          if (zone === Zone.Commercial) this.shopSigns(lot, x, z, w, d, h);
+          else if (arcaded && zone === Zone.ResidentialHigh) this.part('g', lot, x, z, 0, -d / 2 - 0.1, FLOOR - 0.1, w * 0.95, 0.8, 0.2, choose(SIGNS, lot.seed, 11));
+        } else if (zone === Zone.Office) {
+          this.office(lot, x, z, w, d, h, wall);
+        } else if (zone === Zone.Industrial) {
+          this.factory(lot, x, z, w, d, h);
         }
       }
     }
     this.tiles.count = t;
-    this.bodies.count = b;
-    this.roofs.count = r;
-    this.stacks.count = k;
-    for (const mesh of [this.tiles, this.bodies, this.roofs, this.stacks]) {
+    this.bodies.count = this.n.b;
+    this.roofs.count = this.n.r;
+    this.stacks.count = this.n.k;
+    this.signs.count = this.n.g;
+    for (const mesh of [this.tiles, this.bodies, this.roofs, this.stacks, this.signs]) {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
