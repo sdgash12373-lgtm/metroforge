@@ -11,6 +11,21 @@ const PER_RESIDENTS = 30;
 /** One cyclist on the street per this many residents who ride to work. */
 const PER_CYCLIST = 25;
 const CLOTHES = [0xe4572e, 0x2e86ab, 0xf2f2f2, 0x3b3b3b, 0xf2b134, 0x6a994e, 0xa23b72, 0x4f8fd6, 0xd98ab0];
+/** Office wear: white and pale blue shirts, grey and black jackets */
+const OFFICE = [0xf4f4f4, 0xcfe0f0, 0x6e737a, 0x2f3238, 0xe9e4da];
+const ELDER = [0x8a7f6e, 0x6b7a8f, 0x9c8f80, 0x7d6b5d, 0xa4746a];
+const KIDS = [0xf2b134, 0xe4572e, 0x4f8fd6, 0x6a994e, 0xd98ab0, 0xffffff];
+const POLICE_BLUE = 0x1f2f5a;
+
+/** Who is out walking. */
+export enum Person {
+  Man,
+  Woman,
+  Elder,
+  Child,
+  Police,
+}
+const PEOPLE = [Person.Man, Person.Woman, Person.Elder, Person.Child, Person.Police];
 
 interface Walker {
   seg: number;
@@ -27,14 +42,83 @@ interface Walker {
   bridge?: number;
   /** riding a bicycle (residents who can't afford a scooter or car) */
   bike?: boolean;
+  who: Person;
 }
 
-/** A little person, about 1.7 m tall, facing +x. */
-function person(): THREE.BufferGeometry {
-  const legs = new THREE.BoxGeometry(0.28, 0.8, 0.36).translate(0, 0.4, 0);
-  const body = new THREE.BoxGeometry(0.32, 0.65, 0.5).translate(0, 1.12, 0);
-  const head = new THREE.BoxGeometry(0.24, 0.24, 0.24).translate(0, 1.58, 0);
-  return mergeGeometries([legs, body, head])!;
+const SKIN = 0xe8c4a0;
+const HAIR = 0x2a2420;
+
+/** A box painted one colour, for the parts that keep their colour (skin, hair, trousers). */
+function painted(w: number, h: number, d: number, x: number, y: number, z: number, color: number): THREE.BufferGeometry {
+  const g = new THREE.BoxGeometry(w, h, d).translate(x, y, z);
+  const c = new THREE.Color(color);
+  const n = g.getAttribute('position').count;
+  const rgb = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) rgb.set([c.r, c.g, c.b], i * 3);
+  g.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
+  return g;
+}
+const plain = (w: number, h: number, d: number, x: number, y: number, z: number) => painted(w, h, d, x, y, z, 0xffffff);
+
+/**
+ * Each kind of person in two parts, facing +x: clothes take each walker's colour, the rest (skin, hair, legs)
+ * keeps its own.
+ */
+function figure(who: Person): { clothes: THREE.BufferGeometry; rest: THREE.BufferGeometry } {
+  switch (who) {
+    case Person.Woman:
+      return {
+        clothes: mergeGeometries([plain(0.3, 0.6, 0.44, 0, 1.1, 0), plain(0.42, 0.42, 0.5, 0, 0.66, 0)])!,
+        rest: mergeGeometries([
+          painted(0.18, 0.48, 0.3, 0, 0.24, 0, SKIN),
+          painted(0.23, 0.23, 0.23, 0, 1.52, 0, SKIN),
+          painted(0.27, 0.08, 0.27, -0.01, 1.66, 0, HAIR),
+          painted(0.08, 0.38, 0.27, -0.12, 1.47, 0, HAIR),
+        ])!,
+      };
+    case Person.Elder:
+      // a little stooped, grey-haired, with a walking stick
+      return {
+        clothes: plain(0.32, 0.6, 0.5, 0.06, 1.02, 0),
+        rest: mergeGeometries([
+          painted(0.28, 0.72, 0.36, 0, 0.36, 0, 0x5b5348),
+          painted(0.23, 0.23, 0.23, 0.12, 1.44, 0, SKIN),
+          painted(0.25, 0.07, 0.25, 0.11, 1.58, 0, 0xd9d9d6),
+          painted(0.04, 0.9, 0.04, 0.32, 0.45, 0.2, 0x6b4a2b),
+        ])!,
+      };
+    case Person.Child:
+      // about 1.15 m, with the yellow cap Taiwanese schoolchildren wear
+      return {
+        clothes: plain(0.24, 0.42, 0.36, 0, 0.72, 0),
+        rest: mergeGeometries([
+          painted(0.2, 0.5, 0.28, 0, 0.25, 0, 0x2d3a4f),
+          painted(0.22, 0.22, 0.22, 0, 1.04, 0, SKIN),
+          painted(0.26, 0.08, 0.26, 0.02, 1.18, 0, 0xf6d32d),
+          painted(0.14, 0.3, 0.3, -0.19, 0.76, 0, 0xc8402f),
+        ])!,
+      };
+    case Person.Police:
+      return {
+        clothes: plain(0.34, 0.66, 0.52, 0, 1.12, 0),
+        rest: mergeGeometries([
+          painted(0.28, 0.8, 0.36, 0, 0.4, 0, 0x1a2240),
+          painted(0.24, 0.24, 0.24, 0, 1.58, 0, SKIN),
+          painted(0.3, 0.1, 0.3, 0.02, 1.74, 0, 0x1a2240),
+          painted(0.31, 0.03, 0.31, 0.02, 1.7, 0, 0xf2f2f2),
+          painted(0.35, 0.08, 0.53, 0, 0.82, 0, 0x111111),
+        ])!,
+      };
+    default:
+      return {
+        clothes: plain(0.32, 0.65, 0.5, 0, 1.12, 0),
+        rest: mergeGeometries([
+          painted(0.28, 0.8, 0.36, 0, 0.4, 0, 0x2d3a4f),
+          painted(0.24, 0.24, 0.24, 0, 1.58, 0, SKIN),
+          painted(0.26, 0.07, 0.26, -0.01, 1.72, 0, HAIR),
+        ])!,
+      };
+  }
 }
 
 /** A bicycle and its rider, facing +x. */
@@ -46,15 +130,28 @@ function cyclist(): THREE.BufferGeometry {
   return mergeGeometries([...wheels, frame, rider, head])!;
 }
 
+/** Shares of men, women, elders and children out on a street. */
+type Mix = [number, number, number, number];
+const MIX_TOWN: Mix = [0.35, 0.35, 0.15, 0.15];
+const MIX_SCHOOL: Mix = [0.15, 0.15, 0.1, 0.6];
+const MIX_PARK: Mix = [0.12, 0.13, 0.4, 0.35];
+const MIX_WORK: Mix = [0.46, 0.46, 0.04, 0.04];
+
 /**
- * People walking and cycling along the sidewalks: more where more people live and work, fewer at night and in the rain,
- * and a few crossing each footbridge. Purely for looks; they don't affect the simulation.
+ * People walking and cycling along the sidewalks: men, women, elders and children, mixed by what the street is near
+ * (children by schools, elders and children by parks, working adults among offices and shops); more where more people
+ * live and work, fewer at night and in the rain; a few crossing each footbridge, and two officers on guard outside
+ * each police station. Purely for looks; they don't affect the simulation.
  */
 export class PedestrianLayer {
   readonly group = new THREE.Group();
-  private readonly mesh: THREE.InstancedMesh;
+  /** per kind of person: clothes (walker's colour) and the rest */
+  private readonly clothes: THREE.InstancedMesh[] = [];
+  private readonly rest: THREE.InstancedMesh[] = [];
   private readonly bikes: THREE.InstancedMesh;
   private walkers: Walker[] = [];
+  private mixes = new Map<number, Mix>();
+  private mixKey = '';
   private m = new THREE.Matrix4();
   private q = new THREE.Quaternion();
   private p = new THREE.Vector3();
@@ -65,9 +162,14 @@ export class PedestrianLayer {
 
   constructor(shadows: boolean) {
     const mat = new THREE.MeshLambertMaterial({ flatShading: true });
-    this.mesh = new THREE.InstancedMesh(person(), mat, MAX);
+    const fixed = new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true });
+    for (const who of PEOPLE) {
+      const g = figure(who);
+      this.clothes.push(new THREE.InstancedMesh(g.clothes, mat, MAX));
+      this.rest.push(new THREE.InstancedMesh(g.rest, fixed, MAX));
+    }
     this.bikes = new THREE.InstancedMesh(cyclist(), mat, MAX);
-    for (const m of [this.mesh, this.bikes]) {
+    for (const m of [...this.clothes, ...this.rest, this.bikes]) {
       m.count = 0;
       m.frustumCulled = false;
       m.castShadow = shadows;
@@ -91,6 +193,52 @@ export class PedestrianLayer {
     return out;
   }
 
+  /** Who walks a street: by a school, by a park, among offices and shops, or anywhere else. */
+  private mixOf(city: City, seg: RoadSegment): Mix {
+    const key = `${city.facilities.size}:${city.net.segments.size}`;
+    if (key !== this.mixKey) {
+      this.mixes.clear();
+      this.mixKey = key;
+    }
+    let mix = this.mixes.get(seg.id);
+    if (mix) return mix;
+    const mid = seg.samples[Math.floor(seg.samples.length / 2)];
+    const near = (kind: string, r: number) =>
+      [...city.facilities.values()].some((f) => f.kind === kind && Math.hypot(f.p.x - mid.x, f.p.y - mid.y) < r);
+    const built = seg.lots.filter((l) => l.level > 0 && l.zone !== Zone.None);
+    const working = built.filter((l) => l.zone === Zone.Office || l.zone === Zone.Commercial).length;
+    mix = near('school', 160) ? MIX_SCHOOL : near('park', 130) ? MIX_PARK : built.length && working / built.length > 0.5 ? MIX_WORK : MIX_TOWN;
+    this.mixes.set(seg.id, mix);
+    return mix;
+  }
+
+  private person(mix: Mix): Person {
+    let r = this.rand();
+    for (let i = 0; i < mix.length; i++) {
+      r -= mix[i];
+      if (r < 0) return i as Person;
+    }
+    return Person.Man;
+  }
+
+  private newWalker(city: City, seg: RoadSegment, bike: boolean): Walker {
+    const who = bike ? Person.Man : this.person(this.mixOf(city, seg));
+    const working = this.mixOf(city, seg) === MIX_WORK && who !== Person.Elder && who !== Person.Child;
+    const palette = who === Person.Elder ? ELDER : who === Person.Child ? KIDS : working ? OFFICE : CLOTHES;
+    const pace = who === Person.Elder ? 0.6 + this.rand() * 0.3 : who === Person.Child ? 1.2 + this.rand() * 0.6 : 1.1 + this.rand() * 0.6;
+    return {
+      seg: seg.id,
+      s: this.rand() * seg.length,
+      dir: this.rand() < 0.5 ? 1 : -1,
+      side: this.rand() < 0.5 ? 1 : -1,
+      speed: bike ? 3.5 + this.rand() * 2 : pace,
+      color: palette[Math.floor(this.rand() * palette.length)],
+      phase: this.rand() * 6,
+      who,
+      ...(bike ? { bike } : {}),
+    };
+  }
+
   update(city: City, dt: number, hour: number, rain: number): void {
     const net = city.net;
     // Fewer people out late at night and in the rain
@@ -105,17 +253,7 @@ export class PedestrianLayer {
       if (mine.length < want) {
         const streets = this.busyStreets(city);
         for (let k = 0, have = mine.length; k < 20 && streets.length && have < want; k++, have++) {
-          const seg = streets[Math.floor(this.rand() * streets.length)];
-          this.walkers.push({
-            seg: seg.id,
-            s: this.rand() * seg.length,
-            dir: this.rand() < 0.5 ? 1 : -1,
-            side: this.rand() < 0.5 ? 1 : -1,
-            speed: bike ? 3.5 + this.rand() * 2 : 1.1 + this.rand() * 0.6,
-            color: CLOTHES[Math.floor(this.rand() * CLOTHES.length)],
-            phase: this.rand() * 6,
-            ...(bike ? { bike } : {}),
-          });
+          this.walkers.push(this.newWalker(city, streets[Math.floor(this.rand() * streets.length)], bike));
         }
       } else if (mine.length > want + 20) {
         const drop = new Set(mine.slice(want));
@@ -127,15 +265,41 @@ export class PedestrianLayer {
     for (const f of bridges) {
       const on = this.walkers.filter((w) => w.bridge === f.id).length;
       for (let i = on; i < 2; i++) {
-        this.walkers.push({ seg: -1, s: this.rand() * (f.span ?? 16), dir: i ? 1 : -1, side: 1, speed: 1.2, color: CLOTHES[(f.id + i) % CLOTHES.length], phase: 0, bridge: f.id });
+        this.walkers.push({ seg: -1, s: this.rand() * (f.span ?? 16), dir: i ? 1 : -1, side: 1, speed: 1.2, color: CLOTHES[(f.id + i) % CLOTHES.length], phase: 0, bridge: f.id, who: i ? Person.Woman : Person.Man });
       }
     }
-    let n = 0;
+    const counts = PEOPLE.map(() => 0);
     let nb = 0;
+    const draw = (who: Person | 'bike', x: number, y: number, h: number, hx: number, hy: number, color: number) => {
+      this.q.setFromAxisAngle(this.up, Math.atan2(-hy, hx));
+      this.p.set(x, h, y);
+      this.m.compose(this.p, this.q, this.one);
+      if (who === 'bike') {
+        if (nb >= MAX) return;
+        this.bikes.setMatrixAt(nb, this.m);
+        this.bikes.setColorAt(nb++, this.c.setHex(color));
+        return;
+      }
+      const i = counts[who];
+      if (i >= MAX) return;
+      this.clothes[who].setMatrixAt(i, this.m);
+      this.clothes[who].setColorAt(i, this.c.setHex(color));
+      this.rest[who].setMatrixAt(i, this.m);
+      counts[who]++;
+    };
+    // Officers on guard either side of each police station's door
+    for (const f of city.facilities.values()) {
+      if (f.kind !== 'police') continue;
+      const o = toWorld(f, 0, 0);
+      const ahead = toWorld(f, 0, -1);
+      for (const u of [-5, 5]) {
+        const at = toWorld(f, u, -9.6);
+        draw(Person.Police, at.x, at.y, 0.1, ahead.x - o.x, ahead.y - o.y, POLICE_BLUE);
+      }
+    }
     for (const w of this.walkers) {
       w.s += w.speed * dt * w.dir;
-      w.phase += dt * 8;
-      if (w.bike ? nb >= MAX : n >= MAX) continue;
+      w.phase += dt * (w.who === Person.Child ? 11 : 8);
       let x: number;
       let y: number;
       let h = 0;
@@ -186,17 +350,15 @@ export class PedestrianLayer {
         hx = tx * w.dir;
         hy = ty * w.dir;
       }
-      this.q.setFromAxisAngle(this.up, Math.atan2(-hy, hx));
-      this.p.set(x, h + 0.1 + (w.bike ? 0 : Math.abs(Math.sin(w.phase)) * 0.06), y);
-      this.m.compose(this.p, this.q, this.one);
-      const mesh = w.bike ? this.bikes : this.mesh;
-      const i = w.bike ? nb++ : n++;
-      mesh.setMatrixAt(i, this.m);
-      mesh.setColorAt(i, this.c.setHex(w.color));
+      const bob = w.bike ? 0 : Math.abs(Math.sin(w.phase)) * (w.who === Person.Child ? 0.09 : 0.06);
+      draw(w.bike ? 'bike' : w.who, x, y, h + 0.1 + bob, hx, hy, w.color);
     }
-    this.mesh.count = n;
+    PEOPLE.forEach((who, k) => {
+      this.clothes[who].count = counts[k];
+      this.rest[who].count = counts[k];
+    });
     this.bikes.count = nb;
-    for (const m of [this.mesh, this.bikes]) {
+    for (const m of [...this.clothes, ...this.rest, this.bikes]) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
     }

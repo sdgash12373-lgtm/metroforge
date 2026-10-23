@@ -31,6 +31,8 @@ export const UPKEEP_DAYS = 14;
 export const OFFICE_TOWER_LEVEL = 7;
 export const BULLDOZE_REFUND = 0.5;
 /** Simulation steps in one game day: each is half a second at normal speed, so a day lasts 20 minutes. */
+/** Patrol cars each police station keeps on the road */
+export const PATROLS_PER_STATION = 2;
 export const DAY_STEPS = 2400;
 /** Steps in one game hour; the budget shows money per hour. */
 export const HOUR_STEPS = DAY_STEPS / 24;
@@ -1273,6 +1275,21 @@ export class City {
     }
     if (gate && industry.length && rng() < Math.min(0.9, this.stats.jobs / 300)) {
       this.traffic.spawn(gate, at(pick(industry)), 'truck', rng());
+    }
+    // Each police station keeps two patrol cars out on the streets, setting off from the blocks near it
+    const stations = [...this.facilities.values()].filter((f) => f.kind === 'police');
+    const placed = homes.concat(work);
+    if (stations.length && placed.length && rng() < 0.3) {
+      const out = this.traffic.vehicles.filter((v) => v.kind === 'police').length;
+      if (out < stations.length * PATROLS_PER_STATION) {
+        const f = pick(stations);
+        let from = pick(placed);
+        for (let k = 0; k < 24; k++) {
+          const c = pick(placed);
+          if (Math.hypot(c.lot.x - f.p.x, c.lot.y - f.p.y) < Math.hypot(from.lot.x - f.p.x, from.lot.y - f.p.y)) from = c;
+        }
+        this.traffic.spawn(at(from), at(pick(placed)), 'police', rng());
+      }
     }
   }
 
