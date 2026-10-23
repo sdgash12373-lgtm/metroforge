@@ -236,6 +236,7 @@ export class World {
     this.facilities = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
     this.facilities.castShadow = shadows;
     addWindows(this.buildings.material, this.sky.night);
+    this.buildings.lightSigns(this.sky.night);
     addWindows(this.facilities.material as THREE.MeshLambertMaterial, this.sky.night, 0.7);
     this.facilities.receiveShadow = true;
     this.scene.add(this.facilities);
