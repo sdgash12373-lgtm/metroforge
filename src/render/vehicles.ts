@@ -20,11 +20,11 @@ interface Model {
   trim: THREE.BufferGeometry;
 }
 
-/** Wheels, lights and glass shared by the cars. `glass` is the cabin box the windows wrap. */
-function carTrim(len: number, wheelbase: number, cabin: { w: number; h: number; x: number; y: number }, extra: THREE.BufferGeometry[] = []): THREE.BufferGeometry {
+/** Wheels, lights and glass shared by the cars. `cabin` is the box the windows wrap, a touch proud of it. */
+function carTrim(len: number, wheelbase: number, cabin: { w: number; h: number; d: number; x: number; y: number }, extra: THREE.BufferGeometry[] = []): THREE.BufferGeometry {
   return merge([
     ...[-1, 1].flatMap((sx) => pair(0.78, (z) => wheel((sx * wheelbase) / 2, z, 0.34, 0.24))),
-    box(cabin.w + 0.04, cabin.h * 0.75, 1.62, cabin.x, cabin.y + cabin.h * 0.05, 0, GLASS),
+    box(cabin.w + 0.04, cabin.h * 0.75, cabin.d + 0.04, cabin.x, cabin.y + cabin.h * 0.05, 0, GLASS),
     ...pair(0.62, (z) => box(0.08, 0.16, 0.36, len / 2, 0.75, z, HEADLIGHT)),
     ...pair(0.66, (z) => box(0.08, 0.16, 0.3, -len / 2, 0.8, z, TAILLIGHT)),
     box(0.1, 0.18, 1.7, len / 2 - 0.02, 0.38, 0, 0x2a2c30),
@@ -37,7 +37,7 @@ function carTrim(len: number, wheelbase: number, cabin: { w: number; h: number; 
 function sedan(): Model {
   return {
     paint: merge([box(4.6, 0.62, 1.8, 0, 0.62, 0), box(2.3, 0.56, 1.6, -0.15, 1.2, 0), box(1.2, 0.14, 1.76, 1.6, 0.98, 0), box(0.9, 0.1, 1.76, -1.85, 0.98, 0)]),
-    trim: carTrim(4.6, 2.7, { w: 2.3, h: 0.56, x: -0.15, y: 1.2 }),
+    trim: carTrim(4.6, 2.7, { w: 2.3, h: 0.56, d: 1.6, x: -0.15, y: 1.2 }),
   };
 }
 
@@ -45,7 +45,7 @@ function sedan(): Model {
 function suv(): Model {
   return {
     paint: merge([box(4.45, 0.82, 1.84, 0, 0.75, 0), box(2.9, 0.66, 1.7, -0.3, 1.49, 0)]),
-    trim: carTrim(4.45, 2.65, { w: 2.9, h: 0.66, x: -0.3, y: 1.49 }, [
+    trim: carTrim(4.45, 2.65, { w: 2.9, h: 0.66, d: 1.7, x: -0.3, y: 1.49 }, [
       ...pair(0.62, (z) => box(2.4, 0.06, 0.06, -0.3, 1.86, z, 0x2a2c30)),
       ...[-1, 1].flatMap((sx) => pair(0.93, (z) => box(0.95, 0.16, 0.04, sx * 1.33, 0.7, z, 0x2a2c30))),
     ]),
@@ -56,7 +56,7 @@ function suv(): Model {
 function hatchback(): Model {
   return {
     paint: merge([box(3.95, 0.66, 1.72, 0, 0.62, 0), box(2.45, 0.58, 1.58, -0.45, 1.24, 0)]),
-    trim: carTrim(3.95, 2.5, { w: 2.45, h: 0.58, x: -0.45, y: 1.24 }),
+    trim: carTrim(3.95, 2.5, { w: 2.45, h: 0.58, d: 1.58, x: -0.45, y: 1.24 }),
   };
 }
 
@@ -114,7 +114,7 @@ function bus(): Model {
       box(0.1, 0.32, 1.8, 5.84, 2.95, 0, 0xff9a1f),
       box(0.08, 1.3, 2.3, -5.82, 2.25, 0, GLASS),
       box(3.2, 0.4, 1.8, -1.5, 3.25, 0, 0xd9dbde),
-      box(0.04, 2.0, 1.0, 3.9, 1.45, 1.26, 0x3b4148),
+      box(1.0, 2.0, 0.04, 3.9, 1.45, 1.26, 0x3b4148),
       ...pair(0.95, (z) => box(0.08, 0.2, 0.35, 5.84, 0.8, z, HEADLIGHT)),
       ...[3.7, -3.0].flatMap((x) => pair(1.05, (z) => wheel(x, z, 0.5, 0.32))),
     ]),
