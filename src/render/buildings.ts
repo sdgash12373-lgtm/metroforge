@@ -30,9 +30,10 @@ const WALLS: Record<Exclude<Zone, Zone.None>, number[]> = {
   [Zone.ResidentialLow]: [0xf1ede4, 0xe8dcc6, 0xe7c9bf, 0xc9cfc8, 0xb98a6e, 0xd9cbb6, 0xd4d7da],
   [Zone.ResidentialHigh]: [0xe9e2d4, 0xd6cdbd, 0xc7ccc9, 0xb7927a, 0xdcd3cf, 0xcfc4ae],
   [Zone.Commercial]: [0xece6da, 0xd8d2c8, 0xe2cbb8, 0xc6ccd1, 0xb98a6e],
-  [Zone.Office]: [0xb9b3d9, 0x9ea6c9, 0xc9c6e0, 0x8f98bd],
+  // 商辦大樓: blue-green glass curtain walls
+  [Zone.Office]: [0x6f97ad, 0x5b7f93, 0x8fb3c2, 0x7d9aa8, 0x4f6f84],
   // 鐵皮 factories: pale steel cladding
-  [Zone.Industrial]: [0xd7dde2, 0xc4ccd3, 0xdfe3d6, 0xcfd8de],
+  [Zone.Industrial]: [0xe9ecee, 0xdfe3e6, 0xd3d9dd, 0xc8d3db],
 };
 /** Red tile roofs of village houses */
 const ROOFS = [0xb5523b, 0x9c4632, 0xa85a3c];
@@ -42,6 +43,8 @@ const TIN = [0x4a7fb0, 0x5b8fb9, 0x6d9a6b, 0xb9bcbf, 0x3f6f9a];
 const SIGNS = [0xe23b3b, 0xf2c12e, 0x2f7fd1, 0x2fae5e, 0xffffff, 0xf07c24, 0xd6336c];
 /** Water tanks on the roof: stainless, white and blue plastic */
 const TANKS = [0xd8dde0, 0xeef0f0, 0x3c78b5];
+/** Granite and stone podiums under office towers */
+const STONE = [0xc9c1b3, 0x8c8a86, 0xb3a796, 0x9b9fa3];
 const FLOOR = 3.2;
 const ARCADE = 0x5f5a55;
 const GRILLE = 0x8f989c;
@@ -201,6 +204,40 @@ export class BuildingLayer {
     }
   }
 
+  /** 商辦大樓: glass tower on a stone podium, white floor bands, a company sign on the crown. */
+  private office(lot: Lot, x: number, z: number, w: number, d: number, h: number, glass: number): void {
+    const stone = choose(STONE, lot.seed, 12);
+    this.part('b', lot, x, z, 0, 0, 0, w + 0.5, FLOOR * 2, d + 0.5, stone);
+    // a glass canopy over the entrance
+    this.part('b', lot, x, z, 0, -d / 2 - 1, FLOOR - 0.3, w * 0.5, 0.3, 2, 0xdfe5ea);
+    const floors = Math.round(h / FLOOR);
+    const every = Math.max(2, Math.ceil(floors / 8));
+    for (let f = 2 + every; f < floors; f += every) this.part('b', lot, x, z, 0, 0, f * FLOOR, w + 0.15, 0.45, d + 0.15, 0xeef0f0);
+    this.part('g', lot, x, z, 0, -d / 2 - 0.1, h - 2.4, w * 0.6, 1.6, 0.2, choose(SIGNS, lot.seed, 13));
+    if (lot.level > 5) {
+      // Setback crown and a mast on top of a skyscraper
+      this.part('b', lot, x, z, 0, 0, h, w * 0.7, h * 0.08, d * 0.7, glass);
+      this.part('k', lot, x, z, 0, 0, h * 1.08, 0.6, 8 + lot.seed * 14, 0.6, 0xdfe5ea);
+    } else this.part('b', lot, x, z, w * 0.15, d * 0.1, h, w * 0.4, 1.8, d * 0.4, 0xbdb8b0);
+  }
+
+  /** 鐵皮工廠: steel shed with a coloured band and roof, roller shutters, a small office in front, sometimes a stack. */
+  private factory(lot: Lot, x: number, z: number, w: number, d: number, h: number): void {
+    const tin = choose(TIN, lot.seed, 2);
+    this.part('b', lot, x, z, 0, 0, h - 1, w + 0.1, 1, d + 0.1, tin);
+    this.part('r', lot, x, z, 0, 0, h, w + 0.4, 1.2, d + 0.4, tin);
+    // 鐵捲門 on the street side
+    const doors = w > 6 ? 2 : 1;
+    for (let i = 0; i < doors; i++) {
+      const along = doors === 1 ? w * 0.15 : (i ? w * 0.3 : -w * 0.05);
+      this.part('b', lot, x, z, along, -d / 2 - 0.05, 0, 2.8, Math.min(3.6, h - 1.2), 0.15, 0x7c8287);
+    }
+    // two-storey tiled office at the front corner
+    this.part('b', lot, x, z, -w * 0.32, -d * 0.3 - 0.3, 0, w * 0.36, FLOOR * 2, d * 0.4, choose(WALLS[Zone.ResidentialLow], lot.seed, 14));
+    if (pick(lot.seed, 15) < 0.2) this.part('k', lot, x, z, w * 0.3, d * 0.2, h, 1, 3 + lot.level * 1.5, 1, 0x8d8a85);
+    else this.part('k', lot, x, z, w * 0.2, d * 0.15, h + 0.6, 0.9, 1, 0.9, 0xb9bcbf);
+  }
+
   update(city: City): void {
     let t = 0;
     this.n = { b: 0, r: 0, k: 0, g: 0 };
@@ -251,14 +288,10 @@ export class BuildingLayer {
           this.rooftop(lot, x, z, w, d, h, zone !== Zone.Commercial || lot.level < 3);
           if (zone === Zone.Commercial) this.shopSigns(lot, x, z, w, d, h);
           else if (arcaded && zone === Zone.ResidentialHigh) this.part('g', lot, x, z, 0, -d / 2 - 0.1, FLOOR - 0.1, w * 0.95, 0.8, 0.2, choose(SIGNS, lot.seed, 11));
-        } else if (zone === Zone.Office && lot.level > 5) {
-          // Setback crown and a mast on top of a skyscraper
-          this.part('b', lot, x, z, 0, 0, h, w * 0.7, h * 0.08, d * 0.7, wall);
-          this.part('k', lot, x, z, 0, 0, h * 1.08, 0.6, 8 + lot.seed * 14, 0.6, 0xdfe5ea);
+        } else if (zone === Zone.Office) {
+          this.office(lot, x, z, w, d, h, wall);
         } else if (zone === Zone.Industrial) {
-          // 鐵皮 factory: shallow blue or green steel roof and a stack
-          this.part('r', lot, x, z, 0, 0, h, w + 0.4, 1.2, d + 0.4, choose(TIN, lot.seed, 2));
-          this.part('k', lot, x, z, w * 0.25, 0, h, 1.2, 4 + lot.level * 2, 1.2, 0x8d8a85);
+          this.factory(lot, x, z, w, d, h);
         }
       }
     }
