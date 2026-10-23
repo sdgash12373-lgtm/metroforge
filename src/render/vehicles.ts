@@ -46,6 +46,8 @@ export class VehicleLayer {
   private scooters: THREE.InstancedMesh;
   private buses: THREE.InstancedMesh;
   private windows: THREE.InstancedMesh;
+  /** red and blue lights flashing on patrol cars */
+  private lightBars: THREE.InstancedMesh;
   private m = new THREE.Matrix4();
   private q = new THREE.Quaternion();
   private p = new THREE.Vector3();
@@ -60,7 +62,8 @@ export class VehicleLayer {
     this.scooters = new THREE.InstancedMesh(scooter(), mat, MAX);
     this.buses = new THREE.InstancedMesh(bus(), mat, MAX / 8);
     this.windows = new THREE.InstancedMesh(busWindows(), new THREE.MeshLambertMaterial({ color: 0x2b3a46 }), MAX / 8);
-    for (const m of [this.cars, this.scooters, this.trucks, this.buses, this.windows]) {
+    this.lightBars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.45, 0.18, 1.3).translate(-0.2, 1.8, 0), new THREE.MeshBasicMaterial(), MAX / 8);
+    for (const m of [this.cars, this.scooters, this.trucks, this.buses, this.windows, this.lightBars]) {
       m.count = 0;
       m.frustumCulled = false;
       m.castShadow = shadows;
@@ -74,6 +77,8 @@ export class VehicleLayer {
     let t = 0;
     let b = 0;
     let s = 0;
+    let l = 0;
+    const flash = Math.floor(performance.now() / 350) % 2;
     for (const v of traffic.vehicles) {
       const pose = traffic.pose(v);
       if (!pose) continue;
@@ -91,6 +96,16 @@ export class VehicleLayer {
         b++;
         continue;
       }
+      if (v.kind === 'police') {
+        // Taiwanese patrol cars: white, with a flashing light bar
+        mesh.setColorAt(i, this.c.setHex(0xf5f5f5));
+        if (l < this.lightBars.instanceMatrix.count) {
+          this.lightBars.setMatrixAt(l, this.m);
+          this.lightBars.setColorAt(l++, this.c.setHex((v.id + flash) % 2 ? 0xff2a2a : 0x2a6bff));
+        }
+        c++;
+        continue;
+      }
       const palette = v.kind === 'truck' ? TRUCK_COLORS : CAR_COLORS;
       mesh.setColorAt(i, this.c.setHex(palette[Math.floor(v.tint * palette.length) % palette.length]));
       if (v.kind === 'truck') t++;
@@ -102,7 +117,8 @@ export class VehicleLayer {
     this.scooters.count = s;
     this.buses.count = b;
     this.windows.count = b;
-    for (const m of [this.cars, this.scooters, this.trucks, this.buses, this.windows]) {
+    this.lightBars.count = l;
+    for (const m of [this.cars, this.scooters, this.trucks, this.buses, this.windows, this.lightBars]) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
     }
