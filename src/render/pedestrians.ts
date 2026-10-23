@@ -47,68 +47,129 @@ interface Walker {
 }
 
 const SKIN = 0xe8c4a0;
+/** Top of the sidewalk, where people's feet go. */
+const SIDEWALK = 0.04;
+/** How far arms and legs swing either way (radians): elders shuffle, children bound along. */
+const STRIDE: Record<Person, number> = {
+  [Person.Man]: 0.45,
+  [Person.Woman]: 0.4,
+  [Person.Elder]: 0.22,
+  [Person.Child]: 0.55,
+  [Person.Police]: 0.45,
+};
 const HAIR = 0x2a2420;
 
 const plain = (w: number, h: number, d: number, x: number, y: number, z: number) => painted(w, h, d, x, y, z);
 
 /**
+ * Mark a limb to swing while walking: it turns about the side axis through (px, py), one way for `sign` +1 and the
+ * other for -1, by the walker's stride angle. Parts not marked stay still.
+ */
+function limb(g: THREE.BufferGeometry, sign: number, px: number, py: number): THREE.BufferGeometry {
+  const n = g.getAttribute('position').count;
+  const a = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) a.set([sign, px, py], i * 3);
+  g.setAttribute('swing', new THREE.BufferAttribute(a, 3));
+  return g;
+}
+
+/** Merge a figure's parts, giving the still ones a zero swing so every part has the same attributes. */
+function body(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  for (const g of parts) if (!g.getAttribute('swing')) limb(g, 0, 0, 0);
+  return mergeGeometries(parts)!;
+}
+
+/** Two legs from the hip at height `hip`, `w` wide and `gap` apart, in one colour. */
+const legs = (hip: number, w: number, d: number, gap: number, color: number, x = 0) =>
+  [1, -1].map((sign) => limb(painted(w, hip, d, x, hip / 2, (sign * gap) / 2, color), sign, x, hip));
+
+/**
+ * Two arms hanging from the shoulders at height `top`, `out` from the middle: a sleeve of `sleeve` length and a bare
+ * forearm and hand below it. The sleeves go with the clothes, the hands with the rest. Each arm swings against the
+ * leg on its side.
+ */
+function arms(top: number, len: number, out: number, sleeve: number, x = 0) {
+  const t = 0.11;
+  const clothes = [1, -1].map((sign) => limb(plain(t, len * sleeve, t, x, top - (len * sleeve) / 2, sign * out), -sign, x, top));
+  const hands = [1, -1].map((sign) =>
+    limb(painted(t * 0.9, len * (1 - sleeve), t * 0.9, x, top - len * sleeve - (len * (1 - sleeve)) / 2, sign * out, SKIN), -sign, x, top),
+  );
+  return { clothes, hands };
+}
+
+/**
  * Each kind of person in two parts, facing +x: clothes take each walker's colour, the rest (skin, hair, legs)
- * keeps its own.
+ * keeps its own. Arms and legs are separate so they can swing as the person walks.
  */
 function figure(who: Person): { clothes: THREE.BufferGeometry; rest: THREE.BufferGeometry } {
   switch (who) {
-    case Person.Woman:
+    case Person.Woman: {
+      const a = arms(1.36, 0.6, 0.27, 0.35);
       return {
-        clothes: mergeGeometries([plain(0.3, 0.6, 0.44, 0, 1.1, 0), plain(0.42, 0.42, 0.5, 0, 0.66, 0)])!,
-        rest: mergeGeometries([
-          painted(0.18, 0.48, 0.3, 0, 0.24, 0, SKIN),
+        clothes: body([plain(0.3, 0.6, 0.44, 0, 1.1, 0), plain(0.42, 0.42, 0.5, 0, 0.66, 0), ...a.clothes]),
+        rest: body([
+          ...legs(0.52, 0.11, 0.12, 0.17, SKIN),
+          ...a.hands,
           painted(0.23, 0.23, 0.23, 0, 1.52, 0, SKIN),
           painted(0.27, 0.08, 0.27, -0.01, 1.66, 0, HAIR),
           painted(0.08, 0.38, 0.27, -0.12, 1.47, 0, HAIR),
-        ])!,
+        ]),
       };
-    case Person.Elder:
+    }
+    case Person.Elder: {
       // a little stooped, grey-haired, with a walking stick
+      const a = arms(1.28, 0.56, 0.3, 0.7, 0.06);
       return {
-        clothes: plain(0.32, 0.6, 0.5, 0.06, 1.02, 0),
-        rest: mergeGeometries([
-          painted(0.28, 0.72, 0.36, 0, 0.36, 0, 0x5b5348),
+        clothes: body([plain(0.32, 0.6, 0.5, 0.06, 1.02, 0), ...a.clothes]),
+        rest: body([
+          ...legs(0.74, 0.13, 0.15, 0.2, 0x5b5348),
+          ...a.hands,
           painted(0.23, 0.23, 0.23, 0.12, 1.44, 0, SKIN),
           painted(0.25, 0.07, 0.25, 0.11, 1.58, 0, 0xd9d9d6),
-          painted(0.04, 0.9, 0.04, 0.32, 0.45, 0.2, 0x6b4a2b),
-        ])!,
+          painted(0.04, 0.9, 0.04, 0.32, 0.45, 0.36, 0x6b4a2b),
+        ]),
       };
-    case Person.Child:
+    }
+    case Person.Child: {
       // about 1.15 m, with the yellow cap Taiwanese schoolchildren wear
+      const a = arms(0.9, 0.4, 0.23, 0.35);
       return {
-        clothes: plain(0.24, 0.42, 0.36, 0, 0.72, 0),
-        rest: mergeGeometries([
-          painted(0.2, 0.5, 0.28, 0, 0.25, 0, 0x2d3a4f),
+        clothes: body([plain(0.24, 0.42, 0.36, 0, 0.72, 0), ...a.clothes]),
+        rest: body([
+          ...legs(0.52, 0.1, 0.12, 0.15, 0x2d3a4f),
+          ...a.hands,
           painted(0.22, 0.22, 0.22, 0, 1.04, 0, SKIN),
           painted(0.26, 0.08, 0.26, 0.02, 1.18, 0, 0xf6d32d),
           painted(0.14, 0.3, 0.3, -0.19, 0.76, 0, 0xc8402f),
-        ])!,
+        ]),
       };
-    case Person.Police:
+    }
+    case Person.Police: {
+      const a = arms(1.42, 0.64, 0.32, 0.4);
       return {
-        clothes: plain(0.34, 0.66, 0.52, 0, 1.12, 0),
-        rest: mergeGeometries([
-          painted(0.28, 0.8, 0.36, 0, 0.4, 0, 0x1a2240),
+        clothes: body([plain(0.34, 0.66, 0.52, 0, 1.12, 0), ...a.clothes]),
+        rest: body([
+          ...legs(0.8, 0.13, 0.15, 0.18, 0x1a2240),
+          ...a.hands,
           painted(0.24, 0.24, 0.24, 0, 1.58, 0, SKIN),
           painted(0.3, 0.1, 0.3, 0.02, 1.74, 0, 0x1a2240),
           painted(0.31, 0.03, 0.31, 0.02, 1.7, 0, 0xf2f2f2),
           painted(0.35, 0.08, 0.53, 0, 0.82, 0, 0x111111),
-        ])!,
+        ]),
       };
-    default:
+    }
+    default: {
+      const a = arms(1.42, 0.62, 0.31, 0.4);
       return {
-        clothes: plain(0.32, 0.65, 0.5, 0, 1.12, 0),
-        rest: mergeGeometries([
-          painted(0.28, 0.8, 0.36, 0, 0.4, 0, 0x2d3a4f),
+        clothes: body([plain(0.32, 0.65, 0.5, 0, 1.12, 0), ...a.clothes]),
+        rest: body([
+          ...legs(0.8, 0.13, 0.15, 0.18, 0x2d3a4f),
+          ...a.hands,
           painted(0.24, 0.24, 0.24, 0, 1.58, 0, SKIN),
           painted(0.26, 0.07, 0.26, -0.01, 1.72, 0, HAIR),
-        ])!,
+        ]),
       };
+    }
   }
 }
 
@@ -116,8 +177,10 @@ function figure(who: Person): { clothes: THREE.BufferGeometry; rest: THREE.Buffe
 function cyclist(): { clothes: THREE.BufferGeometry; rest: THREE.BufferGeometry } {
   const frame = 0xf2a900;
   return {
-    clothes: plain(0.34, 0.6, 0.45, -0.12, 1.2, 0),
-    rest: mergeGeometries([
+    clothes: body([plain(0.34, 0.6, 0.45, -0.12, 1.2, 0), // Arms reaching for the handlebar
+      ...[1, -1].map((s) => tint(new THREE.BoxGeometry(0.62, 0.11, 0.11).rotateZ(-0.55).translate(0.22, 1.26, s * 0.27), 0xffffff)),
+    ]),
+    rest: body([
       wheel(-0.55, 0, 0.33, 0.06),
       wheel(0.55, 0, 0.33, 0.06),
       painted(0.95, 0.07, 0.07, 0, 0.55, 0, frame),
@@ -125,11 +188,28 @@ function cyclist(): { clothes: THREE.BufferGeometry; rest: THREE.BufferGeometry 
       painted(0.07, 0.45, 0.07, -0.25, 0.75, 0, frame),
       painted(0.3, 0.22, 0.4, 0.72, 0.92, 0, 0x3a3d42),
       painted(0.05, 0.05, 0.55, 0.5, 1.08, 0, 0x2a2c30),
-      painted(0.26, 0.6, 0.32, -0.08, 0.6, 0, 0x2d3a4f),
+      // Legs pushing the pedals
+      ...[1, -1].map((s) => limb(painted(0.12, 0.62, 0.12, -0.12, 0.6, s * 0.12, 0x2d3a4f), s, -0.12, 0.9)),
       painted(0.24, 0.24, 0.24, -0.02, 1.64, 0, SKIN),
       painted(0.26, 0.07, 0.26, -0.03, 1.78, 0, HAIR),
-    ])!,
+    ]),
   };
+}
+
+/** Turn each vertex of a swinging limb about its joint by the instance's stride angle (radians), in the shader. */
+function swingLimbs(m: THREE.Material): THREE.Material {
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec3 swing;\nattribute float stride;')
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        float swingAngle = stride * swing.x;
+        vec2 fromJoint = transformed.xy - swing.yz;
+        transformed.xy = swing.yz + vec2(fromJoint.x * cos(swingAngle) - fromJoint.y * sin(swingAngle), fromJoint.x * sin(swingAngle) + fromJoint.y * cos(swingAngle));`,
+      );
+  };
+  return m;
 }
 
 /** Shares of men, women, elders and children out on a street. */
@@ -164,8 +244,10 @@ export class PedestrianLayer {
   private seed = 1;
 
   constructor(shadows: boolean) {
-    const mat = new THREE.MeshLambertMaterial({ flatShading: true });
-    const fixed = new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true });
+    // People walk by swinging their arms and legs in the shader, so they need no mesh per limb
+    const mat = swingLimbs(new THREE.MeshLambertMaterial({ flatShading: true }));
+    const fixed = swingLimbs(new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true }));
+    const shadow = swingLimbs(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
     for (const who of PEOPLE) {
       const g = figure(who);
       this.clothes.push(new THREE.InstancedMesh(g.clothes, mat, MAX));
@@ -175,6 +257,8 @@ export class PedestrianLayer {
     this.bikes = new THREE.InstancedMesh(bike.clothes, mat, MAX);
     this.bikeFrames = new THREE.InstancedMesh(bike.rest, fixed, MAX);
     for (const m of [...this.clothes, ...this.rest, this.bikes, this.bikeFrames]) {
+      m.geometry.setAttribute('stride', new THREE.InstancedBufferAttribute(new Float32Array(MAX), 1));
+      m.customDepthMaterial = shadow;
       m.count = 0;
       m.frustumCulled = false;
       m.castShadow = shadows;
@@ -275,7 +359,7 @@ export class PedestrianLayer {
     }
     const counts = PEOPLE.map(() => 0);
     let nb = 0;
-    const draw = (who: Person | 'bike', x: number, y: number, h: number, hx: number, hy: number, color: number) => {
+    const draw = (who: Person | 'bike', x: number, y: number, h: number, hx: number, hy: number, color: number, stride: number) => {
       this.q.setFromAxisAngle(this.up, Math.atan2(-hy, hx));
       this.p.set(x, h, y);
       this.m.compose(this.p, this.q, this.one);
@@ -283,6 +367,7 @@ export class PedestrianLayer {
         if (nb >= MAX) return;
         this.bikes.setMatrixAt(nb, this.m);
         this.bikeFrames.setMatrixAt(nb, this.m);
+        this.setStride(this.bikeFrames, nb, stride);
         this.bikes.setColorAt(nb++, this.c.setHex(color));
         return;
       }
@@ -291,6 +376,8 @@ export class PedestrianLayer {
       this.clothes[who].setMatrixAt(i, this.m);
       this.clothes[who].setColorAt(i, this.c.setHex(color));
       this.rest[who].setMatrixAt(i, this.m);
+      this.setStride(this.clothes[who], i, stride);
+      this.setStride(this.rest[who], i, stride);
       counts[who]++;
     };
     // Officers on guard either side of each police station's door
@@ -300,15 +387,17 @@ export class PedestrianLayer {
       const ahead = toWorld(f, 0, -1);
       for (const u of [-5, 5]) {
         const at = toWorld(f, u, -9.6);
-        draw(Person.Police, at.x, at.y, 0.1, ahead.x - o.x, ahead.y - o.y, POLICE_BLUE);
+        draw(Person.Police, at.x, at.y, 0.1, ahead.x - o.x, ahead.y - o.y, POLICE_BLUE, 0);
       }
     }
     for (const w of this.walkers) {
       w.s += w.speed * dt * w.dir;
-      w.phase += dt * (w.who === Person.Child ? 11 : 8);
+      // A stride every metre or so, longer when cycling
+      w.phase += dt * w.speed * (w.bike ? 1.6 : w.who === Person.Child ? 5.5 : 4.2);
       let x: number;
       let y: number;
-      let h = 0;
+      // Feet on the sidewalk
+      let h = SIDEWALK;
       let hx: number;
       let hy: number;
       if (w.bridge !== undefined) {
@@ -356,8 +445,7 @@ export class PedestrianLayer {
         hx = tx * w.dir;
         hy = ty * w.dir;
       }
-      const bob = w.bike ? 0 : Math.abs(Math.sin(w.phase)) * (w.who === Person.Child ? 0.09 : 0.06);
-      draw(w.bike ? 'bike' : w.who, x, y, h + 0.1 + bob, hx, hy, w.color);
+      draw(w.bike ? 'bike' : w.who, x, y, h, hx, hy, w.color, Math.sin(w.phase) * (w.bike ? 0.5 : STRIDE[w.who]));
     }
     PEOPLE.forEach((who, k) => {
       this.clothes[who].count = counts[k];
@@ -368,6 +456,11 @@ export class PedestrianLayer {
     for (const m of [...this.clothes, ...this.rest, this.bikes, this.bikeFrames]) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
+      m.geometry.getAttribute('stride').needsUpdate = true;
     }
+  }
+
+  private setStride(m: THREE.InstancedMesh, i: number, angle: number): void {
+    (m.geometry.getAttribute('stride') as THREE.InstancedBufferAttribute).setX(i, angle);
   }
 }

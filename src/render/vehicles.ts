@@ -175,8 +175,8 @@ export class VehicleLayer {
       const i = counts[k];
       if (i >= this.paint[k].instanceMatrix.count) continue;
       this.q.setFromAxisAngle(this.up, Math.atan2(-pose.heading.y, pose.heading.x));
-      // Ramps into tunnels are drawn at street level up to the portal
-      this.p.set(pose.p.x, (pose.h > PORTAL_DEPTH ? Math.max(0, pose.h) : pose.h) + 0.1, pose.p.y);
+      // Wheels on the asphalt (drawn 7 cm up); ramps into tunnels are drawn at street level up to the portal
+      this.p.set(pose.p.x, (pose.h > PORTAL_DEPTH ? Math.max(0, pose.h) : pose.h) + 0.07, pose.p.y);
       this.m.compose(this.p, this.q, this.one);
       this.paint[k].setMatrixAt(i, this.m);
       this.trim[k].setMatrixAt(i, this.m);
