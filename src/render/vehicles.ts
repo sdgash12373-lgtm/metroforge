@@ -146,7 +146,7 @@ export class VehicleLayer {
       this.trim.push(new THREE.InstancedMesh(model.trim, fixed, sizes[k]));
     });
     this.taxiSigns = new THREE.InstancedMesh(taxiSign(), fixed, MAX / 4);
-    this.lightBars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.45, 0.18, 1.3).translate(-0.2, 1.88, 0), new THREE.MeshBasicMaterial(), MAX / 8);
+    this.lightBars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.45, 0.18, 1.3).translate(-0.2, 1.57, 0), new THREE.MeshBasicMaterial(), MAX / 8);
     for (const m of this.meshes()) {
       m.count = 0;
       m.frustumCulled = false;
