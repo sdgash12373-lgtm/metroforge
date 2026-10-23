@@ -5,6 +5,7 @@ import { type City, MAX_TAX, budgetTotals } from '../sim/city';
 import { LEVELS, ntdShort } from '../sim/levels';
 import { FACILITIES, GREEN_KINDS, LANDMARK_KINDS, SERVICE_KINDS } from '../sim/facilities';
 import { RAIL_KINDS } from '../sim/rail';
+import { INCOME_BRACKETS } from '../sim/income';
 import type { Conditions } from '../sim/weather';
 import { ZONES, Zone } from '../sim/zoning';
 import { BUS, LINE_COLORS, MODES, type Transit } from '../sim/transit';
@@ -43,7 +44,7 @@ const groupOf = (t: Tool): Group | null => (Object.keys(GROUPS) as Group[]).find
 
 type DockItem = Tool | Group;
 type BudgetRow =
-  | 'res' | 'biz' | 'subsidy' | 'fares' | 'air' | 'tourism' | 'income'
+  | 'res' | 'biz' | 'fuel' | 'subsidy' | 'fares' | 'air' | 'tourism' | 'income'
   | 'roads' | 'transit' | 'airUpkeep' | 'services' | 'admin' | 'running' | 'construction' | 'net';
 const TOOLS: { id: DockItem; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
@@ -254,6 +255,7 @@ export class Hud {
     const income = {
       res: row('住宅稅'),
       biz: row('商業稅'),
+      fuel: row('汽燃稅（開車居民）'),
       subsidy: row('中央補助'),
       fares: row('運輸票價（規費）'),
       air: row('機場規費'),
@@ -826,7 +828,15 @@ export class Hud {
   private needsShown = '';
   private renderNeeds(city: City): void {
     const n = city.needs;
-    const key = JSON.stringify([Math.round(n.happiness), n.wants, n.tourists, SERVICE_KINDS.map((k) => Math.round(n.coverage[k] * 100))]);
+    const homes = city.households;
+    const key = JSON.stringify([
+      Math.round(n.happiness),
+      n.wants,
+      n.tourists,
+      SERVICE_KINDS.map((k) => Math.round(n.coverage[k] * 100)),
+      Math.round(homes.averageIncome / 1000),
+      INCOME_BRACKETS.map((b) => homes.people[b.key]),
+    ]);
     if (key === this.needsShown) return;
     this.needsShown = key;
     const rows: HTMLElement[] = [];
@@ -848,6 +858,18 @@ export class Hud {
     else if (!n.wants.length) rows.push(el('p', 'note', '居民對公共服務很滿意！'));
     for (const k of n.wants) rows.push(el('p', 'want', `「${FACILITIES[k].need}」 → 蓋${FACILITIES[k].label}`));
     if (n.tourists) rows.push(el('p', 'note', `每小時觀光客 ${n.tourists.toLocaleString()} 人`));
+    // Income decides how residents get to work
+    if (city.stats.population) {
+      rows.push(el('h3', '', `居民收入：平均年收 NT$${ntdShort(homes.averageIncome)}`));
+      const ride = { bike: '🚲', scooter: '🛵', car: '🚗' } as const;
+      const colors = { bike: '#6a994e', scooter: '#e3b23c', car: '#2e86ab', rich: '#8a6fd1' } as const;
+      for (const b of INCOME_BRACKETS) {
+        const share = (homes.people[b.key] / city.stats.population) * 100;
+        meter(`${ride[b.commute]} ${b.label.replace('年收 ', '').replace(/ /g, '')}`, share, colors[b.key]);
+        rows[rows.length - 1].classList.add('wide');
+      }
+      rows.push(el('p', 'note', '🚲 腳踏車不佔馬路，🛵 機車和 🚗 汽車會上路。開車的居民要繳汽燃稅：年收 40–60 萬 3%、60 萬以上 7%。房子等級越高、公共服務越完整、城市等級越高，收入越高。'));
+    }
     this.needsBody.replaceChildren(...rows);
   }
 
@@ -875,6 +897,7 @@ export class Hud {
       const values: Record<BudgetRow, number> = {
         res: b.residentialTax,
         biz: b.businessTax,
+        fuel: b.fuelTax,
         subsidy: b.subsidy,
         fares: b.transitFares,
         air: b.airIncome,

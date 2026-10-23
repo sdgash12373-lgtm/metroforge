@@ -179,7 +179,7 @@ export class World {
     this.vehicles = new VehicleLayer(shadows);
     this.scene.add(this.vehicles.group);
     this.pedestrians = new PedestrianLayer(shadows);
-    this.scene.add(this.pedestrians.mesh);
+    this.scene.add(this.pedestrians.group);
     this.overlay = new THREE.Mesh(
       new THREE.BufferGeometry(),
       new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3 }),
@@ -389,7 +389,7 @@ export class World {
     this.trees.crowns.visible = !on;
     this.streetTrees.visible = !on;
     this.vehicles.group.visible = !on;
-    this.pedestrians.mesh.visible = !on;
+    this.pedestrians.group.visible = !on;
     this.signals.group.visible = !on;
     const { sidewalk, asphalt, markings, concrete } = this.materials;
     for (const m of [sidewalk, asphalt, markings, concrete]) {

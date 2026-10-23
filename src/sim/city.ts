@@ -13,6 +13,7 @@ import {
   isLandmark,
 } from './facilities';
 import { ntd } from './format';
+import { type Households, PEOPLE_PER_HOUSEHOLD, bracketOf, emptyHouseholds, residentIncome } from './income';
 import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, quadPoint, sampleQuad } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
 import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
@@ -95,6 +96,8 @@ export interface Budget {
   /** 稅收 */
   residentialTax: number;
   businessTax: number;
+  /** 汽燃稅: a share of car owners' income */
+  fuelTax: number;
   /** 補助: from the central government, per resident by rank */
   subsidy: number;
   /** 規費: tickets on buses and trains, and airport fees */
@@ -116,7 +119,7 @@ export interface Budget {
 }
 
 export function budgetTotals(b: Budget): { income: number; taxes: number; fees: number; other: number; running: number; balance: number } {
-  const taxes = b.residentialTax + b.businessTax;
+  const taxes = b.residentialTax + b.businessTax + b.fuelTax;
   const fees = b.transitFares + b.airIncome;
   const income = taxes + b.subsidy + fees + b.tourism;
   const running = b.roadUpkeep + b.transitUpkeep + b.airUpkeep + b.servicesUpkeep + b.admin;
@@ -216,6 +219,7 @@ export class City {
   budget: Budget = {
     residentialTax: 0,
     businessTax: 0,
+    fuelTax: 0,
     subsidy: 0,
     transitFares: 0,
     airIncome: 0,
@@ -240,6 +244,10 @@ export class City {
   needs: Needs = { happiness: 50, coverage: { park: 0, school: 0, police: 0, fire: 0, hospital: 0 }, wants: [], tourists: 0 };
   /** services in reach of each home, from the last survey */
   private served = new Map<Lot, number>();
+  /** yearly income of each resident of a home */
+  private incomes = new Map<Lot, number>();
+  /** residents by income bracket and what car owners pay in fuel tax */
+  households: Households = emptyHouseholds();
   /** metro, train and high-speed rail, each on its own track */
   rails: Record<RailKind, RailSystem> = { metro: new RailSystem('metro'), train: new RailSystem('train'), hsr: new RailSystem('hsr') };
   aviation = new Aviation();
@@ -984,6 +992,9 @@ export class City {
     const reach: Record<ServiceKind, number> = { park: 0, school: 0, police: 0, fire: 0, hospital: 0 };
     let satisfied = 0;
     this.served.clear();
+    this.incomes.clear();
+    const homes = emptyHouseholds();
+    let earned = 0;
     for (const seg of this.net.segments.values()) {
       const linked = this.isConnected(seg);
       for (const lot of seg.lots) {
@@ -1000,6 +1011,12 @@ export class City {
           for (const k of s.kinds) reach[k] += people;
           this.served.set(lot, s.kinds.size + s.landmark);
           satisfied += people * Math.min(1, (s.kinds.size + s.landmark) / SERVICE_KINDS.length);
+          const income = residentIncome(lot, s.kinds.size + s.landmark, this.level);
+          const bracket = bracketOf(income);
+          this.incomes.set(lot, income);
+          homes.people[bracket.key] += people;
+          homes.fuelTaxYear += (people / PEOPLE_PER_HOUSEHOLD) * income * bracket.fuelTax;
+          earned += people * income;
         } else jobs[info.demand] += lot.level * info.perLevel;
       }
     }
@@ -1027,6 +1044,8 @@ export class City {
       I: d(45 + gap(pop * 0.3 + 15, jobs.I, 40) - bTax),
     };
     this.stats = { population: pop, jobs: totalJobs, buildings, disconnected, riders: this.stats.riders };
+    homes.averageIncome = pop ? earned / pop : 0;
+    this.households = homes;
     return zoned;
   }
 
@@ -1158,6 +1177,7 @@ export class City {
       admin: (pop * rank.admin) / MONTH_STEPS,
       residentialTax: this.stats.population * this.taxes.residential * 0.0025,
       businessTax: this.stats.jobs * this.taxes.business * 0.002,
+      fuelTax: this.households.fuelTaxYear / (12 * MONTH_STEPS),
       // Roads, transit and public buildings: an hour's upkeep billed once every two weeks,
       // spread over the two weeks for the monthly budget
       roadUpkeep: (roadLength * ROAD_UPKEEP * HOUR_STEPS) / (UPKEEP_DAYS * DAY_STEPS),
@@ -1172,6 +1192,7 @@ export class City {
     this.budget = {
       residentialTax: perMonth(step.residentialTax),
       businessTax: perMonth(step.businessTax),
+      fuelTax: perMonth(step.fuelTax),
       subsidy: perMonth(step.subsidy),
       // Fares come in bursts as vehicles reach stops and planes leave; show running averages
       transitFares: this.budget.transitFares * 0.9 + perMonth(fares) * 0.1,
@@ -1186,7 +1207,7 @@ export class City {
     };
     this.spentThisStep = 0;
     this.money +=
-      step.residentialTax + step.businessTax + step.subsidy + fares + air.incomeToday + step.tourism -
+      step.residentialTax + step.businessTax + step.fuelTax + step.subsidy + fares + air.incomeToday + step.tourism -
       step.airUpkeep - step.admin;
     if (this.steps % (UPKEEP_DAYS * DAY_STEPS) === 0) {
       const due = (roadLength * ROAD_UPKEEP + upkeep) * HOUR_STEPS + bill;
@@ -1244,8 +1265,11 @@ export class City {
       const job = work.length ? pick(work) : null;
       // Commuters with a bus or train line from near home to near work mostly ride it
       if (job && this.rideTransit(home.lot, job.lot, rng)) continue;
+      // What they can afford: a bicycle keeps off the road, a scooter or a car joins the traffic
+      const commute = bracketOf(this.incomes.get(home.lot) ?? 0).commute;
+      if (commute === 'bike') continue;
       const to = job ? at(job) : gate;
-      if (to) this.traffic.spawn(at(home), to, 'car', rng());
+      if (to) this.traffic.spawn(at(home), to, commute, rng());
     }
     if (gate && industry.length && rng() < Math.min(0.9, this.stats.jobs / 300)) {
       this.traffic.spawn(gate, at(pick(industry)), 'truck', rng());

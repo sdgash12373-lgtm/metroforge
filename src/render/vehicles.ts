@@ -14,6 +14,15 @@ function car(): THREE.BufferGeometry {
   return mergeGeometries([body, cabin])!;
 }
 
+/** A scooter and its rider. */
+function scooter(): THREE.BufferGeometry {
+  const deck = new THREE.BoxGeometry(1.7, 0.45, 0.55).translate(0, 0.45, 0);
+  const front = new THREE.BoxGeometry(0.3, 0.9, 0.5).translate(0.7, 0.9, 0);
+  const rider = new THREE.BoxGeometry(0.45, 0.75, 0.5).translate(-0.15, 1.15, 0);
+  const helmet = new THREE.BoxGeometry(0.3, 0.3, 0.3).translate(-0.1, 1.68, 0);
+  return mergeGeometries([deck, front, rider, helmet])!;
+}
+
 function truck(): THREE.BufferGeometry {
   const cab = new THREE.BoxGeometry(2, 2.2, 2.3).translate(2.8, 1.4, 0);
   const box = new THREE.BoxGeometry(5.4, 2.8, 2.4).translate(-1, 1.7, 0);
@@ -34,6 +43,7 @@ export class VehicleLayer {
   readonly group = new THREE.Group();
   private cars: THREE.InstancedMesh;
   private trucks: THREE.InstancedMesh;
+  private scooters: THREE.InstancedMesh;
   private buses: THREE.InstancedMesh;
   private windows: THREE.InstancedMesh;
   private m = new THREE.Matrix4();
@@ -47,9 +57,10 @@ export class VehicleLayer {
     const mat = new THREE.MeshLambertMaterial({ flatShading: true });
     this.cars = new THREE.InstancedMesh(car(), mat, MAX);
     this.trucks = new THREE.InstancedMesh(truck(), mat, MAX / 4);
+    this.scooters = new THREE.InstancedMesh(scooter(), mat, MAX);
     this.buses = new THREE.InstancedMesh(bus(), mat, MAX / 8);
     this.windows = new THREE.InstancedMesh(busWindows(), new THREE.MeshLambertMaterial({ color: 0x2b3a46 }), MAX / 8);
-    for (const m of [this.cars, this.trucks, this.buses, this.windows]) {
+    for (const m of [this.cars, this.scooters, this.trucks, this.buses, this.windows]) {
       m.count = 0;
       m.frustumCulled = false;
       m.castShadow = shadows;
@@ -62,11 +73,12 @@ export class VehicleLayer {
     let c = 0;
     let t = 0;
     let b = 0;
+    let s = 0;
     for (const v of traffic.vehicles) {
       const pose = traffic.pose(v);
       if (!pose) continue;
-      const mesh = v.kind === 'truck' ? this.trucks : v.kind === 'bus' ? this.buses : this.cars;
-      const i = v.kind === 'truck' ? t : v.kind === 'bus' ? b : c;
+      const mesh = v.kind === 'truck' ? this.trucks : v.kind === 'bus' ? this.buses : v.kind === 'scooter' ? this.scooters : this.cars;
+      const i = v.kind === 'truck' ? t : v.kind === 'bus' ? b : v.kind === 'scooter' ? s : c;
       if (i >= mesh.instanceMatrix.count) continue;
       this.q.setFromAxisAngle(this.up, Math.atan2(-pose.heading.y, pose.heading.x));
       // Ramps into tunnels are drawn at street level up to the portal
@@ -82,13 +94,15 @@ export class VehicleLayer {
       const palette = v.kind === 'truck' ? TRUCK_COLORS : CAR_COLORS;
       mesh.setColorAt(i, this.c.setHex(palette[Math.floor(v.tint * palette.length) % palette.length]));
       if (v.kind === 'truck') t++;
+      else if (v.kind === 'scooter') s++;
       else c++;
     }
     this.cars.count = c;
     this.trucks.count = t;
+    this.scooters.count = s;
     this.buses.count = b;
     this.windows.count = b;
-    for (const m of [this.cars, this.trucks, this.buses, this.windows]) {
+    for (const m of [this.cars, this.scooters, this.trucks, this.buses, this.windows]) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
     }

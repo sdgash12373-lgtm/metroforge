@@ -19,7 +19,7 @@ const PLAYER_PUNCH = 1.8;
 const PLAYER_TOP = 1.6;
 
 export type Dir = 1 | -1;
-export type VehicleKind = 'car' | 'truck' | 'bus' | 'metro' | 'train' | 'hsr';
+export type VehicleKind = 'car' | 'scooter' | 'truck' | 'bus' | 'metro' | 'train' | 'hsr';
 
 /** One travel direction of one segment. */
 export interface LaneRef {
@@ -36,7 +36,7 @@ export const TRAIN_CARS: Partial<Record<VehicleKind, { cars: number; length: num
   hsr: { cars: 6, length: 20 },
 };
 
-export const VEHICLE_LENGTH: Record<VehicleKind, number> = { car: 4.5, truck: 8, bus: 12, metro: 42, train: 80, hsr: 120 };
+export const VEHICLE_LENGTH: Record<VehicleKind, number> = { car: 4.5, scooter: 2, truck: 8, bus: 12, metro: 42, train: 80, hsr: 120 };
 
 /** How vehicles drive on one network: roads, or the tracks of one kind of train. */
 export interface DrivingRules {
