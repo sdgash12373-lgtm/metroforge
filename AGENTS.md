@@ -18,7 +18,7 @@ npm run build
 ## Code Review Rules
 
 - **Saves must keep loading.** A change to `SaveData` or `City.deserialize` must still load older saves.
-- **Simulation is deterministic.** It takes the `rng` passed in. Flag any use of `Math.random()` in `src/sim/`.
+- **Simulation is deterministic.** It takes the `rng` passed in. Flag `Math.random()` inside simulation logic in `src/sim/`; the default argument of `City.tick` is fine.
 - **The renderer stays cheap.**
   - Render work runs every frame on phones.
   - Flag per-frame allocations in hot loops.
