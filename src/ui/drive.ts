@@ -8,6 +8,8 @@ import type { World } from '../render/world';
 type Turn = 'left' | 'straight' | 'right';
 const TURN_ICON: Record<Turn, string> = { left: '⬅', straight: '⬆', right: '➡' };
 const TURN_LABEL: Record<Turn, string> = { left: '下個路口左轉', straight: '下個路口直行', right: '下個路口右轉' };
+/** Closer than this to the junction ahead, left / right pick the turn there instead of changing lanes. */
+const TURN_ZONE = 30;
 
 type View = 'chase' | 'driver';
 
@@ -19,10 +21,10 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 };
 
 /**
- * First-person patrol (第一人稱巡查): the player drives a car through the city in traffic. It keeps to
- * its lane and stops for red lights and the car ahead; the player only sets the throttle and picks the
- * way at each junction. W/S or the joystick's up/down drive and brake; A/D or left/right choose the
- * next turn (and move over to that side's lane on wide roads).
+ * First-person patrol (第一人稱巡查): the player drives a car through the city in traffic, ignoring
+ * its rules. W/S or the joystick's up/down drive and brake. A/D or left/right change lanes on wide
+ * roads, and near a junction (or with no lane that way) pick the turn there, from any lane. Q or the
+ * 迴轉 button turns round on the spot.
  */
 export class DriveMode {
   active = false;
@@ -59,10 +61,13 @@ export class DriveMode {
       this.view = this.view === 'chase' ? 'driver' : 'chase';
       this.snapCamera();
     };
+    const uturn = el('button', 'chip', '↩ 迴轉');
+    uturn.type = 'button';
+    uturn.onclick = () => this.uTurn();
     const exit = el('button', 'chip danger', '離開巡查');
     exit.type = 'button';
     exit.onclick = () => this.stop();
-    panel.append(speed, info, viewBtn, exit);
+    panel.append(speed, info, uturn, viewBtn, exit);
 
     // Virtual joystick for touch screens
     const pad = el('div', 'joystick');
@@ -105,7 +110,7 @@ export class DriveMode {
     pad.addEventListener('pointercancel', release);
 
     const touch = matchMedia('(pointer: coarse)').matches;
-    const hint = el('p', 'drive-hint', touch ? '搖桿往上加速、往下煞車，左右選下個路口轉向' : 'W 油門　S 煞車　A／D 下個路口左轉／右轉　V 切換視角　Esc 離開');
+    const hint = el('p', 'drive-hint', touch ? '搖桿往上加速、往下煞車，左右換車道，靠近路口時左右選轉向' : 'W 油門　S 煞車　A／D 換車道（近路口選轉向）　Q 迴轉　V 切換視角　Esc 離開');
     this.root.append(panel, pad, hint);
     this.root.hidden = true;
     host.append(this.root);
@@ -122,6 +127,7 @@ export class DriveMode {
         this.view = this.view === 'chase' ? 'driver' : 'chase';
         this.snapCamera();
       }
+      if (k === 'q' && !e.repeat) this.uTurn();
       this.keys.add(k);
     }, true);
     addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
@@ -155,7 +161,7 @@ export class DriveMode {
     this.root.hidden = false;
     document.body.classList.add('driving');
     this.snapCamera();
-    this.events.toast('開始巡查：遵守號誌，跟著車流前進');
+    this.events.toast('開始巡查：左右換車道、路口前左右轉彎，隨時可以迴轉');
     this.events.changed();
     return true;
   }
@@ -177,6 +183,16 @@ export class DriveMode {
     document.body.classList.remove('driving');
     this.keys.clear();
     this.events.changed();
+  }
+
+  /** Turns the patrol car round where it is. */
+  private uTurn(): void {
+    if (!this.car || !this.city) return;
+    if (!this.city.traffic.uTurn(this.car)) {
+      this.events.toast('圓環是單行道，不能迴轉');
+      return;
+    }
+    this.turn = 'straight';
   }
 
   /** Throttle from the controls, −1..1. */
@@ -229,30 +245,24 @@ export class DriveMode {
     const seg = this.city.net.segments.get(car.seg);
     if (!seg) return;
     car.throttle = this.throttle();
+    const exits = this.exits(seg, car.dir);
     const side = this.side();
     if (side !== this.lastSide && side !== 0) {
-      this.turn = side < 0 ? (this.turn === 'right' ? 'straight' : 'left') : this.turn === 'left' ? 'straight' : 'right';
+      // Left is towards the centre line: a higher sub-lane
+      const lanes = traffic.laneCount(seg);
+      const sub = car.sub ?? 0;
+      const to = sub - side;
+      const nearJunction = exits.length > 0 && seg.length - car.pos < TURN_ZONE;
+      if (this.turn !== 'straight' && (side < 0) !== (this.turn === 'left')) this.turn = 'straight';
+      else if (!nearJunction && to >= 0 && to < lanes) car.sub = to;
+      else if (exits.length) this.turn = side < 0 ? 'left' : 'right';
     }
     this.lastSide = side;
-    // Move over to the lane for the turn on wide roads
-    const lanes = traffic.laneCount(seg);
-    if (lanes > 1) {
-      const want = this.turn === 'left' ? lanes - 1 : this.turn === 'right' ? 0 : (car.sub ?? 0);
-      const sub = car.sub ?? 0;
-      const next = sub + Math.sign(want - sub);
-      if (next !== sub && !traffic.laneTaken(car, next)) car.sub = next;
-    }
-    const exits = this.exits(seg, car.dir);
     if (!exits.length) {
       car.route = [];
       car.dest = seg.length - 2;
       // Dead end: turn around once stopped
-      if (car.speed < 0.3 && car.pos > seg.length - 4 && car.throttle > 0) {
-        car.dir = car.dir === 1 ? -1 : 1;
-        car.pos = seg.length - car.pos;
-        car.sub = 0;
-        this.turn = 'straight';
-      }
+      if (car.speed < 0.3 && car.pos > seg.length - 4 && car.throttle > 0) this.uTurn();
     } else {
       const straight = exits.reduce((a, b) => (Math.abs(b.angle) < Math.abs(a.angle) ? b : a));
       const left = exits.filter((e) => e.angle < -0.35).sort((a, b) => a.angle - b.angle)[0];
@@ -268,7 +278,7 @@ export class DriveMode {
     this.streetEl.textContent = seg.name ?? (seg.oneway ? '圓環' : '無名道路');
     const light = traffic.lightFor(seg, car.dir);
     const lightIcon = light === 'red' ? '🔴' : light === 'yellow' ? '🟡' : light === 'green' ? '🟢' : '';
-    this.turnEl.textContent = `${TURN_ICON[this.turn]} ${exits.length ? TURN_LABEL[this.turn] : '死路，按油門迴轉'} ${lightIcon}`;
+    this.turnEl.textContent = `${TURN_ICON[this.turn]} ${exits.length ? TURN_LABEL[this.turn] : '死路，按油門或迴轉鍵掉頭'} ${lightIcon}`;
   }
 
   private snapCamera(): void {

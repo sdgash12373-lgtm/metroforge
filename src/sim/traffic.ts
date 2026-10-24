@@ -17,6 +17,10 @@ export const GIVE_UP_AFTER = 40;
 const PLAYER_PUNCH = 1.8;
 /** Patrol ignores the rules: it may drive this much faster than the speed limit. */
 const PLAYER_TOP = 1.6;
+/** Lanes per second a vehicle drifts across while changing lanes. */
+const LANE_CHANGE_RATE = 0.7;
+/** Vehicles don't start a lane change this close to the junction ahead. */
+const NO_CHANGE_NEAR = 12;
 
 export type Dir = 1 | -1;
 export type VehicleKind = 'car' | 'police' | 'scooter' | 'truck' | 'bus' | 'metro' | 'train' | 'hsr';
@@ -72,6 +76,10 @@ export interface Vehicle {
   stuck: number;
   /** which of the lanes going this way, 0 = kerbside (wider roads have more) */
   sub?: number;
+  /** where the vehicle is drawn across the lanes, easing towards `sub` so lane changes are smooth */
+  lat?: number;
+  /** the lane it is moving over to for its next turn */
+  want?: number;
   /** driven by the player: never gives up or arrives, speed set from the controls */
   player?: boolean;
   /** player's throttle, −1 (brake) .. 1 */
@@ -137,7 +145,9 @@ class MinHeap {
 }
 
 /**
- * Vehicles driving on the road network. Each segment has one lane per direction.
+ * Vehicles driving on the road network. Each segment has one or more lanes per direction (`sub`):
+ * vehicles pick the lane for their next turn (left turns on the inside, right turns at the kerb),
+ * keep to it from road to road and move over when the lane beside them is clear.
  * Cars follow the car ahead (a simplified Intelligent Driver Model) and wait at a
  * junction until there is room on the next lane, so queues and jams form on their own.
  */
@@ -221,8 +231,12 @@ export class Traffic {
         heap.push(node, c + h(node));
       }
     };
-    if (startDir !== -1) start(s0.b, (s0.length - from.s) / speed, { seg: s0.id, dir: 1 });
-    if (startDir !== 1) start(s0.a, from.s / speed, { seg: s0.id, dir: -1 });
+    // Part-lanes at either end go at the same speed laneTime gives the whole lane, so a trip never
+    // looks quicker by driving past its destination and coming back the other way
+    const v0 = this.topSpeed(s0);
+    const v1 = this.topSpeed(s1);
+    if (startDir !== -1) start(s0.b, (s0.length - from.s) / v0, { seg: s0.id, dir: 1 });
+    if (startDir !== 1) start(s0.a, from.s / v0, { seg: s0.id, dir: -1 });
 
     const adj = this.adjacency();
     const done = new Set<number>();
@@ -241,8 +255,8 @@ export class Traffic {
       }
     }
     // Enter the destination segment from whichever end is cheaper
-    const viaA = (cost.get(s1.a) ?? Infinity) + to.s / speed;
-    const viaB = s1.oneway ? Infinity : (cost.get(s1.b) ?? Infinity) + (s1.length - to.s) / speed;
+    const viaA = (cost.get(s1.a) ?? Infinity) + to.s / v1;
+    const viaB = s1.oneway ? Infinity : (cost.get(s1.b) ?? Infinity) + (s1.length - to.s) / v1;
     if (!Number.isFinite(Math.min(viaA, viaB))) return null;
     const endNode = viaA <= viaB ? s1.a : s1.b;
     const lastLane: LaneRef = { seg: s1.id, dir: viaA <= viaB ? 1 : -1 };
@@ -341,6 +355,8 @@ export class Traffic {
     };
     const seg = this.net.segments.get(v.seg)!;
     v.sub = Math.floor(tint * 997) % this.laneCount(seg);
+    v.want = this.wantSub(v, { seg: v.seg, dir: v.dir }, v.route[0]);
+    v.lat = v.sub;
     // Don't drop a vehicle on top of another one
     const lane = this.lanes.get(laneKey(v.seg, v.dir));
     if (lane?.some((o) => (o.sub ?? 0) === v.sub && Math.abs(o.pos - v.pos) < VEHICLE_LENGTH[kind] + MIN_GAP)) return null;
@@ -351,7 +367,7 @@ export class Traffic {
 
   /** Puts the player's car on a lane; the drive controls then pick its next lane as it goes. */
   spawnPlayer(seg: RoadSegment, dir: Dir, pos: number): Vehicle {
-    const v: Vehicle = { id: this.nextId++, kind: 'car', seg: seg.id, dir, pos, speed: 0, route: [], dest: seg.length - 1, tint: 0.05, stuck: 0, sub: 0, player: true, throttle: 0 };
+    const v: Vehicle = { id: this.nextId++, kind: 'car', seg: seg.id, dir, pos, speed: 0, route: [], dest: seg.length - 1, tint: 0.05, stuck: 0, sub: 0, lat: 0, player: true, throttle: 0 };
     this.vehicles.push(v);
     this.index();
     return v;
@@ -361,6 +377,27 @@ export class Traffic {
   laneTaken(v: Vehicle, sub: number): boolean {
     const list = this.lanes.get(laneKey(v.seg, v.dir)) ?? [];
     return list.some((o) => o !== v && (o.sub ?? 0) === sub && Math.abs(o.pos - v.pos) < VEHICLE_LENGTH[o.kind] + MIN_GAP + 2);
+  }
+
+  /**
+   * Turns a vehicle round on the spot (the patrol car may), into the inside lane the other way. It
+   * starts drawn where it was and drifts over, so the swing across the road is smooth.
+   */
+  uTurn(v: Vehicle): boolean {
+    const seg = this.net.segments.get(v.seg);
+    if (!seg || seg.oneway) return false;
+    const n = this.laneCount(seg);
+    const off = this.rules.laneOffset + (n - 1 - (v.lat ?? v.sub ?? 0)) * LANE_WIDTH;
+    v.dir = v.dir === 1 ? -1 : 1;
+    v.pos = Math.max(0, seg.length - v.pos);
+    v.sub = n - 1;
+    v.want = v.sub;
+    v.lat = n - 1 + (this.rules.laneOffset + off) / LANE_WIDTH;
+    v.speed = Math.min(v.speed, 5);
+    v.route = [];
+    v.dest = seg.length - 1;
+    this.index();
+    return true;
   }
 
   removeVehicle(v: Vehicle): void {
@@ -398,18 +435,52 @@ export class Traffic {
     for (const l of this.lanes.values()) l.sort((a, b) => a.pos - b.pos);
   }
 
-  /** Space free at the start of a lane (distance to its last vehicle's tail), in its emptiest sub-lane. */
-  private entryRoom(lane: LaneRef): { room: number; sub: number } {
+  /** Space free at the start of one sub-lane (distance to its last vehicle's tail). */
+  private subRoom(lane: LaneRef, sub: number): number {
+    const tail = this.lanes.get(laneKey(lane.seg, lane.dir))?.find((o) => (o.sub ?? 0) === sub);
+    return tail ? tail.pos - VEHICLE_LENGTH[tail.kind] : Infinity;
+  }
+
+  /**
+   * The sub-lane `v` drives into on `lane`: the one it wants for its next turn while there is room,
+   * otherwise the emptiest.
+   */
+  private entryRoom(v: Vehicle, lane: LaneRef, after: LaneRef | undefined): { room: number; sub: number } {
     const seg = this.net.segments.get(lane.seg);
     const n = seg ? this.laneCount(seg) : 1;
-    const list = this.lanes.get(laneKey(lane.seg, lane.dir)) ?? [];
-    let best = { room: -Infinity, sub: 0 };
+    const want = Math.min(n - 1, this.wantSub(v, lane, after));
+    const room = this.subRoom(lane, want);
+    if (room >= VEHICLE_LENGTH[v.kind] + MIN_GAP) return { room, sub: want };
+    let best = { room, sub: want };
     for (let sub = 0; sub < n; sub++) {
-      const tail = list.find((o) => (o.sub ?? 0) === sub);
-      const room = tail ? tail.pos - VEHICLE_LENGTH[tail.kind] : Infinity;
-      if (room > best.room) best = { room, sub };
+      const r = this.subRoom(lane, sub);
+      if (r > best.room) best = { room: r, sub };
     }
     return best;
+  }
+
+  /**
+   * The sub-lane a vehicle on `lane` should be in for where it goes next: inside for a left turn, the
+   * kerb for a right turn, a bus stop or the end of its trip (once on its last road), and otherwise the lane it is in (or one picked
+   * from its tint when it comes off a narrower road), so traffic spreads over every lane.
+   */
+  private wantSub(v: Vehicle, lane: LaneRef, after: LaneRef | undefined): number {
+    const seg = this.net.segments.get(lane.seg);
+    const n = seg ? this.laneCount(seg) : 1;
+    if (n === 1 || !seg) return 0;
+    if (v.kind === 'bus' || (!after && v.seg === lane.seg)) return 0;
+    const next = after && this.net.segments.get(after.seg);
+    if (after && next) {
+      const a = this.headingAt(seg, lane.dir, seg.length);
+      const b = this.headingAt(next, after.dir, 0);
+      // y points south on the map, so a turn to the left has a negative cross product
+      const turn = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
+      if (turn < -0.5) return n - 1;
+      if (turn > 0.5) return 0;
+    }
+    const cur = this.net.segments.get(v.seg);
+    if (cur && v.seg !== lane.seg && this.laneCount(cur) > 1) return Math.min(n - 1, v.sub ?? 0);
+    return Math.floor(v.tint * 997) % n;
   }
 
   step(dt: number): void {
@@ -418,12 +489,16 @@ export class Traffic {
     this.index();
     const arrived = new Set<number>();
     const gaveUp = new Set<number>();
+    // A vehicle that drives onto a lane still to come this step must not move twice
+    const moved = new Set<Vehicle>();
     for (const list of this.lanes.values()) {
       // Queued behind a red light: waiting there does not count towards giving up
       let held = false;
       // Front to back so each car sees where its leader is this step
       for (let i = list.length - 1; i >= 0; i--) {
         const v = list[i];
+        if (moved.has(v)) continue;
+        moved.add(v);
         const seg = this.net.segments.get(v.seg);
         if (!seg) {
           arrived.add(v.id);
@@ -453,7 +528,7 @@ export class Traffic {
         } else if (!v.route.length) {
           gap = v.dest - v.pos + MIN_GAP;
         } else {
-          const { room } = this.entryRoom(v.route[0]);
+          const { room } = this.entryRoom(v, v.route[0], v.route[1]);
           gap = seg.length - v.pos + (room === Infinity ? 200 : room);
           if (room < len + MIN_GAP) gap = Math.min(gap, seg.length - v.pos + MIN_GAP * 0.5);
           leadSpeed = room === Infinity ? this.rules.speed : 0;
@@ -491,6 +566,16 @@ export class Traffic {
           continue;
         }
 
+        // Move over a lane towards the one wanted for the next turn, once the lane beside is clear
+        const sub0 = v.sub ?? 0;
+        if (!v.player && v.want !== undefined && v.want !== sub0 && v.pos < seg.length - NO_CHANGE_NEAR) {
+          const to = sub0 + Math.sign(v.want - sub0);
+          if (!this.laneTaken(v, to)) v.sub = to;
+        }
+        const target = v.sub ?? 0;
+        const lat = v.lat ?? target;
+        v.lat = lat + Math.max(-LANE_CHANGE_RATE * dt, Math.min(LANE_CHANGE_RATE * dt, target - lat));
+
         if (!v.route.length) {
           if (v.pos < v.dest - 0.5 || v.player) continue;
           if (v.line !== undefined && this.lineHooks) {
@@ -502,13 +587,17 @@ export class Traffic {
         }
         if (v.pos >= seg.length) {
           const next = v.route[0];
-          const entry = this.entryRoom(next);
+          const entry = this.entryRoom(v, next, v.route[1]);
           if (v.player || entry.room >= len + MIN_GAP) {
+            const nextSeg = this.net.segments.get(next.seg);
+            const top = nextSeg ? this.laneCount(nextSeg) - 1 : 0;
             v.pos -= seg.length;
             v.seg = next.seg;
             v.dir = next.dir;
-            v.sub = v.player ? Math.min(v.sub ?? 0, entry.sub) : entry.sub;
+            v.sub = v.player ? Math.min(v.sub ?? 0, top) : entry.sub;
+            v.lat = Math.min(v.lat ?? v.sub, top);
             v.route.shift();
+            v.want = v.player ? v.sub : this.wantSub(v, next, v.route[0]);
             // Joined the tail of the next lane: keep the index right for cars behind
             const k = laneKey(next.seg, next.dir);
             const l = this.lanes.get(k);
@@ -563,14 +652,14 @@ export class Traffic {
       dir = best.dir;
       along += seg.length;
     }
-    return this.laneSample(seg, dir, Math.max(0, along), seg.id === v.seg ? (v.sub ?? 0) : 0);
+    return this.laneSample(seg, dir, Math.max(0, along), seg.id === v.seg ? (v.lat ?? v.sub ?? 0) : 0);
   }
 
   headingAt(seg: RoadSegment, dir: Dir, along: number): Vec2 {
     return this.laneSample(seg, dir, along).heading;
   }
 
-  /** Point on a lane, `along` meters from where the lane starts. */
+  /** Point on a lane, `along` meters from where the lane starts; `sub` may fall between lanes. */
   laneSample(seg: RoadSegment, dir: Dir, along: number, sub = 0): { p: Vec2; h: number; heading: Vec2 } {
     const s = dir === 1 ? along : seg.length - along;
     const S = seg.samples;
