@@ -757,8 +757,8 @@ export class City {
   }
 
   /**
-   * Removes what is at p: a facility first (so a footbridge goes without its road), then roads and track
-   * you can see, an airport or a building (which also unzones its cell), then tunnels.
+   * Removes what is at p: a facility first (so a footbridge goes without its road), then the building whose
+   * cell holds p (which also unzones it), roads and track you can see, an airport, then tunnels.
    * Returns what was removed so the UI can say so.
    */
   bulldoze(p: Vec2, radius: number): { ok: boolean; refund: number; reason?: string; what?: string } {
@@ -768,6 +768,13 @@ export class City {
       this.removeFacility(facility.id);
       this.spend(-refund);
       return { ok: true, refund, what: FACILITIES[facility.kind].label };
+    }
+    // A tap inside a building's cell means that building, however wide the road pick is when zoomed out
+    const lot = this.buildingAt(p);
+    if (lot) {
+      const what = `${ZONES[lot.zone as Exclude<Zone, Zone.None>].name}建築`;
+      this.clearLot(lot);
+      return { ok: true, refund: 0, what };
     }
     const ground = this.net.segmentAt(p, radius, 0);
     if (ground) return this.bulldozeRoad(ground.seg);
@@ -784,12 +791,6 @@ export class City {
       this.spend(-refund);
       this.landChanged();
       return { ok: true, refund, what: '機場' };
-    }
-    const lot = this.buildingAt(p);
-    if (lot) {
-      const what = `${ZONES[lot.zone as Exclude<Zone, Zone.None>].name}建築`;
-      this.clearLot(lot);
-      return { ok: true, refund: 0, what };
     }
     const any = this.net.segmentAt(p, radius);
     if (any) return this.bulldozeRoad(any.seg);

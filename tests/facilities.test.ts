@@ -118,7 +118,8 @@ describe('upkeep of roads and public buildings', () => {
     expect(city.bulldoze(lot, 4).ok).toBe(false);
     lot.level = 2;
     const roads = city.net.segments.size;
-    const r = city.bulldoze(lot, 4);
+    // Even with a wide pick radius (zoomed out), a tap inside the building takes the building
+    const r = city.bulldoze(lot, 18);
     expect(r.ok).toBe(true);
     expect(r.what).toBe('商業建築');
     expect(lot.level).toBe(0);
