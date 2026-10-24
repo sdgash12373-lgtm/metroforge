@@ -701,6 +701,11 @@ export class ToolController {
     this.refresh();
   }
 
+  /** A brush stroke starts or ends; the map holds its slow redraws until the stroke is done. */
+  setPainting(on: boolean): void {
+    this.world.setPainting(on);
+  }
+
   onPaint(p: Vec2): void {
     this.hover = p;
     this.city.paint(p, this.brushRadius, this.zone, this.overwriteZones);
