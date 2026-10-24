@@ -117,4 +117,24 @@ describe('train stations', () => {
       expect(l.level).toBe(0);
     }
   });
+
+  it('clear the lots under a station building that moves when a road is built', () => {
+    const city = new City();
+    city.money = 1e9;
+    city.buildRoad(free(-300, -40), null, free(300, -40), true);
+    city.buildRoad(free(-300, 48), null, free(300, 48), true);
+    city.paint({ x: 0, y: 0 }, 80, Zone.ResidentialLow);
+    expect(city.buildTrack('train', free(-300, 0), null, free(300, 0), 0, true).ok).toBe(true);
+    const sys = city.rails.train;
+    const stops = [-200, 0, 200].map((x) => sys.transit.stopAt({ x, y: 0 }, 12)!.id);
+    expect(city.createLine(sys.transit, stops).ok).toBe(true);
+    city.tick(() => 0.5);
+    const before = city.stationSpots().find((s) => Math.abs(s.pose.p.x) < 1)!.side;
+    // A street nearer the line on the other side: the building moves over to it
+    city.buildRoad(free(-300, -16), null, free(300, -16), true);
+    const spot = city.stationSpots().find((s) => Math.abs(s.pose.p.x) < 1)!;
+    expect(spot.side).not.toBe(before);
+    const lots = [...city.net.segments.values()].flatMap((s) => s.lots);
+    for (const l of lots.filter((l) => stationCovers('train', spot.pose, spot.side, l, 0))) expect(l.blocked).toBe(true);
+  });
 });

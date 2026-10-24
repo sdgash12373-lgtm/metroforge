@@ -299,6 +299,8 @@ export class City {
       else f.span = roadWidth(seg) + 6;
       this.facilitiesVersion++;
     }
+    // Stations may move to the other side of their track now the streets differ (roadsVersion is bumped below)
+    this.stationCache = null;
     recomputeBlocked(this.net, (p) => this.occupied(p));
     this.traffic.onNetworkChanged();
     this.transit.onNetworkChanged();
