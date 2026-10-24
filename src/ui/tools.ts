@@ -319,9 +319,11 @@ export class ToolController {
     this.world.rig.pickHeight = this.isRoadTool ? this.height : 0;
   }
 
-  /** See-through ground while building tunnels or metro lines, and a cleared city for the metro; tunnels marked on the surface while bulldozing. */
+  /** See-through ground while building tunnels, metro lines or picking lines to remove, and a cleared city for the metro; tunnels marked on the surface while bulldozing. */
   private updateUnderground(): void {
-    this.world.setXray((this.isRoadTool && this.level === 'tunnel') || (this.tool === 'metro' && this.railAction === 'line'));
+    // Underground metro lines must stay visible to be picked for removal too
+    const pickingLines = this.tool === 'bulldoze' && this.demolishLines;
+    this.world.setXray((this.isRoadTool && this.level === 'tunnel') || (this.tool === 'metro' && this.railAction === 'line') || pickingLines);
     this.world.setUndergroundView(this.tool === 'bulldoze' && !this.demolishLines);
     // Metro runs over and under the city: buildings and streets would hide the track being laid
     this.world.setDeclutter(this.tool === 'metro');
