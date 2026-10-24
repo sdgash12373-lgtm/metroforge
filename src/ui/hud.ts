@@ -504,7 +504,17 @@ export class Hud {
       option('道路與建築', !t.demolishLines, () => t.setDemolishLines(false));
       option('大眾運輸路線', t.demolishLines, () => t.setDemolishLines(true));
       const d = t.doomed;
-      if (d) option(`確定拆除「${d.line.name}」`, false, () => t.removeDoomedLine(), d.line.color);
+      if (d) {
+        this.sub.append(el('span', 'divider'));
+        // Lines sharing the spot (a train under a bus route): pick which one goes
+        if (t.lineChoices.length > 1) {
+          for (const c of t.lineChoices) {
+            const line = c.transit.lines.get(c.id);
+            if (line) option(`${c.transit.mode.label} ${line.name}`, c.transit === d.transit && c.id === d.line.id, () => t.pickDoomedLine(c), line.color);
+          }
+        }
+        option(`確定拆除「${d.line.name}」`, false, () => t.removeDoomedLine(), d.line.color);
+      }
     } else if (this.tools.tool === 'landmark') {
       const t = this.tools;
       const built = new Set([...(this.city?.facilities.values() ?? [])].map((f) => f.kind));

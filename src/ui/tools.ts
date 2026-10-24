@@ -106,6 +106,8 @@ export class ToolController {
   demolishLines = false;
   /** line picked for removal: a second tap on it, or the confirm button, removes it */
   doomedLine: { transit: Transit; id: number } | null = null;
+  /** every line under the last tap, so one under another (a train beneath a bus route) can be picked in the dock */
+  lineChoices: { transit: Transit; id: number }[] = [];
   railAction: RailAction = 'track';
   /** track tools draw curves instead of straight track */
   trackCurve = false;
@@ -139,6 +141,7 @@ export class ToolController {
     this.cancel();
     this.selectedLine = null;
     this.doomedLine = null;
+    this.lineChoices = [];
     this.selectedFlight = null;
     this.selectedStreet = null;
     this.selectedDistrict = null;
@@ -397,6 +400,7 @@ export class ToolController {
   setDemolishLines(on: boolean): void {
     this.demolishLines = on;
     this.doomedLine = null;
+    this.lineChoices = [];
     this.world.setLineOverlay(on ? 'all' : null);
     this.updateUnderground();
     this.events.changed();
@@ -410,9 +414,17 @@ export class ToolController {
     return d && line ? { transit: d.transit, line } : null;
   }
 
+  /** Picks one of the lines under the last tap for removal. */
+  pickDoomedLine(choice: { transit: Transit; id: number }): void {
+    this.doomedLine = choice;
+    this.events.changed();
+    this.refresh();
+  }
+
   removeDoomedLine(): void {
     const d = this.doomed;
     this.doomedLine = null;
+    this.lineChoices = [];
     if (d) {
       d.transit.removeLine(d.line.id);
       this.events.toast(`${d.transit.mode.label}「${d.line.name}」已拆除`);
@@ -434,6 +446,7 @@ export class ToolController {
       return;
     }
     this.doomedLine = hits[0] ?? null;
+    this.lineChoices = hits;
     if (!hits.length) this.events.toast('點地圖上的路線或車站');
   }
 
@@ -535,6 +548,7 @@ export class ToolController {
   private bulldozeHint(): string {
     if (this.demolishLines) {
       const d = this.doomed;
+      if (d && this.lineChoices.length > 1) return `這裡有 ${this.lineChoices.length} 條路線，在下方選要拆的那條，再按「確定拆除」`;
       if (d) return `${d.line.name}：再點一次路線或按「確定拆除」；沒有其他路線使用的車站會一起移除`;
       return '點地圖上的公車、捷運、火車或高鐵路線選取，再點一次拆除';
     }

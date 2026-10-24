@@ -757,11 +757,18 @@ export class City {
   }
 
   /**
-   * Removes what is at p: roads and track you can see first, then a facility, an airport or a building
-   * (which also unzones its cell), then tunnels.
+   * Removes what is at p: a facility first (so a footbridge goes without its road), then roads and track
+   * you can see, an airport or a building (which also unzones its cell), then tunnels.
    * Returns what was removed so the UI can say so.
    */
   bulldoze(p: Vec2, radius: number): { ok: boolean; refund: number; reason?: string; what?: string } {
+    const facility = this.facilityAt(p, 2);
+    if (facility) {
+      const refund = Math.round(FACILITIES[facility.kind].cost * BULLDOZE_REFUND);
+      this.removeFacility(facility.id);
+      this.spend(-refund);
+      return { ok: true, refund, what: FACILITIES[facility.kind].label };
+    }
     const ground = this.net.segmentAt(p, radius, 0);
     if (ground) return this.bulldozeRoad(ground.seg);
     for (const level of [0, ELEVATED_HEIGHT]) {
@@ -769,13 +776,6 @@ export class City {
         const hit = this.rails[k].net.segmentAt(p, radius, level);
         if (hit) return this.bulldozeTrack(k, hit.seg);
       }
-    }
-    const facility = this.facilityAt(p);
-    if (facility) {
-      const refund = Math.round(FACILITIES[facility.kind].cost * BULLDOZE_REFUND);
-      this.removeFacility(facility.id);
-      this.spend(-refund);
-      return { ok: true, refund, what: FACILITIES[facility.kind].label };
     }
     const airport = this.aviation.airportAt(p);
     if (airport) {

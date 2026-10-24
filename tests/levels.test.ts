@@ -117,6 +117,10 @@ describe('highway connection', () => {
     const lots = city.disconnectedLots({ x: 0, y: 0 });
     expect(lots.length).toBe(city.stats.disconnected);
     expect(lots.every((p) => p.x >= 290)).toBe(true);
+    // 拆除 on the bridge takes the bridge, not the road under it
+    const roads = city.net.segments.size;
+    expect(city.bulldoze(spot.p, 20).what).toBe('天橋');
+    expect(city.net.segments.size).toBe(roads);
   });
 
   it('keeps roundabouts off the highway entry, and puts a lost entry back when a save loads', () => {
