@@ -38,7 +38,8 @@ interface RailLayer {
   version: number;
   transitVersion: number;
   /** metro entrances stand beside the streets, so they move when the roads or zoning change */
-  streetsVersion: string;
+  roadsVersion: number;
+  zoningVersion: number;
 }
 
 const TREE_COUNT = LOWLAND_TREES + HILL_TREES;
@@ -223,7 +224,8 @@ export class World {
         tunnels: new THREE.Mesh(new THREE.BufferGeometry(), this.tunnels.material),
         version: -1,
         transitVersion: -1,
-        streetsVersion: '',
+        roadsVersion: -1,
+        zoningVersion: -1,
       };
       layer.lines.visible = false;
       layer.lines.renderOrder = 1;
@@ -730,10 +732,11 @@ export class World {
       layer.tunnels.geometry.dispose();
       layer.tunnels.geometry = buildTunnelOverlay(sys.net);
     }
-    const streets = kind === 'metro' ? `${city.roadsVersion}:${city.zoningVersion}` : '';
-    if (tracks || sys.transit.version !== layer.transitVersion || streets !== layer.streetsVersion) {
+    const streets = kind === 'metro' && (city.roadsVersion !== layer.roadsVersion || city.zoningVersion !== layer.zoningVersion);
+    if (tracks || sys.transit.version !== layer.transitVersion || streets) {
       layer.transitVersion = sys.transit.version;
-      layer.streetsVersion = streets;
+      layer.roadsVersion = city.roadsVersion;
+      layer.zoningVersion = city.zoningVersion;
       layer.stations.rebuild(sys, city.net);
       layer.lines.geometry.dispose();
       layer.lines.geometry = buildLinePaths(sys.net, [...sys.transit.lines.values()], 1.4, TRACK_OFFSET);

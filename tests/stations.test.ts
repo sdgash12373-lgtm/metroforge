@@ -42,6 +42,20 @@ describe('metro entrances', () => {
     expect(offAsphalt(city, spot)).toBeGreaterThan(1.8);
   });
 
+  it('never go inside a facility on a roadside lot', () => {
+    const city = new City();
+    city.money = 1e9;
+    city.buildRoad(free(-200, 0), null, free(200, 0), true);
+    const spot = city.facilitySpot('police', { x: 40, y: 22 });
+    const police = city.buildFacility('police', spot.p, spot.angle, true).facility!;
+    const at = entranceSpot(city.net, { x: 40, y: 4 })!;
+    const blocked = city.net.segments.values().next().value!.lots.filter((l) => l.blocked);
+    expect(blocked.length).toBeGreaterThan(0);
+    // Not on any lot the station blocks
+    for (const l of blocked) expect(Math.hypot(l.x - at.x, l.y - at.y)).toBeGreaterThan(3);
+    expect(Math.hypot(police.p.x - at.x, police.p.y - at.y)).toBeGreaterThan(10);
+  });
+
   it('keep two entrances of one station apart', () => {
     const city = crossroads();
     const a = entranceSpot(city.net, { x: 40, y: 0 })!;

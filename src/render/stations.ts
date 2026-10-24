@@ -165,7 +165,8 @@ export function entranceSpot(
       if (lot.depth !== 1) continue;
       const n = { x: -lot.dir.y * lot.side, y: lot.dir.x * lot.side };
       // On the sidewalk where it is wide enough, else just inside an empty lot
-      const free = lot.zone === Zone.None && lot.level === 0;
+      // Blocked lots have a facility or track on them
+      const free = lot.zone === Zone.None && lot.level === 0 && !lot.blocked;
       const inLot = { x: lot.x - n.x * 1.8, y: lot.y - n.y * 1.8 };
       const options: { x: number; y: number; cost: number }[] = [];
       if (seg.walk) {
@@ -188,7 +189,7 @@ export function entranceSpot(
     for (const seg of segs) {
       if (closestOnSamples(seg.samples, want).d > ENTRANCE_REACH) continue;
       for (const lot of seg.lots) {
-        if (lot.depth !== 1) continue;
+        if (lot.depth !== 1 || lot.blocked) continue;
         const n = { x: -lot.dir.y * lot.side, y: lot.dir.x * lot.side };
         // From the lot's middle back to just off the asphalt, over the sidewalk
         const back = roadWidth(seg) / 2 + 4 - (asphaltWidth(seg) / 2 + 2.2);
