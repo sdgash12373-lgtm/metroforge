@@ -37,6 +37,9 @@ interface RailLayer {
   tunnels: THREE.Mesh;
   version: number;
   transitVersion: number;
+  /** metro entrances stand beside the streets, so they move when the roads or zoning change */
+  roadsVersion: number;
+  zoningVersion: number;
 }
 
 const TREE_COUNT = LOWLAND_TREES + HILL_TREES;
@@ -123,8 +126,9 @@ export class World {
   private showEmpty = false;
   private readonly materials = {
     sidewalk: new THREE.MeshLambertMaterial({ color: 0xc4c7c2, side: THREE.DoubleSide }),
-    asphalt: new THREE.MeshLambertMaterial({ color: 0x5f646b, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }),
-    markings: new THREE.MeshBasicMaterial({ color: 0xf2e6b0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
+    asphalt: roughAsphalt(new THREE.MeshLambertMaterial({ color: 0x4a4d52, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 })),
+    /** white and yellow paint, by vertex colour */
+    markings: new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
     preview: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }),
     concrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
     /** viaducts of track, kept solid when the streets fade */
@@ -220,6 +224,8 @@ export class World {
         tunnels: new THREE.Mesh(new THREE.BufferGeometry(), this.tunnels.material),
         version: -1,
         transitVersion: -1,
+        roadsVersion: -1,
+        zoningVersion: -1,
       };
       layer.lines.visible = false;
       layer.lines.renderOrder = 1;
@@ -726,9 +732,12 @@ export class World {
       layer.tunnels.geometry.dispose();
       layer.tunnels.geometry = buildTunnelOverlay(sys.net);
     }
-    if (tracks || sys.transit.version !== layer.transitVersion) {
+    const streets = kind === 'metro' && (city.roadsVersion !== layer.roadsVersion || city.zoningVersion !== layer.zoningVersion);
+    if (tracks || sys.transit.version !== layer.transitVersion || streets) {
       layer.transitVersion = sys.transit.version;
-      layer.stations.rebuild(sys);
+      layer.roadsVersion = city.roadsVersion;
+      layer.zoningVersion = city.zoningVersion;
+      layer.stations.rebuild(sys, city.net);
       layer.lines.geometry.dispose();
       layer.lines.geometry = buildLinePaths(sys.net, [...sys.transit.lines.values()], 1.4, TRACK_OFFSET);
     }
@@ -789,7 +798,7 @@ export class World {
   updateSky(days: number, w: Conditions, dt: number): void {
     this.sky.update(days, w, dt, this.rig.target, this.rig.distance, this.xray);
     // Unlit road paint dims with the light; street lights warm the asphalt at night
-    this.materials.markings.color.setHex(0xf2e6b0).multiplyScalar(this.sky.light);
+    this.materials.markings.color.setScalar(this.sky.light);
     this.materials.asphalt.emissive.setHex(0x3a2a12).multiplyScalar(this.sky.night.value);
   }
 
@@ -822,6 +831,46 @@ export class World {
 }
 
 /** Lines each way from the middle of the grid; every fifth is drawn stronger. */
+/**
+ * Coarse asphalt: worn patches and dark and light chips of stone, worked out from the ground position in the shader
+ * so no texture is needed. The chips fade out where they would be smaller than a pixel.
+ */
+function roughAsphalt(m: THREE.MeshLambertMaterial): THREE.MeshLambertMaterial {
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vRoad;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRoad = (modelMatrix * vec4(transformed, 1.0)).xz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec2 vRoad;
+        float roadHash(vec2 p) {
+          p = fract(mod(p, 4096.0) * vec2(0.1031, 0.1030));
+          p += dot(p, p.yx + 33.33);
+          return fract((p.x + p.y) * p.x);
+        }
+        float roadNoise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(roadHash(i), roadHash(i + vec2(1.0, 0.0)), f.x), mix(roadHash(i + vec2(0.0, 1.0)), roadHash(i + vec2(1.0, 1.0)), f.x), f.y);
+        }`,
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        vec2 chipAt = vRoad * 7.0;
+        float chip = roadHash(floor(chipAt));
+        float sharp = clamp(1.6 - length(fwidth(chipAt)), 0.0, 1.0);
+        float stones = (step(0.9, chip) * 0.32 - step(chip, 0.16) * 0.22 + (chip - 0.5) * 0.12) * sharp;
+        float worn = (roadNoise(vRoad * 0.08) - 0.5) * 0.22 + (roadNoise(vRoad * 0.9) - 0.5) * 0.12;
+        diffuseColor.rgb *= 1.0 + worn + stones;`,
+      );
+  };
+  return m;
+}
+
 const GRID_HALF = 30;
 
 /** A square of grid lines one unit apart, faded out towards its edge; placeGrid scales it to the cell size. */

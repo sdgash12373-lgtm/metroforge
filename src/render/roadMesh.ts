@@ -1,12 +1,16 @@
 import * as THREE from 'three';
 import { type Quad, type Sample, type Vec2, normalize, sampleQuad } from '../sim/geometry';
 import { LANE_WIDTH, ROAD_WIDTH, type RoadNetwork, type RoadSegment, asphaltWidth, roadWidth } from '../sim/roads';
+import { CAR_LINE, CROSSWALK, type Junction, SCOOTER_LINE, TURN_BOX, findJunctions } from '../sim/signals';
 import { LANE_OFFSET } from '../sim/traffic';
 import type { PathPiece } from '../sim/transit';
 
 const DASH = 3;
 const GAP = 3;
 const MARK_WIDTH = 0.25;
+/** Taiwan's road paint: white lines and boxes, yellow centre lines between the two directions */
+const WHITE = new THREE.Color(0xf4f4ef);
+const YELLOW = new THREE.Color(0xf2b632);
 /** Depth of the concrete girder under an elevated deck. */
 const GIRDER = 1.4;
 const PILLAR_EVERY = 28;
@@ -120,10 +124,10 @@ export function pillar(b: Builder, x: number, z: number, dx: number, dz: number,
   b.quad([k0[0], k0[1], top], [k1[0], k1[1], top], [k3[0], k3[1], top], [k2[0], k2[1], top]);
 }
 
-export function dashes(b: Builder, s: Sample[], skip: number, width = MARK_WIDTH, h: Height = FLAT): void {
+export function dashes(b: Builder, s: Sample[], skip: number, width = MARK_WIDTH, h: Height = FLAT, skipEnd = skip): void {
   const len = s[s.length - 1].s;
   let j = 1;
-  for (let start = skip; start + DASH < len - skip; start += DASH + GAP) {
+  for (let start = skip; start + DASH < len - skipEnd; start += DASH + GAP) {
     const pts: Sample[] = [];
     for (const d of [start, start + DASH]) {
       while (j < s.length - 1 && s[j].s < d) j++;
@@ -258,26 +262,96 @@ export function streetTreeSpots(net: RoadNetwork, every = 10): { x: number; y: n
   return out;
 }
 
-/** Markings: a dashed centre line on two-lane roads, a double centre line and lane dashes on wider ones. */
-function laneMarks(marks: Builder, seg: RoadSegment, h: Height): void {
-  const lanes = seg.lanes ?? 1;
-  const skip = roadWidth(seg) * 0.6;
-  if (lanes === 1) {
-    dashes(marks, seg.samples, skip, MARK_WIDTH, h);
-    return;
-  }
-  const s = trimmed(seg.samples, skip);
-  if (s.length < 2) return;
-  for (const side of [-1, 1]) strip(marks, s, side * 0.15, side * (0.15 + MARK_WIDTH * 0.8), h);
-  for (let k = 1; k < lanes; k++) {
-    for (const side of [-1, 1]) dashes(marks, offsetSamples(seg.samples, side * k * LANE_WIDTH), skip, MARK_WIDTH, h);
-  }
+/** Where paint along a segment stops short of each end: behind the stop line at a signalled junction. */
+function paintSkip(seg: RoadSegment, junctions: Map<number, Junction>): [number, number] {
+  const plain = roadWidth(seg) * 0.6;
+  const at = (node: number) => {
+    const j = junctions.get(node);
+    return j ? j.edge + CAR_LINE + 0.6 : plain;
+  };
+  return [at(seg.a), at(seg.b)];
 }
 
-/** The samples between `skip` from each end. */
-function trimmed(s: Sample[], skip: number): Sample[] {
+/**
+ * Markings: a yellow centre line (dashed on two-lane roads, double on wider ones), white lane dashes, and a white
+ * edge line along each side.
+ */
+function laneMarks(marks: Builder, seg: RoadSegment, h: Height, [skipA, skipB]: [number, number]): void {
+  const lanes = seg.lanes ?? 1;
+  const half = asphaltWidth(seg) / 2;
+  const s = trimmed(seg.samples, skipA, skipB);
+  if (s.length < 2) return;
+  marks.color = WHITE;
+  for (const side of [-1, 1]) strip(marks, s, side * (half - 0.35), side * (half - 0.2), h);
+  for (let k = 1; k < lanes; k++) {
+    for (const side of [-1, 1]) dashes(marks, offsetSamples(seg.samples, side * k * LANE_WIDTH), skipA, MARK_WIDTH * 0.6, h, skipB);
+  }
+  marks.color = YELLOW;
+  if (lanes === 1) dashes(marks, seg.samples, skipA, MARK_WIDTH * 0.6, h, skipB);
+  else for (const side of [-1, 1]) strip(marks, s, side * 0.1, side * 0.25, h);
+}
+
+/** Point and direction a distance along a curve. */
+function along(s: Sample[], d: number): { x: number; y: number; t: number; dx: number; dy: number } {
+  let j = 1;
+  while (j < s.length - 1 && s[j].s < d) j++;
+  const a = s[j - 1];
+  const c = s[j];
+  const f = Math.max(0, Math.min(1, (d - a.s) / (c.s - a.s || 1)));
+  const l = Math.hypot(c.x - a.x, c.y - a.y) || 1;
+  return { x: a.x + (c.x - a.x) * f, y: a.y + (c.y - a.y) * f, t: a.t + (c.t - a.t) * f, dx: (c.x - a.x) / l, dy: (c.y - a.y) / l };
+}
+
+/**
+ * The paint on one approach to a signalled junction, `end` the segment's end at the junction. Distances are back
+ * from the junction centre and offsets are to the right of traffic coming in.
+ */
+function junctionMarks(marks: Builder, seg: RoadSegment, end: 'a' | 'b', j: Junction, h: Height): void {
+  const half = asphaltWidth(seg) / 2;
+  const len = seg.length;
+  if (len / 2 < j.edge + CAR_LINE + 0.6) {
+    // Too short for the whole layout: just the crossing, if it fits
+    if (len / 2 < j.edge + CROSSWALK[1]) return;
+  }
+  const full = len / 2 >= j.edge + CAR_LINE + 0.6;
+  // Coming in to b, traffic keeps to the +normal side; coming in to a, to the -normal side
+  const sign = end === 'b' ? 1 : -1;
+  const rect = (d0: number, d1: number, o0: number, o1: number) => {
+    const p = along(seg.samples, end === 'b' ? len - d0 : d0);
+    const q = along(seg.samples, end === 'b' ? len - d1 : d1);
+    const pt = (f: typeof p, o: number) => [f.x - f.dy * o * sign, f.y + f.dx * o * sign, h(f.t)];
+    marks.quad(pt(p, o0), pt(p, o1), pt(q, o0), pt(q, o1));
+  };
+  // Outline of a box, lines `w` wide
+  const box = (d0: number, d1: number, o0: number, o1: number, w = 0.15) => {
+    rect(d0, d0 + w, o0, o1);
+    rect(d1 - w, d1, o0, o1);
+    rect(d0, d1, o0, o0 + w);
+    rect(d0, d1, o1 - w, o1);
+  };
+  const e = j.edge;
+  marks.color = WHITE;
+  // Zebra crossing: bars along the road, all the way across
+  for (let o = -half + 0.3; o + 0.45 <= half - 0.2; o += 0.9) rect(e + CROSSWALK[0], e + CROSSWALK[1], o, o + 0.45);
+  if (!full) return;
+  // 機車待轉區 in the kerb lane, just ahead of the crossing, for scooters turning left in two stages
+  box(e + TURN_BOX[0], e + TURN_BOX[1], half - LANE_WIDTH + 0.5, half - 0.4);
+  // 機車停等區 across the incoming lanes, with the scooters' stop line at its front and the cars' behind it
+  rect(e + SCOOTER_LINE, e + SCOOTER_LINE + 0.4, 0.3, half - 0.2);
+  rect(e + CAR_LINE, e + CAR_LINE + 0.4, 0.3, half - 0.2);
+  for (const o of [0.3, half - 0.35]) rect(e + SCOOTER_LINE, e + CAR_LINE, o, o + 0.15);
+  // A scooter drawn in the box: two wheels and a body
+  const mid = (0.3 + half) / 2;
+  const d = e + (SCOOTER_LINE + CAR_LINE) / 2 + 0.2;
+  rect(d - 0.9, d + 0.9, mid - 0.06, mid + 0.06);
+  for (const k of [-0.75, 0.75]) rect(d + k - 0.18, d + k + 0.18, mid - 0.2, mid + 0.2);
+  rect(d - 0.3, d + 0.2, mid - 0.25, mid + 0.25);
+}
+
+/** The samples between `skip` from the start and `skipEnd` from the end. */
+function trimmed(s: Sample[], skip: number, skipEnd = skip): Sample[] {
   const len = s[s.length - 1].s;
-  return s.filter((p) => p.s >= skip && p.s <= len - skip);
+  return s.filter((p) => p.s >= skip && p.s <= len - skipEnd);
 }
 
 /** A curve moved sideways by a signed offset, its distances measured anew. */
@@ -298,6 +372,8 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
   const walk = new Builder(0.04);
   const asphalt = new Builder(0.07);
   const marks = new Builder(0.1);
+  marks.color = WHITE;
+  const junctions = findJunctions(net);
   const concrete = new Builder(0);
   const dark = new Builder(0);
   for (const seg of net.segments.values()) {
@@ -308,7 +384,13 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
     ribbon(raised ? concrete : walk, seg.samples, full, h);
     ribbon(asphalt, seg.samples, seg.oneway ? asphaltWidth({}) : asphaltWidth(seg), h);
     // One-way roads (roundabouts) have no centre line
-    if (!seg.oneway) laneMarks(marks, seg, h);
+    if (!seg.oneway) {
+      laneMarks(marks, seg, h, paintSkip(seg, junctions));
+      for (const end of ['a', 'b'] as const) {
+        const j = junctions.get(end === 'a' ? seg.a : seg.b);
+        if (j && net.node(j.node).h >= 0) junctionMarks(marks, seg, end, j, h);
+      }
+    }
     if (raised) supports(concrete, seg.samples, h, full);
     // Tunnel mouths: the ramp between street level and a tunnel
     else if (isTunnelRamp(net, seg)) portal(concrete, dark, seg.samples, (t) => net.heightAt(seg, t), full);

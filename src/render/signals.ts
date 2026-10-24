@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { type RoadNetwork, roadWidth } from '../sim/roads';
-import type { Junction } from '../sim/signals';
+import { CAR_LINE, type Junction } from '../sim/signals';
 import type { Traffic } from '../sim/traffic';
 
 const MAX = 2000;
@@ -56,7 +56,8 @@ export class SignalLayer {
         // Traffic comes in along -out and keeps right, so the pole stands on the kerb to its right
         const seg = net.segments.get(a.seg);
         const side = (seg ? roadWidth(seg) : 10) / 2 + 0.6;
-        const back = j.stopBack;
+        // By the stop line
+        const back = j.edge + CAR_LINE;
         p.set(n.p.x + a.out.x * back + a.out.y * side, n.h, n.p.y + a.out.y * back - a.out.x * side);
         q.setFromAxisAngle(up, Math.atan2(-a.out.y, a.out.x));
         m.compose(p, q, one);
