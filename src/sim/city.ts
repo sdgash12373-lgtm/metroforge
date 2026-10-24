@@ -16,6 +16,7 @@ import { ntd } from './format';
 import { type Households, PEOPLE_PER_HOUSEHOLD, bracketOf, emptyHouseholds, residentIncome } from './income';
 import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, quadPoint, sampleQuad } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
+import { type StationPose, stationCovers, stationPose, stationSide } from './stations';
 import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
@@ -270,6 +271,8 @@ export class City {
   lotsVersion = 0;
   /** bumped when zones are painted or lots are blocked or freed, but not when buildings grow */
   zoningVersion = 0;
+  private stationCache: { key: string; spots: { kind: RailKind; pose: StationPose; side: 1 | -1 }[] } | null = null;
+  private stationsSeen: number[] = [];
 
   constructor(readonly terrain: Terrain = FLAT) {
     this.weather = new Weather(terrain);
@@ -296,6 +299,8 @@ export class City {
       else f.span = roadWidth(seg) + 6;
       this.facilitiesVersion++;
     }
+    // Stations may move to the other side of their track now the streets differ (roadsVersion is bumped below)
+    this.stationCache = null;
     recomputeBlocked(this.net, (p) => this.occupied(p));
     this.traffic.onNetworkChanged();
     this.transit.onNetworkChanged();
@@ -326,9 +331,10 @@ export class City {
     }
   }
 
-  /** Water, hillside, track or an airfield on this spot, so nothing can be built on it. */
+  /** Water, hillside, track, a station or an airfield on this spot, so nothing can be built on it. */
   occupied(p: Vec2): boolean {
     if (!buildable(this.terrain, p)) return true;
+    for (const st of this.stationSpots()) if (stationCovers(st.kind, st.pose, st.side, p, CELL * 0.45)) return true;
     // Footbridges stand on the sidewalks and leave the lots beside them free
     for (const f of this.facilities.values()) if (f.kind !== 'footbridge' && footprintContains(f, p, 2)) return true;
     for (const a of this.aviation.airports.values()) if (Aviation.contains(a, p, 2)) return true;
@@ -341,6 +347,38 @@ export class City {
       }
     }
     return false;
+  }
+
+  /** Train, high-speed and metro stations on lines, where they stand and which side their building is on. */
+  stationSpots(): { kind: RailKind; pose: StationPose; side: 1 | -1 }[] {
+    const key = `${this.roadsVersion}:${RAIL_KINDS.map((k) => `${this.rails[k].version}.${this.rails[k].transit.version}`).join(':')}`;
+    if (this.stationCache?.key === key) return this.stationCache.spots;
+    const spots: { kind: RailKind; pose: StationPose; side: 1 | -1 }[] = [];
+    for (const kind of RAIL_KINDS) {
+      const sys = this.rails[kind];
+      const used = new Set<number>();
+      for (const l of sys.transit.lines.values()) for (const id of l.stops) used.add(id);
+      for (const id of used) {
+        const stop = sys.transit.stops.get(id);
+        const pose = stop && stationPose(sys, stop);
+        if (pose) spots.push({ kind, pose, side: kind === 'metro' ? 1 : stationSide(this.net, kind, pose) });
+      }
+    }
+    this.stationCache = { key, spots };
+    return spots;
+  }
+
+  /** Whether any rail system's track or stations changed since last asked (without allocating: it runs every step). */
+  private stationsChanged(): boolean {
+    let changed = false;
+    RAIL_KINDS.forEach((k, i) => {
+      const v = this.rails[k].version * 1e6 + this.rails[k].transit.version;
+      if (this.stationsSeen[i] !== v) {
+        this.stationsSeen[i] = v;
+        changed = true;
+      }
+    });
+    return changed;
   }
 
   /** Track or airports changed: zoning under them goes, and the renderer rebuilds. */
@@ -1122,6 +1160,8 @@ export class City {
    * the budget shows them per hour.
    */
   tick(rng: Rng = Math.random): void {
+    // Stations opened or closed (lines are edited straight on the transit systems): clear the lots they stand on
+    if (this.stationsChanged()) this.landChanged();
     const zoned = this.survey();
     let changed = false;
     const attempts = Math.min(16, zoned.length);

@@ -4,7 +4,8 @@ import { closestOnSamples } from '../src/sim/geometry';
 import { asphaltWidth } from '../src/sim/roads';
 import { CAR_LINE, CROSSWALK, SCOOTER_LINE, findJunctions } from '../src/sim/signals';
 import { Zone } from '../src/sim/zoning';
-import { entranceSpot, townSide } from '../src/render/stations';
+import { entranceSpot } from '../src/render/stations';
+import { stationCovers, stationSide } from '../src/sim/stations';
 
 const free = (x: number, y: number) => ({ kind: 'free' as const, p: { x, y } });
 
@@ -83,7 +84,57 @@ describe('train stations', () => {
     const north = { x: 0, y: -1 };
     const south = { x: 0, y: 1 };
     // Heading north (-y), the frame's +v points east (+x), towards the town; heading south it points away
-    expect(townSide(city.net, { x: 0, y: 0 }, north, 22)).toBe(1);
-    expect(townSide(city.net, { x: 0, y: 0 }, south, 22)).toBe(-1);
+    expect(stationSide(city.net, 'train', { p: { x: 0, y: 0 }, d: north, h: 0 })).toBe(1);
+    expect(stationSide(city.net, 'train', { p: { x: 0, y: 0 }, d: south, h: 0 })).toBe(-1);
+  });
+
+  it('keep the building off a road that runs right beside the track', () => {
+    const city = new City();
+    city.money = 1e9;
+    // A street 16 m east of a north-south line, where the building would stand, and none to the west
+    city.buildRoad(free(16, -200), null, free(16, 200), true);
+    expect(stationSide(city.net, 'train', { p: { x: 0, y: 0 }, d: { x: 0, y: -1 }, h: 0 })).toBe(-1);
+  });
+
+  it('clear the houses from the ground a station stands on', () => {
+    const city = new City();
+    city.money = 1e9;
+    // Houses along a street 40 m north of the line; the station building reaches about 25 m towards it
+    city.buildRoad(free(-300, -40), null, free(300, -40), true);
+    city.paint({ x: 0, y: -20 }, 60, Zone.ResidentialLow);
+    for (const seg of city.net.segments.values()) for (const l of seg.lots) if (l.zone !== Zone.None && !l.blocked) l.level = 2;
+    expect(city.buildTrack('train', free(-300, 0), null, free(300, 0), 0, true).ok).toBe(true);
+    const sys = city.rails.train;
+    const stops = [-200, 0, 200].map((x) => sys.transit.stopAt({ x, y: 0 }, 12)!.id);
+    expect(city.createLine(sys.transit, stops).ok).toBe(true);
+    city.tick(() => 0.5);
+    const [spot] = city.stationSpots().filter((s) => Math.abs(s.pose.p.x) < 1);
+    const lots = [...city.net.segments.values()].flatMap((s) => s.lots);
+    const under = lots.filter((l) => stationCovers('train', spot.pose, spot.side, l, 0));
+    expect(under.length).toBeGreaterThan(0);
+    for (const l of under) {
+      expect(l.blocked).toBe(true);
+      expect(l.level).toBe(0);
+    }
+  });
+
+  it('clear the lots under a station building that moves when a road is built', () => {
+    const city = new City();
+    city.money = 1e9;
+    city.buildRoad(free(-300, -40), null, free(300, -40), true);
+    city.buildRoad(free(-300, 48), null, free(300, 48), true);
+    city.paint({ x: 0, y: 0 }, 80, Zone.ResidentialLow);
+    expect(city.buildTrack('train', free(-300, 0), null, free(300, 0), 0, true).ok).toBe(true);
+    const sys = city.rails.train;
+    const stops = [-200, 0, 200].map((x) => sys.transit.stopAt({ x, y: 0 }, 12)!.id);
+    expect(city.createLine(sys.transit, stops).ok).toBe(true);
+    city.tick(() => 0.5);
+    const before = city.stationSpots().find((s) => Math.abs(s.pose.p.x) < 1)!.side;
+    // A street nearer the line on the other side: the building moves over to it
+    city.buildRoad(free(-300, -16), null, free(300, -16), true);
+    const spot = city.stationSpots().find((s) => Math.abs(s.pose.p.x) < 1)!;
+    expect(spot.side).not.toBe(before);
+    const lots = [...city.net.segments.values()].flatMap((s) => s.lots);
+    for (const l of lots.filter((l) => stationCovers('train', spot.pose, spot.side, l, 0))) expect(l.blocked).toBe(true);
   });
 });
