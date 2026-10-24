@@ -297,7 +297,9 @@ export class Traffic {
   private stopLine(v: Vehicle, seg: RoadSegment): number {
     if (!v.route.length || !this.rules.signals) return Infinity;
     const j = this.junctions().get(v.dir === 1 ? seg.b : seg.a);
-    const line = seg.length - Math.min(j?.stopBack ?? STOP_BACK, seg.length / 2);
+    // Scooters pull up to the front, into the 機車停等區
+    const back = j ? (v.kind === 'scooter' ? j.scooterBack : j.stopBack) : STOP_BACK;
+    const line = seg.length - Math.min(back, seg.length / 2);
     if (v.pos > line) return Infinity;
     const light = this.lightFor(seg, v.dir);
     if (!light || light === 'green') return Infinity;

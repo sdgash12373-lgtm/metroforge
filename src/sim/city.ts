@@ -268,6 +268,8 @@ export class City {
   lastUpkeepBill = 0;
   /** bumped whenever zoning or buildings change */
   lotsVersion = 0;
+  /** bumped when zones are painted or lots are blocked or freed, but not when buildings grow */
+  zoningVersion = 0;
 
   constructor(readonly terrain: Terrain = FLAT) {
     this.weather = new Weather(terrain);
@@ -300,6 +302,7 @@ export class City {
     this.computeConnectivity();
     this.roadsVersion++;
     this.lotsVersion++;
+    this.zoningVersion++;
   }
 
   private computeConnectivity(): void {
@@ -344,6 +347,7 @@ export class City {
   private landChanged(): void {
     recomputeBlocked(this.net, (p) => this.occupied(p));
     this.lotsVersion++;
+    this.zoningVersion++;
   }
 
   private railChanged(kind: RailKind): void {
@@ -976,7 +980,10 @@ export class City {
 
   paint(center: Vec2, radius: number, zone: Zone, overwrite = false): number {
     const n = paintZone(this.net, center, radius, zone, overwrite);
-    if (n) this.lotsVersion++;
+    if (n) {
+      this.lotsVersion++;
+      this.zoningVersion++;
+    }
     return n;
   }
 

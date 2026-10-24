@@ -1,13 +1,24 @@
 import type { Vec2 } from './geometry';
-import { type RoadNetwork, type RoadSegment, roadWidth } from './roads';
+import { type RoadNetwork, type RoadSegment, asphaltWidth } from './roads';
 
 /** Seconds of green, then yellow, for each direction in turn. */
 export const GREEN_TIME = 12;
 export const YELLOW_TIME = 3;
 /** Roads within this angle of each other share a green (straight across the junction). */
 const SAME_AXIS = Math.PI / 6;
-/** Vehicles wait this far back from the junction centre. */
+/** Vehicles wait this far back from the junction centre where there is no junction. */
 export const STOP_BACK = 6;
+/**
+ * Paint on each approach to a signalled junction, in metres back from the edge of the crossing road's asphalt:
+ * the 機車待轉區 (two-stage left-turn box) in the kerb lane, the zebra crossing, the scooter stop line at the front
+ * of the 機車停等區, and the stop line for cars behind it.
+ */
+export const TURN_BOX: [number, number] = [0.3, 2.3];
+export const CROSSWALK: [number, number] = [2.7, 5.7];
+export const SCOOTER_LINE = 6.1;
+export const CAR_LINE = 9.3;
+/** Half a car: vehicles are placed by their middle, so they wait this far behind the line they stop at. */
+const HALF_CAR = 2.4;
 
 export type Light = 'green' | 'yellow' | 'red';
 
@@ -24,8 +35,12 @@ export interface Junction {
   node: number;
   approaches: Approach[];
   phases: number;
-  /** how far back from the centre traffic waits: further where wide roads cross */
+  /** how far back from the centre traffic waits (behind the stop line): further where wide roads cross */
   stopBack: number;
+  /** scooters wait further up, in the 機車停等區 */
+  scooterBack: number;
+  /** from the centre to the edge of the widest road's asphalt, where the paint on each approach starts */
+  edge: number;
   /** staggers neighbouring junctions so they do not all change together */
   offset: number;
 }
@@ -68,8 +83,16 @@ export function findJunctions(net: RoadNetwork): Map<number, Junction> {
       return { seg: seg.id, end, out: o, phase };
     });
     const cycle = axes.length * (GREEN_TIME + YELLOW_TIME);
-    const stopBack = Math.max(STOP_BACK, Math.max(...list.map((e) => roadWidth(e.seg))) / 2 + 1);
-    out.set(node, { node, approaches, phases: axes.length, stopBack, offset: (node * 7.31) % cycle });
+    const edge = Math.max(...list.map((e) => asphaltWidth(e.seg))) / 2;
+    out.set(node, {
+      node,
+      approaches,
+      phases: axes.length,
+      stopBack: edge + CAR_LINE + HALF_CAR,
+      scooterBack: edge + SCOOTER_LINE + 1,
+      edge,
+      offset: (node * 7.31) % cycle,
+    });
   }
   return out;
 }

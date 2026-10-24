@@ -223,7 +223,7 @@ describe('traffic lights', () => {
     expect(v).not.toBeNull();
     let held = 0;
     for (let i = 0; i < 400 && v.seg === from.id; i++) {
-      if (city.traffic.lightFor(from, dir) === 'red' && v.seg === from.id && v.speed < 1 && v.pos > from.length - 12) held++;
+      if (city.traffic.lightFor(from, dir) === 'red' && v.seg === from.id && v.speed < 1 && v.pos > from.length - j.stopBack - 2) held++;
       city.traffic.step(0.1);
       if (city.traffic.lightFor(from, dir) === 'red') expect(v.seg).toBe(from.id);
     }
