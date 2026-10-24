@@ -99,6 +99,10 @@ describe('rail', () => {
     city.tick(rng());
     expect(sys.transit.lineAt({ x: 300, y: 3 }, 12)?.id).toBe(line.id);
     expect(sys.transit.lineAt({ x: 300, y: 60 }, 12)).toBeNull();
+    // A second line over the same stations: a tap finds both, so either can be removed
+    const twin = sys.transit.addLine([...line.stops]);
+    expect(sys.transit.linesAt({ x: 300, y: 3 }, 12).map((l) => l.id).sort()).toEqual([line.id, twin.id].sort());
+    sys.transit.removeLine(twin.id);
     sys.transit.removeLine(line.id);
     expect(sys.transit.lines.size).toBe(0);
     expect(sys.transit.stops.size).toBe(0);

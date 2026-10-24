@@ -90,7 +90,7 @@ export class World {
   private readonly signals: SignalLayer;
   private aviationVersion = -1;
   /** which kind of transport's lines are shown, if any */
-  private lineView: 'bus' | RailKind | null = null;
+  private lineView: 'bus' | RailKind | 'all' | null = null;
   private readonly overlay: THREE.Mesh;
   private overlayAge = Infinity;
   private readonly trees: { trunks: THREE.InstancedMesh; crowns: THREE.InstancedMesh; spots: TreeSpot[] };
@@ -423,11 +423,11 @@ export class World {
     for (const k of RAIL_KINDS) this.rails[k].tunnels.visible = on;
   }
 
-  /** Shows one kind of transport's routes (that tool's view), or none. */
-  setLineOverlay(kind: 'bus' | RailKind | null): void {
+  /** Shows one kind of transport's routes (that tool's view), all of them (picking a line to remove), or none. */
+  setLineOverlay(kind: 'bus' | RailKind | 'all' | null): void {
     this.lineView = kind;
-    this.linePaths.visible = kind === 'bus';
-    for (const k of RAIL_KINDS) this.rails[k].lines.visible = kind === k;
+    this.linePaths.visible = kind === 'bus' || kind === 'all';
+    for (const k of RAIL_KINDS) this.rails[k].lines.visible = kind === k || kind === 'all';
   }
 
   /** Route of a line being planned (or a street being named), or null. */
@@ -435,7 +435,7 @@ export class World {
     this.draftLine.visible = !!path?.length;
     if (!path?.length) return;
     this.draftLine.geometry.dispose();
-    const rail = this.lineView !== 'bus' && this.lineView !== null;
+    const rail = this.lineView !== 'bus' && this.lineView !== 'all' && this.lineView !== null;
     this.draftLine.geometry = buildLinePaths(net ?? this.cityRef!.net, [{ color, path }], width, offset ?? (rail ? TRACK_OFFSET : undefined));
   }
 

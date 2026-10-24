@@ -292,33 +292,32 @@ export class Transit {
 
   /** The line whose route or stops pass nearest to p, within r. */
   lineAt(p: Vec2, r: number): BusLine | null {
-    let best: BusLine | null = null;
-    let bestD = r;
+    return this.linesAt(p, r)[0] ?? null;
+  }
+
+  /** Every line whose route or stops pass within r of p, nearest first. */
+  linesAt(p: Vec2, r: number): BusLine[] {
+    const near: { line: BusLine; d: number }[] = [];
     for (const line of this.lines.values()) {
+      let best = r;
       for (const id of line.stops) {
         const s = this.stops.get(id);
-        if (s && dist(s.p, p) < bestD) {
-          bestD = dist(s.p, p);
-          best = line;
-        }
+        if (s) best = Math.min(best, dist(s.p, p));
       }
       for (const piece of line.path) {
         const seg = this.net.segments.get(piece.seg);
-        if (!seg || !bboxNear(seg.bbox, p, bestD)) continue;
+        if (!seg || !bboxNear(seg.bbox, p, best)) continue;
         const lo = Math.min(piece.from, piece.to);
         const hi = Math.max(piece.from, piece.to);
         for (const q of seg.samples) {
           const along = piece.dir === 1 ? q.s : seg.length - q.s;
           if (along < lo - 4 || along > hi + 4) continue;
-          const d = dist(q, p);
-          if (d < bestD) {
-            bestD = d;
-            best = line;
-          }
+          best = Math.min(best, dist(q, p));
         }
       }
+      if (best < r) near.push({ line, d: best });
     }
-    return best;
+    return near.sort((a, b) => a.d - b.d).map((n) => n.line);
   }
 
   removeLine(id: number): void {
