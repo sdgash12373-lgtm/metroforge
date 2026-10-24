@@ -4,7 +4,7 @@ import { closestOnSamples } from '../src/sim/geometry';
 import { asphaltWidth } from '../src/sim/roads';
 import { CAR_LINE, CROSSWALK, SCOOTER_LINE, findJunctions } from '../src/sim/signals';
 import { Zone } from '../src/sim/zoning';
-import { entranceSpot } from '../src/render/stations';
+import { entranceSpot, townSide } from '../src/render/stations';
 
 const free = (x: number, y: number) => ({ kind: 'free' as const, p: { x, y } });
 
@@ -71,5 +71,19 @@ describe('junction paint', () => {
     expect(j.scooterBack).toBeLessThan(j.edge + CAR_LINE);
     expect(j.stopBack).toBeGreaterThan(j.edge + CAR_LINE);
     expect(SCOOTER_LINE).toBeGreaterThan(CROSSWALK[1]);
+  });
+});
+
+describe('train stations', () => {
+  it('put the station building on the side of the tracks where the streets are', () => {
+    const city = new City();
+    city.money = 1e9;
+    // Streets to the east of a north-south line at x = 0
+    city.buildRoad(free(60, -200), null, free(60, 200), true);
+    const north = { x: 0, y: -1 };
+    const south = { x: 0, y: 1 };
+    // Heading north (-y), the frame's +v points east (+x), towards the town; heading south it points away
+    expect(townSide(city.net, { x: 0, y: 0 }, north, 22)).toBe(1);
+    expect(townSide(city.net, { x: 0, y: 0 }, south, 22)).toBe(-1);
   });
 });

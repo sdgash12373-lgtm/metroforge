@@ -37,7 +37,7 @@ interface RailLayer {
   tunnels: THREE.Mesh;
   version: number;
   transitVersion: number;
-  /** metro entrances stand beside the streets, so they move when the roads or zoning change */
+  /** stations face the streets (metro entrances beside them), so they are redrawn when the roads or zoning change */
   roadsVersion: number;
   zoningVersion: number;
 }
@@ -732,7 +732,7 @@ export class World {
       layer.tunnels.geometry.dispose();
       layer.tunnels.geometry = buildTunnelOverlay(sys.net);
     }
-    const streets = kind === 'metro' && (city.roadsVersion !== layer.roadsVersion || city.zoningVersion !== layer.zoningVersion);
+    const streets = city.roadsVersion !== layer.roadsVersion || city.zoningVersion !== layer.zoningVersion;
     if (tracks || sys.transit.version !== layer.transitVersion || streets) {
       layer.transitVersion = sys.transit.version;
       layer.roadsVersion = city.roadsVersion;
