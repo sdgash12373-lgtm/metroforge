@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Traffic, Vehicle } from '../sim/traffic';
-import { GLASS, HEADLIGHT, TAILLIGHT, painted, wheel } from './kit';
+import { GLASS, HEADLIGHT, TAILLIGHT, painted, tint, wheel } from './kit';
 import { PORTAL_DEPTH } from './roadMesh';
 
 const MAX = 1200;
@@ -63,6 +63,12 @@ function hatchback(): Model {
 /** Taiwan's yellow taxi: an Altis-sized sedan with a roof sign. */
 function taxiSign(): THREE.BufferGeometry {
   return merge([box(0.35, 0.28, 0.9, -0.2, 1.62, 0, 0xffffff), box(0.37, 0.08, 0.92, -0.2, 1.52, 0, 0x2a2c30)]);
+}
+
+/** A whole yellow taxi in one vertex-coloured geometry, for the cabs waiting at an airport rank. */
+export function taxiGeometry(): THREE.BufferGeometry {
+  const car = sedan();
+  return merge([tint(car.paint, TAXI_YELLOW), car.trim, taxiSign()]);
 }
 
 /** A Gogoro-style scooter and its rider: the body and helmet take the instance colour. */

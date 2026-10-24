@@ -21,7 +21,7 @@ import { VehicleLayer } from './vehicles';
 import { PedestrianLayer } from './pedestrians';
 import { RAIL_KINDS, type RailKind, TRACK_OFFSET } from '../sim/rail';
 import type { RoadNetwork } from '../sim/roads';
-import { buildAirportGeometry, PlaneLayer } from './airport';
+import { airportMaterial, buildAirportGeometry, PlaneLayer, TaxiRank } from './airport';
 import { buildTrackGeometries } from './railMesh';
 import { StationLayer } from './stations';
 import { TrainLayer } from './trains';
@@ -87,6 +87,7 @@ export class World {
   private readonly rails: Record<RailKind, RailLayer>;
   private readonly airports: THREE.Mesh;
   private readonly planes: PlaneLayer;
+  private readonly taxiRanks: TaxiRank;
   private readonly signals: SignalLayer;
   private aviationVersion = -1;
   /** which kind of transport's lines are shown, if any */
@@ -235,10 +236,12 @@ export class World {
       return layer;
     };
     this.rails = { metro: rail('metro'), train: rail('train'), hsr: rail('hsr') };
-    this.airports = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
+    const airportMat = airportMaterial(this.sky.night);
+    this.airports = new THREE.Mesh(new THREE.BufferGeometry(), airportMat);
     this.airports.receiveShadow = true;
     this.airports.castShadow = false;
     this.planes = new PlaneLayer(shadows);
+    this.taxiRanks = new TaxiRank(airportMat, shadows);
     this.signals = new SignalLayer(shadows);
     this.facilities = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
     this.facilities.castShadow = shadows;
@@ -247,7 +250,7 @@ export class World {
     addWindows(this.facilities.material as THREE.MeshLambertMaterial, this.sky.night, 0.7);
     this.facilities.receiveShadow = true;
     this.scene.add(this.facilities);
-    this.scene.add(this.airports, this.planes.group, this.signals.group);
+    this.scene.add(this.airports, this.planes.group, this.taxiRanks.mesh, this.signals.group);
 
     this.preview = new THREE.Mesh(new THREE.BufferGeometry(), this.materials.preview);
     this.preview.visible = false;
@@ -627,6 +630,7 @@ export class World {
     this.vehicles.update(city.traffic, (v) => city.transit.lines.get(v.line ?? -1)?.color ?? 0xf2b134);
     for (const k of RAIL_KINDS) this.rails[k].trains.update(city.rails[k]);
     this.planes.update(city.aviation);
+    this.taxiRanks.update(city.aviation, simDt);
     this.signals.update(city.traffic, city.net);
     this.peopleAge += dt;
     if (this.peopleAge > 0.5) {
