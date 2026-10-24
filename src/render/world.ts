@@ -44,6 +44,8 @@ interface RailLayer {
 
 const TREE_COUNT = LOWLAND_TREES + HILL_TREES;
 const STREET_TREES = 4000;
+/** How often painted cells are redrawn while the brush moves. */
+const PAINT_REDRAW_MS = 120;
 
 /** A round-crowned street tree in one geometry, coloured per vertex. */
 function mergeTree(): THREE.BufferGeometry {
@@ -124,6 +126,11 @@ export class World {
   private readonly projected = new THREE.Vector3();
   private roadsVersion = -1;
   private lotsVersion = -1;
+  /** zoning the trees were last cleared for */
+  private treesZoning = -1;
+  /** a zoning brush stroke is under way: it changes the zoning every frame */
+  private painting = false;
+  private buildingsAt = 0;
   private showEmpty = false;
   private readonly materials = {
     sidewalk: new THREE.MeshLambertMaterial({ color: 0xc4c7c2, side: THREE.DoubleSide }),
@@ -310,6 +317,7 @@ export class World {
 
   /** Clears trees that stand on roads or zoned cells. */
   private updateTrees(city: City): void {
+    this.treesZoning = city.zoningVersion;
     const zoned = new Set<string>();
     for (const seg of city.net.segments.values()) {
       for (const l of seg.lots) if (!l.blocked && l.zone !== Zone.None) zoned.add(`${Math.round(l.x / 4)},${Math.round(l.y / 4)}`);
@@ -345,6 +353,11 @@ export class World {
     });
     this.streetTrees.count = street.length;
     this.streetTrees.instanceMatrix.needsUpdate = true;
+  }
+
+  /** A zoning brush stroke starts or ends. */
+  setPainting(on: boolean): void {
+    this.painting = on;
   }
 
   /** Forces a full rebuild on the next sync, e.g. after switching to another city. */
@@ -658,6 +671,9 @@ export class World {
 
   sync(city: City): void {
     this.cityRef = city;
+    const now = performance.now();
+    // While the zoning brush is moving, the slow rebuilds (trees, stations) wait for the stroke to end
+    const painting = this.painting;
     if (city.terrain !== this.terrain) {
       this.setTerrain(city.terrain);
       this.updateTrees(city);
@@ -688,7 +704,7 @@ export class World {
       this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings), concrete, mouths);
       this.updateTrees(city);
     }
-    for (const k of RAIL_KINDS) this.syncRail(city, k);
+    for (const k of RAIL_KINDS) this.syncRail(city, k, painting);
     this.syncCutOff(city);
     if (city.labelsVersion + city.roadsVersion * 1e6 !== this.labelsVersion) {
       this.labelsVersion = city.labelsVersion + city.roadsVersion * 1e6;
@@ -704,15 +720,16 @@ export class World {
       this.facilities.geometry.dispose();
       this.facilities.geometry = buildFacilityGeometry(city.facilities.values());
     }
-    if (city.lotsVersion !== this.lotsVersion) {
-      const zoningChanged = this.lotsVersion !== -1;
+    // Painted cells still show as the brush moves, a few times a second rather than every frame
+    if (city.lotsVersion !== this.lotsVersion && (!painting || now - this.buildingsAt > PAINT_REDRAW_MS)) {
       this.lotsVersion = city.lotsVersion;
+      this.buildingsAt = now;
       this.buildings.update(city);
-      if (zoningChanged) this.updateTrees(city);
     }
+    if (city.zoningVersion !== this.treesZoning && !painting) this.updateTrees(city);
   }
 
-  private syncRail(city: City, kind: RailKind): void {
+  private syncRail(city: City, kind: RailKind, painting: boolean): void {
     const sys = city.rails[kind];
     const layer = this.rails[kind];
     const tracks = sys.version !== layer.version;
@@ -736,7 +753,7 @@ export class World {
       layer.tunnels.geometry.dispose();
       layer.tunnels.geometry = buildTunnelOverlay(sys.net);
     }
-    const streets = city.roadsVersion !== layer.roadsVersion || city.zoningVersion !== layer.zoningVersion;
+    const streets = city.roadsVersion !== layer.roadsVersion || (city.zoningVersion !== layer.zoningVersion && !painting);
     if (tracks || sys.transit.version !== layer.transitVersion || streets) {
       layer.transitVersion = sys.transit.version;
       layer.roadsVersion = city.roadsVersion;

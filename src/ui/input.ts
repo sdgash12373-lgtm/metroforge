@@ -62,6 +62,8 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
     el.setPointerCapture(e.pointerId);
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, button: e.button });
     if (ptrs.size === 2) {
+      // A second finger turns a brush stroke into a pinch: the stroke is over
+      tools.setPainting(false);
       gesture = { kind: 'pinch', ...pinch(), twist: 0, rotating: false };
       return;
     }
@@ -73,6 +75,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
       tools.onHover(ground(e.clientX, e.clientY));
     } else if (tools.paintsOnDrag) {
       gesture = { kind: 'paint' };
+      tools.setPainting(true);
       const p = ground(e.clientX, e.clientY);
       if (p) tools.onPaint(p);
     } else gesture = { kind: 'pending' };
@@ -133,6 +136,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
     // A right click without dragging ends the road or track being drawn
     if (p.button === 2 && e.type === 'pointerup' && tools.drawing && Math.hypot(p.x - p.startX, p.y - p.startY) <= TAP_SLOP) tools.cancel();
     ptrs.delete(e.pointerId);
+    if (ptrs.size === 0) tools.setPainting(false);
     // Fingers have no hover: drop the brush / snap ring once the touch ends
     if (e.pointerType !== 'mouse' && ptrs.size === 0) tools.onHover(null);
     // Lifting one finger of a pinch must not turn the other into a tap or a paint stroke
