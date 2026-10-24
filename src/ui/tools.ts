@@ -436,10 +436,7 @@ export class ToolController {
   /** The first tap on a line (of any kind of transport) picks it, a second tap on the same line removes it. */
   private tapDemolishLine(p: Vec2): void {
     const r = Math.max(12, this.world.rig.snapRadius);
-    const hits = this.city.transits.flatMap((transit) => {
-      const line = transit.lineAt(p, r);
-      return line ? [{ transit, id: line.id }] : [];
-    });
+    const hits = this.city.transits.flatMap((transit) => transit.linesAt(p, r).map((line) => ({ transit, id: line.id })));
     const d = this.doomedLine;
     if (d && hits.some((h) => h.transit === d.transit && h.id === d.id)) {
       this.removeDoomedLine();
