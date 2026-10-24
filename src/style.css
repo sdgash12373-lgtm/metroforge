@@ -921,6 +921,14 @@ body.driving .level {
   pointer-events: auto;
 }
 
+/* 迴轉, 切換視角 and 離開巡查 are tapped while driving: about 40 px on touch screens */
+@media (pointer: coarse) {
+  .drive-panel .chip {
+    min-height: 40px;
+    padding: 6px 12px;
+  }
+}
+
 .drive-gauge {
   display: flex;
   align-items: baseline;

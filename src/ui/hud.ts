@@ -995,6 +995,18 @@ export class Hud {
     // The side buttons sit just above the dock, and step aside on phones while a panel is open
     this.side.style.bottom = `${window.innerHeight - floor}px`;
     this.side.classList.toggle('covered', window.innerWidth < 720 && !!(open || !this.editPanel.el.hidden));
+    // On wider screens the buttons step left of an open panel instead of covering its lower rows
+    let right = '';
+    if (window.innerWidth >= 720) {
+      const rail = this.side.getBoundingClientRect();
+      let left = Infinity;
+      for (const p of [open, this.editPanel.el.hidden ? null : this.editPanel.el]) {
+        const r = p?.getBoundingClientRect();
+        if (r && r.bottom > rail.top && r.right > window.innerWidth - rail.width - 16) left = Math.min(left, r.left);
+      }
+      if (left < Infinity) right = `${window.innerWidth - left + 8}px`;
+    }
+    this.side.style.right = right;
     for (const p of [this.budgetPanel, this.needsPanel, this.levelPanel, this.editPanel.el]) {
       if (!p.hidden) p.style.maxHeight = `${Math.max(120, floor - p.getBoundingClientRect().top)}px`;
     }
