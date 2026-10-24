@@ -5,6 +5,15 @@ import type { ToolController } from './tools';
 const TAP_SLOP = 8;
 /** Twist needed before a two-finger gesture starts rotating (~9°), so pinches don't turn the view by accident. */
 const TWIST_DEADZONE = 0.16;
+/**
+ * Aiming a road into these screen margins scrolls the map that way, so the road can be pulled past the
+ * top bar and the dock. Fractions of the screen height for top and bottom, pixels for the sides.
+ */
+const EDGE_TOP = 0.16;
+const EDGE_BOTTOM = 0.2;
+const EDGE_SIDE = 56;
+/** Scroll speed at the very edge, screen pixels a second. */
+const EDGE_SPEED = 520;
 
 interface Pointer {
   x: number;
@@ -153,11 +162,36 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
   addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
   addEventListener('blur', () => keys.clear());
 
+  /** How far into each edge margin the aiming finger is, -1..1 on each axis. */
+  const edgePush = (x: number, y: number): { x: number; y: number } => {
+    const r = el.getBoundingClientRect();
+    const top = r.height * EDGE_TOP;
+    const bottom = r.height * EDGE_BOTTOM;
+    const side = Math.min(EDGE_SIDE, r.width * 0.15);
+    const lx = x - r.left;
+    const ly = y - r.top;
+    const px = lx < side ? -(side - lx) / side : lx > r.width - side ? (lx - (r.width - side)) / side : 0;
+    const py = ly < top ? -(top - ly) / top : ly > r.height - bottom ? (ly - (r.height - bottom)) / bottom : 0;
+    return { x: Math.max(-1, Math.min(1, px)), y: Math.max(-1, Math.min(1, py)) };
+  };
+
   // Keyboard camera: WASD / arrows move, Q / E rotate
   let last = performance.now();
   const step = (now: number) => {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
+    if (gesture.kind === 'aim' && ptrs.size === 1 && tools.aimsOnDrag) {
+      const p = [...ptrs.values()][0];
+      const push = edgePush(p.x, p.y);
+      if (push.x || push.y) {
+        const r = el.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const v = EDGE_SPEED * dt;
+        rig.pan(ground(cx, cy), ground(cx - push.x * v, cy - push.y * v));
+        tools.onHover(ground(p.x, p.y));
+      }
+    }
     if (keys.size && !rig.driving) {
       const speed = rig.distance * 1.2 * dt;
       let fx = 0;

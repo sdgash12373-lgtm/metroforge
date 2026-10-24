@@ -23,7 +23,7 @@ import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic } from './traffic';
 import { Transit } from './transit';
-import { CELL, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
+import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
 /** Upkeep of roads, transit and public buildings is billed once every this many days (each bill is one hour's worth). */
@@ -736,16 +736,6 @@ export class City {
     this.landChanged();
   }
 
-  /** Tears down the facility at p and gives back part of what it cost (建設拆除). */
-  demolish(p: Vec2, pad = 2): { ok: boolean; refund: number; reason?: string; what?: string } {
-    const f = this.facilityAt(p, pad);
-    if (!f) return { ok: false, refund: 0, reason: '點一棟公共建設或地標來拆除' };
-    const refund = Math.round(FACILITIES[f.kind].cost * BULLDOZE_REFUND);
-    this.removeFacility(f.id);
-    this.spend(-refund);
-    return { ok: true, refund, what: FACILITIES[f.kind].label };
-  }
-
   facilityAt(p: Vec2, pad = 0): Facility | null {
     for (const f of this.facilities.values()) if (footprintContains(f, p, pad)) return f;
     return null;
@@ -767,7 +757,8 @@ export class City {
   }
 
   /**
-   * Removes what is at p: roads and track you can see first, then an airport, then tunnels.
+   * Removes what is at p: roads and track you can see first, then a facility, an airport or a building
+   * (which also unzones its cell), then tunnels.
    * Returns what was removed so the UI can say so.
    */
   bulldoze(p: Vec2, radius: number): { ok: boolean; refund: number; reason?: string; what?: string } {
@@ -794,6 +785,12 @@ export class City {
       this.landChanged();
       return { ok: true, refund, what: '機場' };
     }
+    const lot = this.buildingAt(p);
+    if (lot) {
+      const what = `${ZONES[lot.zone as Exclude<Zone, Zone.None>].name}建築`;
+      this.clearLot(lot);
+      return { ok: true, refund: 0, what };
+    }
     const any = this.net.segmentAt(p, radius);
     if (any) return this.bulldozeRoad(any.seg);
     for (const k of RAIL_KINDS) {
@@ -801,6 +798,28 @@ export class City {
       if (hit) return this.bulldozeTrack(k, hit.seg);
     }
     return { ok: false, refund: 0 };
+  }
+
+  /** The grown building (or zoned cell) whose cell holds p. */
+  buildingAt(p: Vec2, onlyBuilt = true): Lot | null {
+    for (const seg of this.net.segments.values()) {
+      if (!seg.lots.length || !bboxNear(seg.bbox, p, roadWidth(seg) / 2 + CELL * DEPTH)) continue;
+      for (const lot of seg.lots) {
+        if (lot.blocked || lot.zone === Zone.None || (onlyBuilt && !lot.level)) continue;
+        const dx = p.x - lot.x;
+        const dy = p.y - lot.y;
+        if (Math.abs(dx * lot.dir.x + dy * lot.dir.y) <= CELL / 2 && Math.abs(dy * lot.dir.x - dx * lot.dir.y) <= CELL / 2) return lot;
+      }
+    }
+    return null;
+  }
+
+  /** Knocks the building down and unzones its cell, so nothing grows back there. */
+  private clearLot(lot: Lot): void {
+    lot.level = 0;
+    lot.zone = Zone.None;
+    this.lotsVersion++;
+    this.zoningVersion++;
   }
 
   private bulldozeTrack(kind: RailKind, seg: RoadSegment): { ok: boolean; refund: number; what: string } {

@@ -2,15 +2,15 @@ import { angleGuides } from '../sim/angles';
 import { FACILITIES, type FacilityKind, type GreenKind, type LandmarkKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners } from '../sim/facilities';
 import { ntd } from '../sim/format';
 import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
-import type { City, RoadStyle } from '../sim/city';
+import { BULLDOZE_REFUND, type City, type RoadStyle } from '../sim/city';
 import { LEVELS, UNLOCK } from '../sim/levels';
 import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, dist, lerp, quadPoint } from '../sim/geometry';
 import { HOUR_STEPS, ROUNDABOUT_RADIUS, type RoundaboutSize } from '../sim/city';
-import { RAIL_SPECS, type RailKind } from '../sim/rail';
+import { RAIL_SPECS, type RailKind, TRACK_OFFSET } from '../sim/rail';
 import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type RoadNetwork, type Snap, TUNNEL_DEPTH } from '../sim/roads';
 import { LINE_COLORS, type PathPiece, type Transit } from '../sim/transit';
-import { ZONES, Zone, cellCenter } from '../sim/zoning';
+import { CELL, type Lot, ZONES, Zone, cellCenter } from '../sim/zoning';
 import type { World } from '../render/world';
 
 export type Tool =
@@ -30,8 +30,7 @@ export type Tool =
   | ServiceKind
   | 'landmark'
   | 'greenery'
-  | 'footbridge'
-  | 'demolish';
+  | 'footbridge';
 
 /** Tools that place a public service, landmark, green space or footbridge. */
 export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' =>
@@ -59,6 +58,13 @@ export const STYLE_CHOICES: [StyleChoice, string][] = [
   ['nowalk', '移除人行道'],
 ];
 const styleOf = (c: StyleChoice): RoadStyle => (c === 'walk' ? { walk: true } : c === 'nowalk' ? { walk: false } : { lanes: c });
+
+/** The four corners of a zoned cell. */
+const lotCorners = (lot: Lot): Vec2[] => {
+  const h = CELL / 2;
+  const { x: dx, y: dy } = lot.dir;
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => ({ x: lot.x + (a * dx - b * dy) * h, y: lot.y + (a * dy + b * dx) * h }));
+};
 
 /** Which level the road tools build on. */
 export type RoadLevel = 'ground' | 'elevated' | 'tunnel';
@@ -96,8 +102,10 @@ export class ToolController {
   landmark: LandmarkKind = 'tower85';
   /** which green space the 綠化 tool builds */
   green: GreenKind = 'plaza';
-  /** taps pick a line on the map, and a second tap on it removes it */
-  removingLines = false;
+  /** 拆除 takes out bus and train lines instead of roads and buildings */
+  demolishLines = false;
+  /** line picked for removal: a second tap on it, or the confirm button, removes it */
+  doomedLine: { transit: Transit; id: number } | null = null;
   railAction: RailAction = 'track';
   /** track tools draw curves instead of straight track */
   trackCurve = false;
@@ -130,7 +138,7 @@ export class ToolController {
     this.tool = tool;
     this.cancel();
     this.selectedLine = null;
-    this.removingLines = false;
+    this.doomedLine = null;
     this.selectedFlight = null;
     this.selectedStreet = null;
     this.selectedDistrict = null;
@@ -138,7 +146,7 @@ export class ToolController {
     if (isRail(tool)) this.railAction = this.city.rails[tool].transit.lines.size ? 'line' : this.city.rails[tool].net.segments.size ? this.railAction : 'track';
     this.world.setShowEmptyCells(tool === 'zone');
     this.world.setTrafficOverlay(tool === 'traffic');
-    this.world.setLineOverlay(tool === 'bus' ? 'bus' : isRail(tool) ? tool : null);
+    this.world.setLineOverlay(tool === 'bus' ? 'bus' : isRail(tool) ? tool : tool === 'bulldoze' && this.demolishLines ? 'all' : null);
     this.updateUnderground();
     this.updatePickHeight();
     this.refresh();
@@ -162,7 +170,6 @@ export class ToolController {
     this.cancel();
     this.railAction = action;
     this.selectedLine = null;
-    this.removingLines = false;
     this.updatePickHeight();
     this.updateUnderground();
     this.events.changed();
@@ -312,7 +319,7 @@ export class ToolController {
   /** See-through ground while building tunnels or metro lines, and a cleared city for the metro; tunnels marked on the surface while bulldozing. */
   private updateUnderground(): void {
     this.world.setXray((this.isRoadTool && this.level === 'tunnel') || (this.tool === 'metro' && this.railAction === 'line'));
-    this.world.setUndergroundView(this.tool === 'bulldoze');
+    this.world.setUndergroundView(this.tool === 'bulldoze' && !this.demolishLines);
     // Metro runs over and under the city: buildings and streets would hide the track being laid
     this.world.setDeclutter(this.tool === 'metro');
   }
@@ -386,37 +393,48 @@ export class ToolController {
     this.refresh();
   }
 
-  setRemovingLines(on: boolean): void {
-    this.cancel();
-    this.removingLines = on;
-    this.selectedLine = null;
-    this.events.changed();
-  }
-
-  removeSelectedLine(): void {
-    const t = this.transit;
-    const line = this.selectedLine !== null ? t?.lines.get(this.selectedLine) : undefined;
-    if (!t || !line) return;
-    t.removeLine(line.id);
-    this.selectedLine = null;
-    this.events.toast(`${line.name}已拆除`);
+  /** Switches 拆除 between roads and buildings, and transit lines. */
+  setDemolishLines(on: boolean): void {
+    this.demolishLines = on;
+    this.doomedLine = null;
+    this.world.setLineOverlay(on ? 'all' : null);
+    this.updateUnderground();
     this.events.changed();
     this.refresh();
   }
 
-  /** In removal mode: the first tap on a line picks it, a second tap on the same line removes it. */
-  private tapRemoveLine(p: Vec2): void {
-    const t = this.transit!;
-    const line = t.lineAt(p, Math.max(12, this.world.rig.snapRadius));
-    if (!line) {
-      this.selectedLine = null;
-      this.events.toast('點地圖上的路線或車站');
-    } else if (this.selectedLine === line.id) {
-      this.removeSelectedLine();
+  /** The line picked for removal, if it still runs. */
+  get doomed() {
+    const d = this.doomedLine;
+    const line = d && d.transit.lines.get(d.id);
+    return d && line ? { transit: d.transit, line } : null;
+  }
+
+  removeDoomedLine(): void {
+    const d = this.doomed;
+    this.doomedLine = null;
+    if (d) {
+      d.transit.removeLine(d.line.id);
+      this.events.toast(`${d.transit.mode.label}「${d.line.name}」已拆除`);
+    }
+    this.events.changed();
+    this.refresh();
+  }
+
+  /** The first tap on a line (of any kind of transport) picks it, a second tap on the same line removes it. */
+  private tapDemolishLine(p: Vec2): void {
+    const r = Math.max(12, this.world.rig.snapRadius);
+    const hits = this.city.transits.flatMap((transit) => {
+      const line = transit.lineAt(p, r);
+      return line ? [{ transit, id: line.id }] : [];
+    });
+    const d = this.doomedLine;
+    if (d && hits.some((h) => h.transit === d.transit && h.id === d.id)) {
+      this.removeDoomedLine();
       return;
-    } else this.selectedLine = line.id;
-    this.events.changed();
-    this.refresh();
+    }
+    this.doomedLine = hits[0] ?? null;
+    if (!hits.length) this.events.toast('點地圖上的路線或車站');
   }
 
   selectLine(id: number | null): void {
@@ -478,7 +496,7 @@ export class ToolController {
         return `${this.roundaboutSize} 通圓環 · 約 ${ntd(cost)}　靠近路口或道路會自動吸附（橘色圈），壓到的道路自動接上；車輛逆時針單向繞行`;
       }
       case 'bulldoze':
-        return '點道路、軌道或機場拆除，退還一半費用；藍色是地下的隧道';
+        return this.bulldozeHint();
       case 'traffic': {
         const v = this.city.traffic.vehicles;
         const avg = v.length ? (v.reduce((sum, x) => sum + x.speed, 0) / v.length) * 3.6 : 0;
@@ -501,11 +519,6 @@ export class ToolController {
       case 'greenery':
       case 'footbridge':
         return this.facilityHint();
-      case 'demolish': {
-        const f = this.hover && this.city.facilityAt(this.hover, 2);
-        if (f) return `${FACILITIES[f.kind].label}：點一下拆除，退還 ${ntd(Math.round(FACILITIES[f.kind].cost * 0.5))}`;
-        return '點公共建設、綠化建設或地標拆除，退還一半費用（道路和軌道請用「拆除」）';
-      }
       case 'streetName': {
         const seg = this.selectedStreet !== null ? this.city.net.segments.get(this.selectedStreet) : undefined;
         if (seg) return `${seg.name ?? '這條路'}：在上方輸入路名，整條路（直行穿過路口的部分）都會套用`;
@@ -517,6 +530,19 @@ export class ToolController {
         return '點地圖新增區域並命名，拉桿調整範圍；點區域中央可以修改';
       }
     }
+  }
+
+  private bulldozeHint(): string {
+    if (this.demolishLines) {
+      const d = this.doomed;
+      if (d) return `${d.line.name}：再點一次路線或按「確定拆除」；沒有其他路線使用的車站會一起移除`;
+      return '點地圖上的公車、捷運、火車或高鐵路線選取，再點一次拆除';
+    }
+    const f = this.hover && this.city.facilityAt(this.hover, 2);
+    if (f) return `${FACILITIES[f.kind].label}：點一下拆除，退還 ${ntd(Math.round(FACILITIES[f.kind].cost * BULLDOZE_REFUND))}`;
+    const lot = this.hover && this.city.buildingAt(this.hover);
+    if (lot) return `${ZONES[lot.zone as Exclude<Zone, Zone.None>].name}建築：點一下拆除，這格的分區會一起清除`;
+    return '點道路、軌道、公共建設、機場或房子拆除，道路和建設退還一半費用；藍色是地下的隧道';
   }
 
   /** The kind of facility the active tool places. */
@@ -586,10 +612,6 @@ export class ToolController {
     if (n === 1) return `已設 1 站（每站 ${ntd(t.mode.stopCost)}）；沿著路線點下一站`;
     if (n > 1) return t.mode.reverses ? `已設 ${n} 站；點「完成路線」開通，列車在兩端折返` : `已設 ${n} 站；點第一站或「完成路線」讓公車繞回起點`;
     const picked = this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
-    if (this.removingLines) {
-      if (picked) return `${picked.name}：再點一次路線或按「確定拆除」（沒有其他路線使用的車站會一起移除）`;
-      return t.lines.size ? `拆除路線：點地圖上的${label}路線或車站選取` : `沒有${label}路線可以拆除`;
-    }
     if (picked) return `${picked.name}：${label} ${t.buses(picked.id).length} 列 · 載客 ${picked.riders.toLocaleString()} 人`;
     if (!t.lines.size) {
       if (t.mode.streetsOnly) return '公車：點地面道路設第一個站，依序點下一站，最後點回第一站完成路線';
@@ -656,12 +678,10 @@ export class ToolController {
     else if (this.tool === 'roundabout') {
       const r = this.city.buildRoundabout(this.roundaboutCenter(p).p, this.roundaboutSize);
       this.events.toast(r.ok ? `圓環完成，花費 ${ntd(r.cost)}` : (r.reason ?? '這裡不能蓋圓環'));
-    } else if (this.tool === 'demolish') {
-      const r = this.city.demolish(p);
-      this.events.toast(r.ok ? `${r.what}已拆除，退還 ${ntd(r.refund)}` : (r.reason ?? '這裡沒有建設'));
-    } else if (this.tool === 'bulldoze') {
+    } else if (this.tool === 'bulldoze' && this.demolishLines) this.tapDemolishLine(p);
+    else if (this.tool === 'bulldoze') {
       const r = this.city.bulldoze(p, Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6));
-      if (r.ok) this.events.toast(`${r.what ?? '道路'}已拆除，退還 ${ntd(r.refund)}`);
+      if (r.ok) this.events.toast(r.refund ? `${r.what ?? '道路'}已拆除，退還 ${ntd(r.refund)}` : `${r.what}已拆除`);
       else if (r.reason) this.events.toast(r.reason);
     } else if (this.tool === 'zone') this.onPaint(p);
     this.events.changed();
@@ -730,10 +750,6 @@ export class ToolController {
   }
 
   private tapLine(p: Vec2): void {
-    if (this.removingLines) {
-      this.tapRemoveLine(p);
-      return;
-    }
     const transit = this.transit!;
     const r = this.world.rig.snapRadius;
     const first = this.lineDraft[0];
@@ -761,7 +777,7 @@ export class ToolController {
     const hoverSnap = road?.snap ?? null;
     w.setGuideLines(road?.guides ?? []);
     // Without hover (touch), keep marking where the road being drawn starts
-    const marker = hoverSnap?.p ?? (isRoad ? (this.draft.start?.p ?? null) : this.tool === 'bulldoze' ? this.hover : null);
+    const marker = hoverSnap?.p ?? (isRoad ? (this.draft.start?.p ?? null) : this.tool === 'bulldoze' && !this.demolishLines ? this.hover : null);
     const net = this.net;
     const markerHeight = hoverSnap ? net.snapHeight(hoverSnap, this.height) : this.draft.start ? net.snapHeight(this.draft.start, this.height) : 0;
     w.setCursor(marker, hoverSnap ? hoverSnap.kind !== 'free' || !!road?.guides.length : isRoad, isRoad ? markerHeight : 0);
@@ -794,10 +810,17 @@ export class ToolController {
       const kind = this.facilityKind;
       const spot = this.city.facilitySpot(kind, this.hover);
       w.setFootprint(facilityCorners({ kind, ...spot }), !this.city.facilityProblem(kind, spot.p, spot.angle));
-    } else if (this.tool === 'demolish' && this.hover) {
+    } else if (this.tool === 'bulldoze' && !this.demolishLines && this.hover) {
+      // Outline the building that a tap would knock down
       const f = this.city.facilityAt(this.hover, 2);
-      w.setFootprint(f ? facilityCorners(f) : null, false);
+      const lot = f ? null : this.city.buildingAt(this.hover);
+      w.setFootprint(f ? facilityCorners(f) : lot ? lotCorners(lot) : null, false);
     } else w.setFootprint(null, true);
+    const doomed = this.tool === 'bulldoze' ? this.doomed : null;
+    if (doomed) {
+      const rail = doomed.transit !== this.city.transit;
+      w.setDraftLine(doomed.line.path, 0xff6b5b, doomed.transit.net, rail ? TRACK_OFFSET : undefined, 4);
+    }
     // Service areas: the kind being placed, existing ones and the planned one
     const kind = this.facilityKind;
     if (kind) {

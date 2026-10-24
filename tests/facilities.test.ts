@@ -110,4 +110,19 @@ describe('upkeep of roads and public buildings', () => {
     expect(city.lastUpkeepBill).toBeCloseTo(FACILITIES.hospital.upkeep * HOUR_STEPS + roads * ROAD_UPKEEP * HOUR_STEPS, 3);
     expect(city.money).toBeLessThan(before - city.lastUpkeepBill * 0.5);
   });
+
+  it('拆除 knocks down a grown building and unzones its cell, leaving the road', () => {
+    const city = street();
+    city.paint({ x: 0, y: 20 }, 30, Zone.Commercial);
+    const lot = [...city.net.segments.values()].flatMap((s) => s.lots).find((l) => l.zone === Zone.Commercial && !l.blocked && l.depth === 1)!;
+    expect(city.bulldoze(lot, 4).ok).toBe(false);
+    lot.level = 2;
+    const roads = city.net.segments.size;
+    const r = city.bulldoze(lot, 4);
+    expect(r.ok).toBe(true);
+    expect(r.what).toBe('商業建築');
+    expect(lot.level).toBe(0);
+    expect(lot.zone).toBe(Zone.None);
+    expect(city.net.segments.size).toBe(roads);
+  });
 });

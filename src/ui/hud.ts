@@ -33,7 +33,6 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
     { id: 'landmark', label: '地標' },
     { id: 'greenery', label: '綠化' },
     { id: 'footbridge', label: '天橋' },
-    { id: 'demolish', label: '拆除建設' },
   ],
   names: [
     { id: 'streetName', label: '路名' },
@@ -50,12 +49,13 @@ const TOOLS: { id: DockItem; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
   { id: 'roads', label: '道路', key: '2' },
   { id: 'zone', label: '分區', key: '3' },
-  { id: 'bulldoze', label: '拆除', key: '4' },
-  { id: 'traffic', label: '交通', key: '5' },
-  { id: 'transport', label: '運輸', key: '6' },
-  { id: 'build', label: '建設', key: '7' },
-  { id: 'names', label: '命名', key: '8' },
+  { id: 'transport', label: '運輸', key: '4' },
+  { id: 'build', label: '建設', key: '5' },
+  { id: 'traffic', label: '交通', key: '6' },
+  { id: 'names', label: '命名', key: '7' },
 ];
+/** 拆除 has its own button beside the map, and this key */
+const DEMOLISH_KEY = 'x';
 
 export const SPEEDS = [0, 1, 3] as const;
 
@@ -93,6 +93,9 @@ export class Hud {
   private sub: HTMLElement;
   private toastEl: HTMLElement;
   private toolButtons = new Map<DockItem, HTMLButtonElement>();
+  private demolishBtn: HTMLButtonElement;
+  private beforeDemolish: Tool = 'pan';
+  private side: HTMLElement;
   /** second row under 道路 (straight, curved, roundabout) and 運輸 (bus, metro, train, high-speed, airport) */
   private kinds: HTMLElement;
   /** tool each grouped dock button returns to */
@@ -131,7 +134,7 @@ export class Hud {
     const logo = el('img');
     logo.src = logoUrl;
     logo.alt = '';
-    brand.append(logo, el('span', '', 'Metroforge'));
+    brand.append(logo, el('span', 'wide-only', 'Metroforge'));
     top.append(brand);
     const stat = (label: string) => {
       const box = el('div', 'stat');
@@ -158,7 +161,7 @@ export class Hud {
     top.append(rci);
 
     const speeds = el('div', 'speeds');
-    ['暫停', '▶', '▶▶'].forEach((label, i) => {
+    ['❚❚', '▶', '▶▶'].forEach((label, i) => {
       const b = el('button', 'chip', label);
       b.type = 'button';
       b.setAttribute('aria-label', ['暫停', '正常速度', '快轉'][i]);
@@ -167,23 +170,6 @@ export class Hud {
       this.speedButtons.push(b);
     });
     top.append(speeds);
-
-    const lock = el('button', 'chip', '建造模式');
-    lock.type = 'button';
-    lock.title = '鎖住視角的旋轉與傾斜，拉路時不會被手勢轉動（仍可移動、縮放）';
-    lock.onclick = () => {
-      const on = actions.toggleBuildMode();
-      lock.setAttribute('aria-pressed', String(on));
-      this.toast(on ? '建造模式：視角已鎖定，只能移動與縮放' : '已解除視角鎖定');
-    };
-    this.lockButton = lock;
-    top.append(lock);
-
-    const driveBtn = el('button', 'chip', '🚗 巡查');
-    driveBtn.type = 'button';
-    driveBtn.title = '第一人稱開車巡查城市（電腦 WASD、手機虛擬搖桿）';
-    driveBtn.onclick = () => actions.drive();
-    top.append(driveBtn);
 
     const levelBtn = el('button', 'chip level-chip', LEVELS[0].name);
     levelBtn.type = 'button';
@@ -204,7 +190,9 @@ export class Hud {
     this.needsBtn = needsBtn;
     top.append(needsBtn);
 
-    const menu = el('button', 'chip', '選單');
+    const menu = el('button', 'chip menu-chip');
+    menu.append(el('span', '', '☰'), el('span', 'wide-only', ' 選單'));
+    menu.setAttribute('aria-label', '選單');
     menu.type = 'button';
     menu.onclick = () => actions.openMenu();
     top.append(menu);
@@ -324,7 +312,7 @@ export class Hud {
     const bottom = el('div', 'bottom');
     this.hint = el('div', 'hint panel');
     this.sub = el('div', 'dock sub panel');
-    this.kinds = el('div', 'dock sub panel');
+    this.kinds = el('div', 'dock sub kinds panel');
     for (const k of Object.values(GROUPS).flat()) {
       const b = el('button', 'tool');
       b.type = 'button';
@@ -334,7 +322,7 @@ export class Hud {
       b.onclick = () => this.selectTool(k.id);
       this.kinds.append(b);
     }
-    const dock = el('nav', 'dock panel');
+    const dock = el('nav', 'dock main panel');
     for (const t of TOOLS) {
       const b = el('button', 'tool');
       b.type = 'button';
@@ -343,6 +331,25 @@ export class Hud {
       dock.append(b);
       this.toolButtons.set(t.id, b);
     }
+    // Beside the map on the right: 拆除, the view lock, driving and the compass
+    const side = el('div', 'side');
+    const sideButton = (icon: string, label: string, title: string, onClick: () => void, cls = '') => {
+      const b = el('button', `side-btn panel ${cls}`);
+      b.type = 'button';
+      b.title = title;
+      b.setAttribute('aria-label', label);
+      b.append(el('i', '', icon), el('span', '', label));
+      b.onclick = onClick;
+      side.append(b);
+      return b;
+    };
+    this.demolishBtn = sideButton('🗑', '拆除', `拆除道路、軌道、路線、建設和房子（${DEMOLISH_KEY.toUpperCase()}）`, () => this.toggleDemolish(), 'danger');
+    this.lockButton = sideButton('🔒', '鎖視角', '鎖住視角的旋轉與傾斜，拉路時不會被手勢轉動（仍可移動、縮放）', () => {
+      const on = actions.toggleBuildMode();
+      this.lockButton.setAttribute('aria-pressed', String(on));
+      this.toast(on ? '視角已鎖定，只能移動與縮放' : '已解除視角鎖定');
+    });
+    sideButton('🚗', '巡查', '第一人稱開車巡查城市（電腦 WASD、手機虛擬搖桿）', () => actions.drive());
     this.compass = el('button', 'compass panel');
     this.compass.type = 'button';
     this.compass.title = '方位：點一下讓北方朝上';
@@ -352,9 +359,11 @@ export class Hud {
     this.dial.append(el('span', 'needle'));
     this.compass.append(this.dial);
     this.compass.onclick = () => actions.faceNorth();
-    bottom.append(this.compass, this.hint, this.sub, this.kinds, dock);
+    side.append(this.compass);
+    this.side = side;
+    bottom.append(this.hint, this.sub, this.kinds, dock);
     this.bottomBar = bottom;
-    root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.levelPanel, this.editPanel.el, this.toastEl, bottom);
+    root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.levelPanel, this.editPanel.el, this.toastEl, side, bottom);
 
     addEventListener('keydown', (e) => {
       const body = document.body.classList;
@@ -365,6 +374,7 @@ export class Hud {
       }
       const t = TOOLS.find((x) => x.key === e.key);
       if (t) this.selectTool(this.toolFor(t.id));
+      if (e.key.toLowerCase() === DEMOLISH_KEY || e.key === 'Delete') this.toggleDemolish();
       if (e.key === ' ') {
         e.preventDefault();
         actions.setSpeed(this.speed === 0 ? 1 : 0);
@@ -374,6 +384,15 @@ export class Hud {
 
   private toolFor(item: DockItem): Tool {
     return item in GROUPS ? this.lastTool[item as Group] : (item as Tool);
+  }
+
+  /** 拆除 on, or back to the tool used before it. */
+  private toggleDemolish(): void {
+    if (this.tools.tool === 'bulldoze') this.selectTool(this.beforeDemolish);
+    else {
+      this.beforeDemolish = this.tools.tool;
+      this.selectTool('bulldoze');
+    }
   }
 
   selectTool(t: Tool): void {
@@ -395,6 +414,9 @@ export class Hud {
     const tool = this.tools.tool;
     const group = groupOf(tool);
     for (const [id, b] of this.toolButtons) b.setAttribute('aria-pressed', String(id === group || id === tool));
+    this.demolishBtn.setAttribute('aria-pressed', String(tool === 'bulldoze'));
+    // While a road or track is being drawn only its own options stay, so the dock doesn't cover the map
+    document.body.classList.toggle('road-drawing', this.tools.drawing);
     this.kinds.hidden = !group;
     for (const b of this.kinds.querySelectorAll<HTMLButtonElement>('button')) {
       b.hidden = b.dataset.group !== group;
@@ -477,6 +499,12 @@ export class Hud {
       } else this.renderLineDock(option);
     } else if (this.tools.tool === 'airport') {
       this.renderAirportDock(option);
+    } else if (this.tools.tool === 'bulldoze') {
+      const t = this.tools;
+      option('道路與建築', !t.demolishLines, () => t.setDemolishLines(false));
+      option('大眾運輸路線', t.demolishLines, () => t.setDemolishLines(true));
+      const d = t.doomed;
+      if (d) option(`確定拆除「${d.line.name}」`, false, () => t.removeDoomedLine(), d.line.color);
     } else if (this.tools.tool === 'landmark') {
       const t = this.tools;
       const built = new Set([...(this.city?.facilities.values() ?? [])].map((f) => f.kind));
@@ -561,22 +589,12 @@ export class Hud {
       option('取消', false, () => t.cancel());
       return;
     }
-    // Removing lines: the controls come first so they are in reach on a phone
-    if (t.removingLines) {
-      option('完成拆除', true, () => t.setRemovingLines(false));
-      const picked = t.selectedLine !== null ? transit.lines.get(t.selectedLine) : undefined;
-      if (picked) option(`確定拆除「${picked.name}」`, false, () => t.removeSelectedLine(), picked.color);
-      this.sub.append(el('span', 'divider'));
-    }
     for (const line of transit.lines.values()) {
       const label = `${line.name} · ${line.stops.length} 站${line.ok ? '' : ' · 中斷'}`;
       option(label, t.selectedLine === line.id, () => t.selectLine(t.selectedLine === line.id ? null : line.id), line.color);
     }
-    if (transit.lines.size && !t.removingLines) {
-      this.sub.append(el('span', 'divider'));
-      option('拆除路線', false, () => t.setRemovingLines(true));
-    }
     if (transit.lines.size) {
+      this.sub.append(el('span', 'divider'));
       // Two taps, like 新城市, so a stray tap can't wipe every line
       option(this.clearArmed ? '確定清除全部？' : '清除全部路線', false, () => {
         if (!this.clearArmed) {
@@ -598,8 +616,7 @@ export class Hud {
   private updateEditor(city: City): void {
     const t = this.tools;
     const transit = t.transit;
-    // While removing lines the dock asks to confirm instead, and the map stays clear to tap
-    const line = transit && t.selectedLine !== null && !t.removingLines ? transit.lines.get(t.selectedLine) : undefined;
+    const line = transit && t.selectedLine !== null ? transit.lines.get(t.selectedLine) : undefined;
     const flight = t.tool === 'airport' && t.selectedFlight !== null ? city.aviation.flights.get(t.selectedFlight) : undefined;
     const street = t.tool === 'streetName' && t.selectedStreet !== null ? city.net.segments.get(t.selectedStreet) : undefined;
     const district = t.tool === 'district' && t.selectedDistrict !== null ? city.districts.get(t.selectedDistrict) : undefined;
@@ -965,6 +982,9 @@ export class Hud {
       if (r.height) floor = Math.min(floor, r.top);
     }
     floor -= 8;
+    // The side buttons sit just above the dock, and step aside on phones while a panel is open
+    this.side.style.bottom = `${window.innerHeight - floor}px`;
+    this.side.classList.toggle('covered', window.innerWidth < 720 && !!(open || !this.editPanel.el.hidden));
     for (const p of [this.budgetPanel, this.needsPanel, this.levelPanel, this.editPanel.el]) {
       if (!p.hidden) p.style.maxHeight = `${Math.max(120, floor - p.getBoundingClientRect().top)}px`;
     }
