@@ -131,12 +131,32 @@ export class StationLayer {
             metroEntrance(new Frame(b, spot.x, spot.y, spot.dx, spot.dy), h, color);
           }
         }
-      } else if (sys.kind === 'train') trainStation(f, h, color);
-      else hsrStation(f, h, color);
+      } else {
+        // The station building stands on the side of the tracks facing the town: turn the frame round if the
+        // streets are on the other side
+        const side = townSide(streets, p, d, sys.kind === 'train' ? 22 : 30);
+        const g = side > 0 ? f : new Frame(b, p.x, p.y, -d.x, -d.y);
+        if (sys.kind === 'train') trainStation(g, h, color);
+        else hsrStation(g, h, color);
+      }
     }
     this.mesh.geometry.dispose();
     this.mesh.geometry = b.geometry();
   }
+}
+
+/**
+ * Which side of a track at `p`, heading `d`, has streets nearer: +1 for the side the station frame's +v points to,
+ * -1 for the other. `reach` is how far out the station building stands.
+ */
+export function townSide(net: RoadNetwork, p: { x: number; y: number }, d: { x: number; y: number }, reach: number): 1 | -1 {
+  const near = (side: number) => {
+    const q = { x: p.x - d.y * side * reach, y: p.y + d.x * side * reach };
+    let best = Infinity;
+    for (const seg of net.segments.values()) if (net.isStreet(seg)) best = Math.min(best, closestOnSamples(seg.samples, q).d);
+    return best;
+  };
+  return near(-1) < near(1) ? -1 : 1;
 }
 
 /** How far around its default spot an entrance looks for a street to stand beside. */
