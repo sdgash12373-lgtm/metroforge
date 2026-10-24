@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { closestOnSamples, quadPoint, quadTangent, tAtLength } from '../sim/geometry';
+import { closestOnSamples, quadPoint } from '../sim/geometry';
 import type { RailSystem } from '../sim/rail';
+import { stationPose, stationSide } from '../sim/stations';
 import { type RoadNetwork, asphaltWidth, roadWidth } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { Builder } from './roadMesh';
@@ -111,13 +112,9 @@ export class StationLayer {
     const colorOf = new Map<number, number>();
     for (const l of sys.transit.lines.values()) for (const id of l.stops) if (!colorOf.has(id)) colorOf.set(id, l.color);
     for (const stop of sys.transit.stops.values()) {
-      const seg = stop.at && sys.net.segments.get(stop.at.seg);
-      if (!seg || !stop.at) continue;
-      const q = sys.net.quad(seg);
-      const t = tAtLength(seg.samples, stop.at.s);
-      const p = quadPoint(q, t);
-      const d = quadTangent(q, t);
-      const h = sys.net.heightAt(seg, t);
+      const pose = stationPose(sys, stop);
+      if (!pose) continue;
+      const { p, d, h } = pose;
       const f = new Frame(b, p.x, p.y, d.x, d.y);
       const color = colorOf.get(stop.id) ?? 0x9aa5b1;
       if (sys.kind === 'metro') {
@@ -132,9 +129,9 @@ export class StationLayer {
           }
         }
       } else {
-        // The station building stands on the side of the tracks facing the town: turn the frame round if the
-        // streets are on the other side
-        const side = townSide(streets, p, d, sys.kind === 'train' ? 22 : 30);
+        // The station building stands on the side of the tracks facing the town, off the roads: turn the frame
+        // round if that is the other side
+        const side = stationSide(streets, sys.kind, pose);
         const g = side > 0 ? f : new Frame(b, p.x, p.y, -d.x, -d.y);
         if (sys.kind === 'train') trainStation(g, h, color);
         else hsrStation(g, h, color);
@@ -143,20 +140,6 @@ export class StationLayer {
     this.mesh.geometry.dispose();
     this.mesh.geometry = b.geometry();
   }
-}
-
-/**
- * Which side of a track at `p`, heading `d`, has streets nearer: +1 for the side the station frame's +v points to,
- * -1 for the other. `reach` is how far out the station building stands.
- */
-export function townSide(net: RoadNetwork, p: { x: number; y: number }, d: { x: number; y: number }, reach: number): 1 | -1 {
-  const near = (side: number) => {
-    const q = { x: p.x - d.y * side * reach, y: p.y + d.x * side * reach };
-    let best = Infinity;
-    for (const seg of net.segments.values()) if (net.isStreet(seg)) best = Math.min(best, closestOnSamples(seg.samples, q).d);
-    return best;
-  };
-  return near(-1) < near(1) ? -1 : 1;
 }
 
 /** How far around its default spot an entrance looks for a street to stand beside. */
