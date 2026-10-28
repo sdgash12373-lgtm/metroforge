@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { City, FOREST_REACH, GOODS_PER_JOB, PORT_CAPACITY, REGION_COST, TRADE_SHARE, budgetTotals, freewayTown } from '../src/sim/city';
 import { FACILITIES } from '../src/sim/facilities';
 import { UNLOCK } from '../src/sim/levels';
-import { KAOHSIUNG } from '../src/sim/terrain';
+import { KAOHSIUNG, KAOHSIUNG_CLASSIC } from '../src/sim/terrain';
 import { ZONES, Zone } from '../src/sim/zoning';
 
 const free = (x: number, y: number) => ({ kind: 'free' as const, p: { x, y } });
@@ -69,20 +69,26 @@ describe('regions', () => {
     expect([...City.deserialize(old).regions]).toEqual(['kaohsiung']);
   });
 
-  it('keeps what old saves built beyond the Gaoping River, opening Pingtung for them', () => {
-    // Built while the whole square was open: a zoned street now on the Pingtung side
-    const city = new City(T);
+  it('keeps what old saves built beyond the Gaoping River on the ground they were built on', () => {
+    // Built on the old map, where Kaohsiung's ground ran on across the river
+    const city = new City(KAOHSIUNG_CLASSIC);
     city.money = 1e9;
     city.regions = new Set(['kaohsiung', 'pingtung']);
-    expect(T.region(1100, 1100)).toBe('pingtung');
-    expect(city.buildRoad(free(1100, 1100), null, free(1200, 1100), true).ok).toBe(true);
-    city.paint({ x: 1150, y: 1100 }, 40, Zone.ResidentialLow);
-    for (const l of lots(city)) if (l.zone) l.level = 2;
-    const old = { ...city.serialize(), v: 8, regions: undefined };
+    expect(T.region(1170, 1890)).toBe('pingtung');
+    expect(city.buildRoad(free(1170, 1890), null, free(1260, 1970), true).ok).toBe(true);
+    city.paint({ x: 1215, y: 1930 }, 60, Zone.ResidentialLow);
+    for (const l of lots(city)) if (l.zone && !l.blocked) l.level = 2;
+    const built = lots(city).filter((l) => l.level === 2).length;
+    expect(built).toBeGreaterThan(0);
+    const old = { ...city.serialize(), v: 8, terrain: 'kaohsiung' as const, regions: undefined };
     const copy = City.deserialize(old);
+    expect(copy.terrain).toBe(KAOHSIUNG_CLASSIC);
     expect([...copy.regions].sort()).toEqual(['kaohsiung', 'pingtung']);
-    expect(lots(copy).filter((l) => l.level === 2).length).toBe(lots(city).filter((l) => l.level === 2).length);
-    expect(lots(copy).some((l) => l.level === 2)).toBe(true);
+    expect(lots(copy).filter((l) => l.level === 2).length).toBe(built);
+    // and keeps that ground from then on
+    expect(City.deserialize(copy.serialize()).terrain).toBe(KAOHSIUNG_CLASSIC);
+    // Old saves that stayed on the Kaohsiung side get the new map
+    expect(City.deserialize({ ...new City(T).serialize(), v: 8, regions: undefined }).terrain).toBe(T);
   });
 
   it('can start in Pingtung with Kaohsiung locked', () => {

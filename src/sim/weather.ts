@@ -50,7 +50,7 @@ const TEMPERATE: Climate = {
   },
 };
 
-const CLIMATES: Record<TerrainName, Climate> = { kaohsiung: SUBTROPICAL, flat: TEMPERATE };
+const CLIMATES: Record<TerrainName, Climate> = { kaohsiung: SUBTROPICAL, 'kaohsiung-classic': SUBTROPICAL, flat: TEMPERATE };
 
 /** Game time → calendar month (0-11) and hour (0-24). */
 export function clock(days: number): { month: number; hour: number } {

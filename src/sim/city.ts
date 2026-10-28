@@ -24,7 +24,7 @@ import { type StationPose, stationCovers, stationPose, stationSide } from './sta
 import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
-import { FLAT, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
+import { FLAT, KAOHSIUNG, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic } from './traffic';
 import { Transit } from './transit';
 import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, isIndustry, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
@@ -1682,7 +1682,7 @@ export class City {
 
   static deserialize(data: SaveData): City {
     if (data.v < 1 || data.v > SAVE_VERSION) throw new Error(`unsupported save version ${data.v}`);
-    const city = new City(TERRAINS[data.terrain ?? 'flat'] ?? FLAT);
+    const city = new City(TERRAINS[legacyTerrain(data) ?? data.terrain ?? 'flat'] ?? FLAT);
     city.money = data.money;
     city.steps = Math.round(data.day * DAY_STEPS);
     if (data.name) city.name = data.name;
@@ -1728,6 +1728,21 @@ export class City {
     city.measure();
     return city;
   }
+}
+
+/**
+ * Saves from before regions that built across the Gaoping River: they keep the Kaohsiung ground they
+ * were built on there, as the new Pingtung's rivers and coast would sink some of it.
+ */
+function legacyTerrain(data: SaveData): TerrainName | null {
+  if (data.regions || data.terrain !== 'kaohsiung') return null;
+  const points: [number, number][] = [
+    ...data.nodes.map(([, x, y]) => [x, y] as [number, number]),
+    ...RAIL_KINDS.flatMap((k) => (data.rails?.[k]?.nodes ?? []).map(([, x, y]) => [x, y] as [number, number])),
+    ...(data.facilities ?? []).map(([, , x, y]) => [x, y] as [number, number]),
+    ...(data.airports ?? []).map(([, x, y]) => [x, y] as [number, number]),
+  ];
+  return points.some(([x, y]) => KAOHSIUNG.region(x, y) === 'pingtung') ? 'kaohsiung-classic' : null;
 }
 
 function saveNet(net: RoadNetwork): NetSave {
