@@ -20,10 +20,10 @@ import { type StationPose, stationCovers, stationPose, stationSide } from './sta
 import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
-import { FLAT, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
+import { FLAT, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic } from './traffic';
 import { Transit } from './transit';
-import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
+import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
 /** Upkeep of roads, transit and public buildings is billed once every this many days (each bill is one hour's worth). */
@@ -53,6 +53,43 @@ export const GATE: Vec2 = { x: -480, y: 60 };
  * whose two ramps come down at `exit` and an access road running on into town.
  */
 export const FREEWAY = { x: -700, north: -1000, south: 700, ramp: 160, exit: { x: -560, y: 0 }, town: { x: -304, y: 0 }, name: '國道 1 號' };
+
+/**
+ * A freeway laid out along `axis` (pointing to its north end) through `center`: the main line runs `north`
+ * and `south` metres each way, the ramps meet it `ramp` metres either side of the middle, and the
+ * interchange (`exit`) and the end of the access road (`town`) lie that far off it towards `side`.
+ */
+export interface FreewaySpec {
+  center: Vec2;
+  axis: Vec2;
+  side: Vec2;
+  north: number;
+  south: number;
+  ramp: number;
+  exit: number;
+  town: number;
+  name: string;
+}
+
+const RS = Math.SQRT1_2;
+/** Each region's freeway: 國道 1 號 west of Kaohsiung, 國道 3 號 up the Pingtung Plain east of Pingtung city. */
+export const FREEWAYS: Record<RegionName, FreewaySpec> = {
+  kaohsiung: { center: { x: FREEWAY.x, y: 0 }, axis: { x: 0, y: -1 }, side: { x: 1, y: 0 }, north: -FREEWAY.north, south: FREEWAY.south, ramp: FREEWAY.ramp, exit: 140, town: 396, name: FREEWAY.name },
+  // Turned axes: up the plain (u) and away from the Gaoping River (v), the town on the river side
+  pingtung: { center: { x: 1900 * RS, y: 1900 * RS }, axis: { x: RS, y: -RS }, side: { x: -RS, y: -RS }, north: 1300, south: 1250, ramp: 160, exit: 140, town: 400, name: '國道 3 號' },
+};
+
+/** A point `a` metres along a freeway and `c` across it, towards its town. */
+export function freewayPoint(f: FreewaySpec, a: number, c: number): Vec2 {
+  // + 0 turns -0 into 0
+  return { x: f.center.x + f.axis.x * a + f.side.x * c + 0, y: f.center.y + f.axis.y * a + f.side.y * c + 0 };
+}
+
+/** Where a region's access road ends, on a cell centre: a new city starts here. */
+export const freewayTown = (region: RegionName): Vec2 => cellCenter(freewayPoint(FREEWAYS[region], 0, FREEWAYS[region].town));
+
+/** Price of opening another region of the map, and the rank it can be opened at. */
+export const REGION_COST = 1_000_000;
 export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
 /** Length of the short roads a new roundabout puts out at each exit. */
 const SPOKE_LENGTH = 30;
@@ -526,22 +563,24 @@ export class City {
   }
 
   /**
-   * Lays out a new city's freeway, free: the main line on viaducts (two lanes each way) leaving the map at
+   * Lays out a region's freeway, free: the main line on viaducts (two lanes each way) leaving the map at
    * both ends, two ramps down to the interchange, and an access road into town.
    */
-  buildFreeway(): void {
+  buildFreeway(region: RegionName = 'kaohsiung'): void {
     const net = this.net;
-    const { x, north, south, ramp, exit, town } = FREEWAY;
+    const f = FREEWAYS[region];
+    const at = (a: number, c: number) => freewayPoint(f, a, c);
     const free = (p: Vec2): Snap => ({ kind: 'free', p });
-    const main = net.addRoad(free({ x, y: north }), null, free({ x, y: south }), ELEVATED_HEIGHT);
-    for (const s of main) Object.assign(s, { lanes: 2, highway: true, name: FREEWAY.name });
+    const main = net.addRoad(free(at(f.north, 0)), null, free(at(-f.south, 0)), ELEVATED_HEIGHT);
+    for (const s of main) Object.assign(s, { lanes: 2, highway: true, name: f.name });
     const ends = [main[0].a, main[main.length - 1].b];
-    const access = net.addRoad(free(exit), null, free(town), 0);
+    const exit = region === 'kaohsiung' ? at(0, f.exit) : cellCenter(at(0, f.exit));
+    const access = net.addRoad(free(exit), null, free(region === 'kaohsiung' ? at(0, f.town) : freewayTown(region)), 0);
     for (const s of access) applyStyle(net, s, { lanes: 2 });
     const g = net.node(access[0].a);
     for (const dir of [-1, 1]) {
-      const on = net.snap({ x, y: exit.y + dir * ramp }, 1, ELEVATED_HEIGHT);
-      const control = { x: x + 10, y: exit.y + dir * ramp * 0.3 };
+      const on = net.snap(at(-dir * f.ramp, 0), 1, ELEVATED_HEIGHT);
+      const control = at(-dir * f.ramp * 0.3, 10);
       for (const s of net.addRoad({ kind: 'node', node: g, p: g.p }, control, on, 0)) s.highway = true;
     }
     for (const n of ends) this.outside.add(n);

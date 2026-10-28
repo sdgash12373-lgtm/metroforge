@@ -7,11 +7,22 @@ export type ServiceKind = 'park' | 'school' | 'police' | 'fire' | 'hospital';
 export type LandmarkKind = 'tower85' | 'cityHall' | 'dragonTiger' | 'ferrisWheel' | 'arena' | 'themePark' | 'mall';
 /** 綠化建設: green buildings and open spaces that count as parks for the homes around them. */
 export type GreenKind = 'greenBuilding' | 'plaza' | 'ecoPark';
-export type FacilityKind = ServiceKind | LandmarkKind | GreenKind | 'footbridge';
+/** 港口 on the coastline: 貨櫃港 ships the city's industry abroad, 旅遊港 brings visitors by ferry. */
+export type PortKind = 'cargoPort' | 'cruisePort';
+export type FacilityKind = ServiceKind | LandmarkKind | GreenKind | PortKind | 'footbridge';
 
 export const SERVICE_KINDS: ServiceKind[] = ['park', 'school', 'police', 'fire', 'hospital'];
 export const LANDMARK_KINDS: LandmarkKind[] = ['tower85', 'cityHall', 'dragonTiger', 'ferrisWheel', 'arena', 'themePark', 'mall'];
 export const GREEN_KINDS: GreenKind[] = ['greenBuilding', 'plaza', 'ecoPark'];
+export const PORT_KINDS: PortKind[] = ['cargoPort', 'cruisePort'];
+export const isPort = (k: FacilityKind): k is PortKind => k === 'cargoPort' || k === 'cruisePort';
+
+/**
+ * A port's depth runs from the road (-d/2) out to sea (+d/2): the part by the road must be land, the far
+ * part sea, where the ships berth.
+ */
+export const PORT_LAND = 0.2;
+export const PORT_BERTH = 0.3;
 
 export interface FacilitySpec {
   label: string;
@@ -52,6 +63,8 @@ export const FACILITIES: Record<FacilityKind, FacilitySpec> = {
   plaza: { label: '綠地廣場', cost: 15000, upkeep: 60, w: 36, d: 36, radius: 200, serves: 'park', unlock: 'greenery', color: 0x9bd77f, blurb: '草地、樹蔭和噴水池的市民廣場' },
   ecoPark: { label: '生態公園', cost: 60000, upkeep: 120, w: 80, d: 70, radius: 420, serves: 'park', unlock: 'greenery', color: 0x3f9a4a, blurb: '濕地、步道和大片樹林，範圍比公園大很多' },
   footbridge: { label: '天橋', cost: 8000, upkeep: 20, w: 5, d: 30, radius: 160, unlock: 'footbridge', color: 0xd9d4c7, blurb: '跨過大馬路的行人天橋，讓附近更好走' },
+  cargoPort: { label: '貨櫃港', cost: 3_000_000, upkeep: 900, w: 160, d: 120, radius: 0, color: 0xd9343a, blurb: '高雄港式貨櫃碼頭，把工業區的貨物外銷，賺取外貿收入' },
+  cruisePort: { label: '旅遊港', cost: 1_500_000, upkeep: 450, w: 90, d: 80, radius: 0, tourists: 14, color: 0x3fa7d6, blurb: '東港渡船頭式客運碼頭，渡輪載觀光客來玩，增加觀光收入' },
   arena: { label: '巨蛋', cost: 160000, upkeep: 350, w: 90, d: 90, radius: 800, tourists: 8, color: 0xb8e0a0, blurb: '辦演唱會和球賽，觀光收入最多' },
 };
 

@@ -16,6 +16,16 @@ export enum Zone {
   Commercial = 3,
   Office = 4,
   Industrial = 5,
+  /** 加工工業區: like an export processing zone, worth most shipped out through a cargo port */
+  Processing = 6,
+  /** 林業: sawmills and timber yards, only at the foot of forested hills */
+  Forestry = 7,
+  /** 化工業: petrochemical plants, valuable but polluting the homes around them */
+  Chemical = 8,
+  /** 科學園區: clean high-tech fabs that need a school nearby for educated workers */
+  SciencePark = 9,
+  /** 產業園區: tidy multi-storey standard factories */
+  IndustrialPark = 10,
 }
 
 export type DemandKey = 'R' | 'C' | 'O' | 'I';
@@ -27,6 +37,8 @@ export interface ZoneInfo {
   demand: DemandKey;
   /** residents or jobs added per building level */
   perLevel: number;
+  /** industry: value of the goods each job makes, relative to general industry (1) */
+  goods?: number;
 }
 
 export const ZONES: Record<Exclude<Zone, Zone.None>, ZoneInfo> = {
@@ -34,8 +46,18 @@ export const ZONES: Record<Exclude<Zone, Zone.None>, ZoneInfo> = {
   [Zone.ResidentialHigh]: { name: '高密住宅', color: 0x3f9a4a, maxLevel: 5, demand: 'R', perLevel: 18 },
   [Zone.Commercial]: { name: '商業', color: 0x4f8fd6, maxLevel: 3, demand: 'C', perLevel: 6 },
   [Zone.Office]: { name: '辦公', color: 0x8a6fd1, maxLevel: 5, demand: 'O', perLevel: 14 },
-  [Zone.Industrial]: { name: '工業', color: 0xd9a33a, maxLevel: 3, demand: 'I', perLevel: 10 },
+  [Zone.Industrial]: { name: '一般工業', color: 0xd9a33a, maxLevel: 3, demand: 'I', perLevel: 10, goods: 1 },
+  [Zone.Processing]: { name: '加工工業區', color: 0xe07b39, maxLevel: 3, demand: 'I', perLevel: 12, goods: 1.4 },
+  [Zone.Forestry]: { name: '林業', color: 0x6b8e3a, maxLevel: 3, demand: 'I', perLevel: 6, goods: 0.8 },
+  [Zone.Chemical]: { name: '化工業', color: 0xb5651d, maxLevel: 3, demand: 'I', perLevel: 10, goods: 1.8 },
+  [Zone.SciencePark]: { name: '科學園區', color: 0x3fb8c9, maxLevel: 4, demand: 'I', perLevel: 16, goods: 2.5 },
+  [Zone.IndustrialPark]: { name: '產業園區', color: 0xc9a227, maxLevel: 4, demand: 'I', perLevel: 12, goods: 1.2 },
 };
+
+/** Every kind of industry, general first, in the order the zone dock lists them. */
+export const INDUSTRY_ZONES = [Zone.Industrial, Zone.Processing, Zone.Forestry, Zone.Chemical, Zone.SciencePark, Zone.IndustrialPark] as const;
+
+export const isIndustry = (zone: Zone): boolean => zone !== Zone.None && ZONES[zone].demand === 'I';
 
 export interface Lot {
   x: number;
@@ -150,7 +172,7 @@ export function recomputeBlocked(net: RoadNetwork, occupied?: (p: Vec2) => boole
  * Zones the empty cells in a circle. Cells that already have another zone are left alone unless
  * `overwrite` is set (the 更正 button); clearing (Zone.None) always works.
  */
-export function paintZone(net: RoadNetwork, center: Vec2, radius: number, zone: Zone, overwrite = false): number {
+export function paintZone(net: RoadNetwork, center: Vec2, radius: number, zone: Zone, overwrite = false, allowed?: (lot: Lot) => boolean): number {
   let changed = 0;
   for (const seg of net.segments.values()) {
     if (!bboxNear(seg.bbox, center, radius + ROAD_WIDTH / 2 + CELL * DEPTH)) continue;
@@ -158,6 +180,7 @@ export function paintZone(net: RoadNetwork, center: Vec2, radius: number, zone: 
       if (lot.blocked || lot.zone === zone) continue;
       if (!overwrite && zone !== Zone.None && lot.zone !== Zone.None) continue;
       if ((lot.x - center.x) ** 2 + (lot.y - center.y) ** 2 > radius * radius) continue;
+      if (zone !== Zone.None && allowed && !allowed(lot)) continue;
       lot.zone = zone;
       lot.level = 0;
       changed++;

@@ -396,7 +396,31 @@ const MODELS: Record<Facility['kind'], (k: Kit, w: number, d: number) => void> =
   plaza,
   ecoPark,
   footbridge,
+  cargoPort,
+  cruisePort,
 };
+
+/**
+ * 貨櫃港 (placeholder, to be detailed): a quay deck standing in the sea, cranes and container stacks.
+ * The back 30% of the depth (v > d/2 - 0.3 d) is the berth: open water.
+ */
+function cargoPort(k: Kit, w: number, d: number): void {
+  const berth = d / 2 - d * 0.3;
+  k.box(-w / 2, -d / 2, w / 2, berth, -7, 0.3, 0xb9b6ae);
+  for (let u = -w / 2 + 20; u < w / 2 - 10; u += 30) k.box(u, berth - 14, u + 4, berth - 2, 0.3, 32, 0xd9343a);
+  for (let u = -w / 2 + 10; u < w / 2 - 10; u += 14) k.box(u, -d / 2 + 30, u + 12, -d / 2 + 50, 0.3, 5, 0x3f6f9a);
+  k.box(-w / 3, berth + 6, w / 3, berth + 26, -2, 6, 0x2f3f5a);
+}
+
+/** 旅遊港 (placeholder, to be detailed): a terminal by the road, a pier and a ferry. */
+function cruisePort(k: Kit, w: number, d: number): void {
+  const berth = d / 2 - d * 0.3;
+  k.box(-w / 2, -d / 2, w / 2, berth, -7, 0.3, 0xc9c4b8);
+  k.box(-24, -d / 2 + 6, 24, -d / 2 + 24, 0.3, 9, 0xf2f3f4);
+  k.box(-25, -d / 2 + 5, 25, -d / 2 + 25, 9, 10.5, 0x3f9a8a);
+  k.box(-4, berth, 4, d / 2 - 4, -1, 0.6, 0xb9b6ae);
+  k.box(8, berth + 4, 16, berth + 26, -1.5, 3, 0xf5f5f5);
+}
 
 /** Every park, school, station, hospital and landmark as one coloured mesh. */
 export function buildFacilityGeometry(facilities: Iterable<Facility>): THREE.BufferGeometry {

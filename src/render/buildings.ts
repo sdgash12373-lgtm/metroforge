@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { City } from '../sim/city';
-import { CELL, type Lot, ZONES, Zone } from '../sim/zoning';
+import { CELL, type Lot, ZONES, Zone, isIndustry } from '../sim/zoning';
 
 const MAX = 20000;
 /** facade details: arcades, balconies, window grilles, rooftop add-ons */
@@ -34,6 +34,12 @@ const WALLS: Record<Exclude<Zone, Zone.None>, number[]> = {
   [Zone.Office]: [0x6f97ad, 0x5b7f93, 0x8fb3c2, 0x7d9aa8, 0x4f6f84],
   // 鐵皮 factories: pale steel cladding
   [Zone.Industrial]: [0xe9ecee, 0xdfe3e6, 0xd3d9dd, 0xc8d3db],
+  // The newer industries draw as plain factories for now, in their own wall colours
+  [Zone.Processing]: [0xf2f3f4, 0xe3e8ee, 0xd5dee8],
+  [Zone.Forestry]: [0xa47c52, 0x8e6a45, 0xb48b5c],
+  [Zone.Chemical]: [0xcfd4d8, 0xbfc5ca, 0xdfe2e4],
+  [Zone.SciencePark]: [0xf7f9fa, 0xeef3f6, 0xe6eef2],
+  [Zone.IndustrialPark]: [0xe8dcc6, 0xd9cbb6, 0xe2d6c0],
 };
 /** Red tile roofs of village houses */
 const ROOFS = [0xb5523b, 0x9c4632, 0xa85a3c];
@@ -76,6 +82,11 @@ export function buildingShape(lot: Lot): Shape {
       if (lot.level > 5) return { w: f * 1.08, d: f * 1.02, h: 70 + (lot.level - 5) * (40 + r * 45) };
       return { w: f * (0.75 + r * 0.2), d: f * (0.75 + r * 0.2), h: 8 + lot.level * (7 + r * 6) };
     case Zone.Industrial:
+    case Zone.Processing:
+    case Zone.Forestry:
+    case Zone.Chemical:
+    case Zone.SciencePark:
+    case Zone.IndustrialPark:
       return { w: f, d: f * 0.9, h: 4 + lot.level * 1.5 + r * 2 };
     default:
       return { w: 0, d: 0, h: 0 };
@@ -290,7 +301,7 @@ export class BuildingLayer {
           else if (arcaded && zone === Zone.ResidentialHigh) this.part('g', lot, x, z, 0, -d / 2 - 0.1, FLOOR - 0.1, w * 0.95, 0.8, 0.2, choose(SIGNS, lot.seed, 11));
         } else if (zone === Zone.Office) {
           this.office(lot, x, z, w, d, h, wall);
-        } else if (zone === Zone.Industrial) {
+        } else if (isIndustry(zone)) {
           this.factory(lot, x, z, w, d, h);
         }
       }
