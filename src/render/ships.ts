@@ -92,6 +92,11 @@ export class ShipLayer {
     }
   }
 
+  /** Forgets the routes, so the next update reads the ports afresh (another city was loaded). */
+  invalidate(): void {
+    this.version = -1;
+  }
+
   /** Moves the ships on by `dt` seconds of game time, picking up ports built or knocked down. */
   update(city: City, dt: number): void {
     if (city.facilitiesVersion !== this.version) {

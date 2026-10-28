@@ -108,7 +108,8 @@ export class World {
   private readonly water: THREE.Mesh;
   /** veil over the parts of the map not opened yet */
   private readonly locked: THREE.Mesh;
-  private lockedKey = '';
+  private lockedCity: City | null = null;
+  private lockedVersion = -1;
   private readonly preview: THREE.Mesh;
   private readonly cursor: THREE.Mesh;
   private readonly brush: THREE.Mesh;
@@ -383,6 +384,8 @@ export class World {
     this.aviationVersion = -1;
     this.facilitiesVersion = -1;
     this.labelsVersion = -1;
+    this.lockedVersion = -1;
+    this.ships.invalidate();
     for (const k of RAIL_KINDS) {
       this.rails[k].version = -1;
       this.rails[k].transitVersion = -1;
@@ -691,7 +694,7 @@ export class World {
     this.water.geometry = buildWaterGeometry(terrain);
     this.water.visible = terrain !== FLAT && !this.xray;
     this.rig.bounds = terrain.bounds;
-    this.lockedKey = '';
+    this.lockedVersion = -1;
     this.trees.spots = treeSpots(terrain);
   }
 
@@ -736,9 +739,9 @@ export class World {
       this.labelsVersion = city.labelsVersion + city.roadsVersion * 1e6 + city.regionsVersion * 1e3;
       this.rebuildNames(city);
     }
-    const lockedKey = `${city.terrain.name}:${[...city.regions].sort().join(',')}`;
-    if (lockedKey !== this.lockedKey) {
-      this.lockedKey = lockedKey;
+    if (city !== this.lockedCity || city.regionsVersion !== this.lockedVersion) {
+      this.lockedCity = city;
+      this.lockedVersion = city.regionsVersion;
       this.locked.geometry.dispose();
       this.locked.geometry = buildLockedGeometry(city.terrain, city.regions);
       this.locked.visible = city.lockedRegions().length > 0;

@@ -1710,6 +1710,19 @@ export class City {
     }
     for (const [id, x, y, r, name, color] of data.districts ?? []) city.addDistrict({ x, y }, r, { id, name, color });
     for (const [id, kind, x, y, angle] of data.facilities ?? []) if (FACILITIES[kind]) city.addFacility(kind, { x, y }, angle, id);
+    // Saves from before regions: open every region they already built in, so nothing they had gets locked
+    if (!data.regions) {
+      const points = [
+        ...[...city.net.nodes.values()].map((n) => n.p),
+        ...RAIL_KINDS.flatMap((k) => [...city.rails[k].net.nodes.values()].map((n) => n.p)),
+        ...[...city.facilities.values()].map((f) => f.p),
+        ...[...city.aviation.airports.values()].map((a) => a.p),
+      ];
+      for (const p of points) {
+        const r = city.terrain.region(p.x, p.y);
+        if (r) city.regions.add(r);
+      }
+    }
     city.restoreGate();
     city.roadsChanged();
     city.measure();

@@ -69,6 +69,22 @@ describe('regions', () => {
     expect([...City.deserialize(old).regions]).toEqual(['kaohsiung']);
   });
 
+  it('keeps what old saves built beyond the Gaoping River, opening Pingtung for them', () => {
+    // Built while the whole square was open: a zoned street now on the Pingtung side
+    const city = new City(T);
+    city.money = 1e9;
+    city.regions = new Set(['kaohsiung', 'pingtung']);
+    expect(T.region(1100, 1100)).toBe('pingtung');
+    expect(city.buildRoad(free(1100, 1100), null, free(1200, 1100), true).ok).toBe(true);
+    city.paint({ x: 1150, y: 1100 }, 40, Zone.ResidentialLow);
+    for (const l of lots(city)) if (l.zone) l.level = 2;
+    const old = { ...city.serialize(), v: 8, regions: undefined };
+    const copy = City.deserialize(old);
+    expect([...copy.regions].sort()).toEqual(['kaohsiung', 'pingtung']);
+    expect(lots(copy).filter((l) => l.level === 2).length).toBe(lots(city).filter((l) => l.level === 2).length);
+    expect(lots(copy).some((l) => l.level === 2)).toBe(true);
+  });
+
   it('can start in Pingtung with Kaohsiung locked', () => {
     const city = new City(T);
     city.regions = new Set(['pingtung']);
