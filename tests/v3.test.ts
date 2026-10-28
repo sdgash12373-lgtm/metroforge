@@ -193,6 +193,40 @@ describe('ports', () => {
     expect([...copy.facilities.values()].some((f) => f.kind === 'cargoPort')).toBe(true);
   });
 
+  it('only ship through ports on the same road network as the industry', () => {
+    const { city } = harbour();
+    const road = [...city.net.segments.values()][0];
+    // Streets of fabs running inland from the port's street, as far as the plain goes
+    for (const t of [0.15, 0.5, 0.85]) {
+      const from = road.samples[Math.floor(road.samples.length * t)];
+      for (let len = 900; len >= 200; len -= 50) {
+        const to = { x: from.x + len * Math.SQRT1_2, y: from.y - len * Math.SQRT1_2 };
+        if (!city.buildRoad(city.net.snapLevel(from, 10, 0), null, free(to.x, to.y), true).ok) continue;
+        for (let k = 0; k * 60 <= len; k++) city.paint({ x: from.x + k * 60 * Math.SQRT1_2, y: from.y - k * 60 * Math.SQRT1_2 }, 50, Zone.SciencePark);
+        break;
+      }
+    }
+    for (const l of lots(city)) if (l.zone === Zone.SciencePark) l.level = 4;
+    city.tick(rng());
+    const one = city.trade;
+    expect(one.reachable).toBeGreaterThan(PORT_CAPACITY);
+    expect(one.shipped).toBe(PORT_CAPACITY);
+    // A second port on a street of its own further up the coast adds nothing for that industry
+    const far = road.samples[0];
+    for (let v = 400; v < 2000; v += 40) {
+      const c = Math.max(coastU(v - 100), coastU(v), coastU(v + 100));
+      const a = at(c + 45, v - 160);
+      const b = at(c + 45, v + 160);
+      if (Math.hypot(a.x - far.x, a.y - far.y) < 600) continue;
+      if (!city.buildRoad(free(a.x, a.y), null, free(b.x, b.y), true).ok) continue;
+      const spot = city.facilitySpot('cargoPort', at(c + 20, v));
+      if (city.buildFacility('cargoPort', spot.p, spot.angle).ok) break;
+    }
+    city.tick(rng());
+    expect(city.trade.ports).toBe(2);
+    expect(city.trade.shipped).toBe(PORT_CAPACITY);
+  });
+
   it('bring ferry tourists with a cruise port', () => {
     const { city } = harbour('cruisePort');
     city.tick(rng());

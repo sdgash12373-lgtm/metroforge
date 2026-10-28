@@ -257,7 +257,7 @@ export interface Trade {
   goods: number;
   /** goods made by industry with a road to a cargo port */
   reachable: number;
-  /** goods shipped: the reachable ones up to the ports' capacity */
+  /** goods shipped: the reachable ones up to the capacity of the ports on their road network */
   shipped: number;
 }
 
@@ -1305,7 +1305,10 @@ export class City {
     };
     let smog = 0;
     const ports = this.cargoPorts();
-    const portPieces = new Set(ports.map((x) => x.piece));
+    // Ports per road network, and the goods made on each: industry ships only through ports it can reach
+    const portPieces = new Map<number, number>();
+    for (const x of ports) portPieces.set(x.piece, (portPieces.get(x.piece) ?? 0) + 1);
+    const madeIn = new Map<number, number>();
     let goods = 0;
     let reachable = 0;
     let earned = 0;
@@ -1340,7 +1343,11 @@ export class City {
           if (info.goods) {
             const made = lot.level * info.perLevel * info.goods * GOODS_PER_JOB;
             goods += made;
-            if (portPieces.has(this.component.get(seg.a) ?? -2)) reachable += made;
+            const piece = this.component.get(seg.a) ?? -2;
+            if (portPieces.has(piece)) {
+              reachable += made;
+              madeIn.set(piece, (madeIn.get(piece) ?? 0) + made);
+            }
           }
         }
       }
@@ -1371,7 +1378,9 @@ export class City {
     };
     this.stats = { population: pop, jobs: totalJobs, buildings, disconnected, riders: this.stats.riders };
     homes.averageIncome = pop ? earned / pop : 0;
-    this.trade = { ports: ports.length, goods, reachable, shipped: Math.min(reachable, ports.length * PORT_CAPACITY) };
+    let shipped = 0;
+    for (const [piece, made] of madeIn) shipped += Math.min(made, portPieces.get(piece)! * PORT_CAPACITY);
+    this.trade = { ports: ports.length, goods, reachable, shipped };
     this.households = homes;
     return zoned;
   }
