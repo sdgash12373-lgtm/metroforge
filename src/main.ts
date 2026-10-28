@@ -117,6 +117,8 @@ function focusCity(): void {
   }
   // A new city: between the interchange and the end of the road into town, of the region it starts in
   const f = FREEWAYS[city.regions.has('kaohsiung') ? 'kaohsiung' : [...city.regions][0]];
+  // The new city's map may reach further than the last one's: let the camera go there before it clamps
+  world.rig.bounds = city.terrain.bounds;
   world.rig.target = n ? { x: x / n, y: y / n } : freewayPoint(f, 0, (f.exit + f.town) / 2 - 40);
   world.rig.distance = coarse ? 360 : 280;
   world.rig.pitch = 0.85;
