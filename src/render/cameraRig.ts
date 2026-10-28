@@ -14,6 +14,8 @@ export class CameraRig {
   pickHeight = 0;
   /** First-person driving moves the camera itself; the orbit controls leave it alone. */
   driving = false;
+  /** How far the view may wander: the map's extent */
+  bounds = { minX: -2000, maxX: 2000, minY: -2000, maxY: 2000 };
   readonly minDistance = 40;
   readonly maxDistance = 1600;
   private readonly ray = new THREE.Raycaster();
@@ -30,9 +32,8 @@ export class CameraRig {
     if (this.driving) return;
     this.distance = clamp(this.distance, this.minDistance, this.maxDistance);
     this.pitch = clamp(this.pitch, 0.35, 1.45);
-    const lim = 2000;
-    this.target.x = clamp(this.target.x, -lim, lim);
-    this.target.y = clamp(this.target.y, -lim, lim);
+    this.target.x = clamp(this.target.x, this.bounds.minX, this.bounds.maxX);
+    this.target.y = clamp(this.target.y, this.bounds.minY, this.bounds.maxY);
     const h = Math.cos(this.pitch) * this.distance;
     this.camera.position.set(
       this.target.x + Math.sin(this.yaw) * h,

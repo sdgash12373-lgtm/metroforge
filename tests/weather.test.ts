@@ -59,7 +59,7 @@ describe('time and weather', () => {
     expect(mountain.precip).toBeGreaterThan(plain.precip);
     expect(mountain.fog).toBeGreaterThan(plain.fog);
     w.sky = 'clear';
-    expect(w.at(shore, 100.25).region).toBe('海邊');
+    expect(w.at(shore, 100.25).region).toMatch(/海邊$/);
     expect(w.at(shore, 100.25).fog).toBeGreaterThan(w.at({ x: 0, y: 0 }, 100.25).fog);
   });
 });

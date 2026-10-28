@@ -15,8 +15,9 @@ import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeome
 import { StopLayer } from './transit';
 import { buildFacilityGeometry } from './facilities';
 import { SignalLayer } from './signals';
-import { HILL_TREES, LOWLAND_TREES, MAP_SIZE, type TreeSpot, buildGroundGeometry, treeSpots } from './terrainMesh';
-import { FLAT, type Terrain, WATER_LEVEL } from '../sim/terrain';
+import { HILL_TREES, LOWLAND_TREES, OUTER_TREES, type TreeSpot, buildGroundGeometry, buildLockedGeometry, buildWaterGeometry, treeSpots } from './terrainMesh';
+import { FLAT, REGION_NAMES, type Terrain } from '../sim/terrain';
+import { LEVELS, UNLOCK } from '../sim/levels';
 import { VehicleLayer } from './vehicles';
 import { PedestrianLayer } from './pedestrians';
 import { RAIL_KINDS, type RailKind, TRACK_OFFSET } from '../sim/rail';
@@ -42,7 +43,7 @@ interface RailLayer {
   zoningVersion: number;
 }
 
-const TREE_COUNT = LOWLAND_TREES + HILL_TREES;
+const TREE_COUNT = LOWLAND_TREES + HILL_TREES + OUTER_TREES;
 const STREET_TREES = 4000;
 /** How often painted cells are redrawn while the brush moves. */
 const PAINT_REDRAW_MS = 120;
@@ -102,6 +103,9 @@ export class World {
   private readonly streetTrees: THREE.InstancedMesh;
   private terrain: Terrain = FLAT;
   private readonly water: THREE.Mesh;
+  /** veil over the parts of the map not opened yet */
+  private readonly locked: THREE.Mesh;
+  private lockedKey = '';
   private readonly preview: THREE.Mesh;
   private readonly cursor: THREE.Mesh;
   private readonly brush: THREE.Mesh;
@@ -172,11 +176,17 @@ export class World {
     this.ground = new THREE.Mesh(buildGroundGeometry(FLAT), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
     this.ground.receiveShadow = true;
     this.water = new THREE.Mesh(
-      new THREE.PlaneGeometry(MAP_SIZE, MAP_SIZE).rotateX(-Math.PI / 2).translate(0, WATER_LEVEL, 0),
+      new THREE.BufferGeometry(),
       new THREE.MeshLambertMaterial({ color: 0x4f97bf, transparent: true, opacity: 0.88 }),
     );
     this.water.visible = false;
-    this.scene.add(this.ground, this.water);
+    this.locked = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({ color: 0x1d2630, transparent: true, opacity: 0.38, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    this.locked.renderOrder = 1;
+    this.locked.visible = false;
+    this.scene.add(this.ground, this.water, this.locked);
     this.scene.add(this.roadGroup);
     this.buildings = new BuildingLayer(shadows);
     this.scene.add(this.buildings.group);
@@ -527,6 +537,11 @@ export class World {
       this.names.push({ at: new THREE.Vector3(x, h + 0.5, y), dir: dir ? new THREE.Vector3(x + dir.x * 10, h + 0.5, y + dir.y * 10) : null, el, street: !!dir });
     };
     for (const d of city.districts.values()) add(d.name, d.p.x, d.p.y, 0, 'map-name district', undefined, d.color);
+    // Regions not opened yet, named over the middle of their land
+    for (const r of city.lockedRegions()) {
+      const at = regionMiddle(city.terrain, r);
+      if (at) add(`🔒 ${REGION_NAMES[r]}・${LEVELS[UNLOCK.region].name}後可開通`, at.x, at.y, 0, 'map-name district locked', undefined, 0xffffff);
+    }
     // Street labels: at the middle of the longer pieces, never two of one name within 220 m
     const placed: { name: string; x: number; y: number }[] = [];
     const segs = [...city.net.segments.values()].filter((s) => s.name).sort((a, b) => b.length - a.length);
@@ -665,7 +680,11 @@ export class World {
     this.terrain = terrain;
     this.ground.geometry.dispose();
     this.ground.geometry = buildGroundGeometry(terrain);
+    this.water.geometry.dispose();
+    this.water.geometry = buildWaterGeometry(terrain);
     this.water.visible = terrain !== FLAT && !this.xray;
+    this.rig.bounds = terrain.bounds;
+    this.lockedKey = '';
     this.trees.spots = treeSpots(terrain);
   }
 
@@ -706,9 +725,16 @@ export class World {
     }
     for (const k of RAIL_KINDS) this.syncRail(city, k, painting);
     this.syncCutOff(city);
-    if (city.labelsVersion + city.roadsVersion * 1e6 !== this.labelsVersion) {
-      this.labelsVersion = city.labelsVersion + city.roadsVersion * 1e6;
+    if (city.labelsVersion + city.roadsVersion * 1e6 + city.regionsVersion * 1e3 !== this.labelsVersion) {
+      this.labelsVersion = city.labelsVersion + city.roadsVersion * 1e6 + city.regionsVersion * 1e3;
       this.rebuildNames(city);
+    }
+    const lockedKey = `${city.terrain.name}:${[...city.regions].sort().join(',')}`;
+    if (lockedKey !== this.lockedKey) {
+      this.lockedKey = lockedKey;
+      this.locked.geometry.dispose();
+      this.locked.geometry = buildLockedGeometry(city.terrain, city.regions);
+      this.locked.visible = city.lockedRegions().length > 0;
     }
     if (city.aviation.version !== this.aviationVersion) {
       this.aviationVersion = city.aviation.version;
@@ -954,4 +980,26 @@ function angleColor(deg: number): number {
   if (deg < 30) return 0xff6b5b;
   if (Math.abs(deg - 90) < 1) return 0x7ee08a;
   return 0xf2b134;
+}
+
+/** Middle of a region's land, for its label (cached per terrain and region). */
+const middles = new Map<string, Vec2 | null>();
+function regionMiddle(terrain: Terrain, region: string): Vec2 | null {
+  const key = `${terrain.name}:${region}`;
+  if (middles.has(key)) return middles.get(key)!;
+  const b = terrain.bounds;
+  let x = 0;
+  let y = 0;
+  let n = 0;
+  for (let i = b.minX; i < b.maxX; i += 100) {
+    for (let j = b.minY; j < b.maxY; j += 100) {
+      if (terrain.region(i, j) !== region || terrain.water(i, j) || terrain.height(i, j) > 1) continue;
+      x += i;
+      y += j;
+      n++;
+    }
+  }
+  const at = n ? { x: x / n, y: y / n } : null;
+  middles.set(key, at);
+  return at;
 }

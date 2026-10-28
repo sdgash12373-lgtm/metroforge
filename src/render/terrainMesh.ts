@@ -1,12 +1,13 @@
 import * as THREE from 'three';
 import { hash01 } from '../sim/geometry';
-import { type Terrain, buildable } from '../sim/terrain';
+import { HALF_MAP, type RegionName, type Terrain, WATER_LEVEL, buildable } from '../sim/terrain';
 
-export const MAP_SIZE = 4000;
-const GRID = 200;
-/** trees in the lowland woods, and on hills and mountains */
+/** Ground triangles are this many meters across. */
+const STEP = 20;
+/** trees in the lowland woods, and on hills and mountains, and across the land beyond the old square */
 export const LOWLAND_TREES = 6000;
 export const HILL_TREES = 6000;
+export const OUTER_TREES = 5000;
 const TREE_AREA = 1400;
 
 const GRASS = new THREE.Color(0x9cbf74);
@@ -27,23 +28,78 @@ function landColor(h: number, out: THREE.Color): THREE.Color {
   return out.copy(ROCK).lerp(PEAK, Math.min(1, (h - 330) / 120));
 }
 
-/** The ground as flat-coloured low-poly triangles; each triangle is coloured by its lowest corner, so coasts get a sandy rim. */
+/** Calls `cell` for every ground cell on the map (its corner x, y), row by row. */
+function eachCell(terrain: Terrain, cell: (x: number, y: number) => void, keep?: (r: RegionName) => boolean): void {
+  const b = terrain.bounds;
+  for (let y = b.minY; y < b.maxY - 1e-6; y += STEP) {
+    for (let x = b.minX; x < b.maxX - 1e-6; x += STEP) {
+      const r = terrain.region(x + STEP / 2, y + STEP / 2);
+      if (r !== null && (!keep || keep(r))) cell(x, y);
+    }
+  }
+}
+
+/** Two triangles per cell, as a plane would split it, with heights from `h`. */
+function cellTriangles(x: number, y: number, h: (x: number, y: number) => number, out: number[]): void {
+  const x1 = x + STEP;
+  const y1 = y + STEP;
+  out.push(x, h(x, y), y, x, h(x, y1), y1, x1, h(x1, y), y);
+  out.push(x, h(x, y1), y1, x1, h(x1, y1), y1, x1, h(x1, y), y);
+}
+
+/**
+ * The ground as flat-coloured low-poly triangles over every cell on the map; each triangle is coloured by
+ * its lowest corner, so coasts get a sandy rim.
+ */
 export function buildGroundGeometry(terrain: Terrain): THREE.BufferGeometry {
-  const g = new THREE.PlaneGeometry(MAP_SIZE, MAP_SIZE, GRID, GRID).rotateX(-Math.PI / 2).toNonIndexed();
-  const pos = g.getAttribute('position');
-  for (let i = 0; i < pos.count; i++) pos.setY(i, terrain.height(pos.getX(i), pos.getZ(i)));
+  const pos: number[] = [];
+  // Heights are shared by up to six triangles: work each corner out once
+  const heights = new Map<number, number>();
+  const h = (x: number, y: number) => {
+    const key = Math.round(x) * 100003 + Math.round(y);
+    let v = heights.get(key);
+    if (v === undefined) heights.set(key, (v = terrain.height(x, y)));
+    return v;
+  };
+  eachCell(terrain, (x, y) => cellTriangles(x, y, h, pos));
   const colors: number[] = [];
   const c = new THREE.Color();
-  for (let i = 0; i < pos.count; i += 3) {
-    const lo = Math.min(pos.getY(i), pos.getY(i + 1), pos.getY(i + 2));
-    const hi = Math.max(pos.getY(i), pos.getY(i + 1), pos.getY(i + 2));
+  for (let i = 0; i < pos.length; i += 9) {
+    const ys = [pos[i + 1], pos[i + 4], pos[i + 7]];
+    const lo = Math.min(...ys);
+    const hi = Math.max(...ys);
     landColor(lo < 0 ? lo : (lo + hi) / 2, c);
-    const v = hash01(pos.getX(i) + pos.getX(i + 1), pos.getZ(i) + pos.getZ(i + 2));
+    const v = hash01(pos[i] + pos[i + 3], pos[i + 2] + pos[i + 8]);
     c.offsetHSL((v - 0.5) * 0.02, 0, (v - 0.5) * 0.03);
     for (let k = 0; k < 3; k++) colors.push(c.r, c.g, c.b);
   }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   g.computeVertexNormals();
+  return g;
+}
+
+/** The water surface: only over cells with some ground below it. */
+export function buildWaterGeometry(terrain: Terrain): THREE.BufferGeometry {
+  const pos: number[] = [];
+  eachCell(terrain, (x, y) => {
+    const wet = [0, STEP].some((i) => [0, STEP].some((j) => terrain.height(x + i, y + j) < 0));
+    if (wet) cellTriangles(x, y, () => WATER_LEVEL, pos);
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
+/** A veil over the regions not opened yet, just above the ground. */
+export function buildLockedGeometry(terrain: Terrain, open: ReadonlySet<RegionName>): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const h = (x: number, y: number) => Math.max(WATER_LEVEL, terrain.height(x, y)) + 1.2;
+  eachCell(terrain, (x, y) => cellTriangles(x, y, h, pos), (r) => !open.has(r));
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   return g;
 }
 
@@ -75,14 +131,28 @@ export function treeSpots(terrain: Terrain): TreeSpot[] {
   }
   const start = spots.length;
   for (let k = 0; spots.length - start < HILL_TREES && k < HILL_TREES * 12; k++) {
-    const x = (hash01(k, 7) - 0.5) * MAP_SIZE;
-    const y = (hash01(7, k) - 0.5) * MAP_SIZE;
+    const x = (hash01(k, 7) - 0.5) * HALF_MAP * 2;
+    const y = (hash01(7, k) - 0.5) * HALF_MAP * 2;
     const h = terrain.height(x, y);
     // Thick on the hills and lower slopes, thinning out to bare rock near the peaks
     if (h < 3 || h > 360 || hash01(x * 0.7, y * 0.7) > 0.9 - h / 450) continue;
     const s = 1.5 + hash01(x, y) * 1.3;
     const color = new THREE.Color().setHSL(0.3 + hash01(y, x) * 0.05, 0.38, 0.24 + hash01(x, x) * 0.08);
     spots.push({ x, y, h, s, color, wild: true });
+  }
+  // Beyond the old square (Pingtung's far side): groves on the plain, forest on the hills and the range
+  const b = terrain.bounds;
+  const outer = spots.length;
+  for (let k = 0; spots.length - outer < OUTER_TREES && k < OUTER_TREES * 12; k++) {
+    const x = b.minX + hash01(k, 11) * (b.maxX - b.minX);
+    const y = b.minY + hash01(11, k) * (b.maxY - b.minY);
+    if (Math.abs(x) <= HALF_MAP && Math.abs(y) <= HALF_MAP) continue;
+    if (terrain.region(x, y) === null || terrain.water(x, y)) continue;
+    const h = terrain.height(x, y);
+    if (h < 3 ? hash01(Math.floor(x / 120), Math.floor(y / 120)) < 0.6 : h > 360 || hash01(x * 0.7, y * 0.7) > 0.9 - h / 450) continue;
+    const s = 1.2 + hash01(x, y) * 1.3;
+    const color = new THREE.Color().setHSL(0.29 + hash01(y, x) * 0.05, 0.4, 0.25 + hash01(x, x) * 0.09);
+    spots.push({ x, y, h, s, color, wild: !buildable(terrain, { x, y }) });
   }
   return spots;
 }
