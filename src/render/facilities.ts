@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { type Facility, dims, toWorld } from '../sim/facilities';
+import { hash01 } from '../sim/geometry';
 import { Builder } from './roadMesh';
 
 type P3 = [number, number, number];
@@ -400,26 +401,148 @@ const MODELS: Record<Facility['kind'], (k: Kit, w: number, d: number) => void> =
   cruisePort,
 };
 
+/** Container colours: the shipping lines' reds, blues, greens, oranges and greys. */
+const BOXES = [0xc8442f, 0x2f5fa8, 0x3f8f5a, 0xe08a2e, 0x8d8a85, 0xe9ecee, 0x1f7f8f, 0xb5523b, 0xd9b23a];
+const box = (i: number, j: number) => BOXES[Math.floor(hash01(i * 1.7 + 3, j * 2.3 + 1) * BOXES.length)];
+
+/** One STS gantry crane on the quay, legs on rails at v0 and v1, its boom reaching out over the berth. */
+function gantry(k: Kit, u: number, v0: number, v1: number, reach: number): void {
+  const red = 0xd9343a;
+  const white = 0xf2f3f4;
+  for (const v of [v0, v1]) {
+    for (const du of [-6, 6]) k.box(u + du - 0.6, v - 0.6, u + du + 0.6, v + 0.6, 0.3, 30, red);
+    k.box(u - 6.6, v - 0.8, u + 6.6, v + 0.8, 0.3, 1.6, 0x5f6366);
+  }
+  // Cross beams, the girder out over the water and the machinery house at the back
+  for (const z of [12, 29]) for (const du of [-6, 6]) k.box(u + du - 0.4, v0, u + du + 0.4, v1, z, z + 1, white);
+  for (const du of [-2.2, 2.2]) k.box(u + du - 0.7, v0 - 14, u + du + 0.7, reach, 30, 32.4, du < 0 ? red : white);
+  k.box(u - 4, v0 - 14, u + 4, v0 - 4, 32.4, 36, white);
+  k.box(u - 1.2, v1 - 2, u + 1.2, v1 + 2, 26, 29, 0x2f3f5a);
+  // Stays from the apex to the boom
+  k.box(u - 0.5, v1 - 1, u + 0.5, v1 + 1, 32.4, 42, red);
+  k.box(u - 0.3, v1, u + 0.3, reach - 6, 40, 40.6, white);
+}
+
+/** A container ship (or one moored), bow along +u, its hull from v0 to v1. */
+function containerShip(k: Kit, u0: number, u1: number, v0: number, v1: number): void {
+  k.box(u0 + 6, v0, u1 - 8, v1, -4, 3.5, 0x23324a);
+  k.box(u0 + 6, v0 - 0.05, u1 - 8, v1 + 0.05, -4, -1.6, 0xa8322a);
+  // Bow tapers
+  k.box(u1 - 8, v0 + 2, u1 - 2, v1 - 2, -3, 3.5, 0x23324a);
+  k.box(u1 - 2, v0 + 5, u1, v1 - 5, -2, 3.5, 0x23324a);
+  k.box(u0 + 2, v0 + 1, u0 + 6, v1 - 1, -3, 3.5, 0x23324a);
+  // Bridge and funnel at the stern
+  k.box(u0 + 4, v0 + 1.5, u0 + 13, v1 - 1.5, 3.5, 17, 0xf2f3f4);
+  k.box(u0 + 4, v0 + 1, u0 + 13, v1 - 1, 15.2, 16.2, 0x2f3f5a);
+  k.box(u0 + 2, v0 + 5, u0 + 6, v1 - 5, 14, 21, 0xd9343a);
+  // Rows of containers, two to four high
+  let i = 0;
+  for (let u = u0 + 15; u < u1 - 12; u += 6.4) {
+    const tiers = 2 + Math.floor(hash01(u, v0) * 3);
+    for (let t = 0; t < tiers; t++) {
+      for (let v = v0 + 1; v < v1 - 2; v += 2.5) k.box(u, v, u + 6.1, v + 2.4, 3.5 + t * 2.6, 6 + t * 2.6, box(i++, t));
+    }
+  }
+}
+
 /**
- * 貨櫃港 (placeholder, to be detailed): a quay deck standing in the sea, cranes and container stacks.
- * The back 30% of the depth (v > d/2 - 0.3 d) is the berth: open water.
+ * 貨櫃港, after Kaohsiung's container terminals: a quay deck standing in the sea, red-and-white
+ * ship-to-shore gantry cranes along the berth, stacks of containers in the yard, a gate by the road,
+ * a warehouse, and a container ship at the berth (the back 30% of the depth is open water).
  */
 function cargoPort(k: Kit, w: number, d: number): void {
   const berth = d / 2 - d * 0.3;
-  k.box(-w / 2, -d / 2, w / 2, berth, -7, 0.3, 0xb9b6ae);
-  for (let u = -w / 2 + 20; u < w / 2 - 10; u += 30) k.box(u, berth - 14, u + 4, berth - 2, 0.3, 32, 0xd9343a);
-  for (let u = -w / 2 + 10; u < w / 2 - 10; u += 14) k.box(u, -d / 2 + 30, u + 12, -d / 2 + 50, 0.3, 5, 0x3f6f9a);
-  k.box(-w / 3, berth + 6, w / 3, berth + 26, -2, 6, 0x2f3f5a);
+  k.box(-w / 2, -d / 2, w / 2, berth, -7, 0.3, 0xa9a59c);
+  k.rect(-w / 2, -d / 2, w / 2, berth, 0.32, 0x8f8c86);
+  // Quay edge: yellow line, fenders and bollards
+  k.rect(-w / 2, berth - 1.2, w / 2, berth - 0.8, 0.36, 0xf2c12e);
+  for (let u = -w / 2 + 6; u < w / 2; u += 12) {
+    k.prism(u, berth - 2, 0.4, 0.35, 0.3, 1.1, 0x2a2a2a, 6);
+    k.box(u - 1, berth, u + 1, berth + 0.6, -2.5, 0.2, 0x2a2a2a);
+  }
+  // Crane rails
+  for (const v of [berth - 18, berth - 6]) k.rect(-w / 2, v - 0.3, w / 2, v + 0.3, 0.36, 0x5f6366);
+  for (const u of [-52, -10, 32]) gantry(k, u, berth - 18, berth - 6, berth + 34);
+  // Container yard in blocks, lanes between them
+  let i = 0;
+  for (let v = -d / 2 + 16; v < berth - 24; v += 3) {
+    if (Math.abs(v - (-d / 2 + 30)) < 2) continue;
+    for (let u = -w / 2 + 8; u < w / 2 - 44; u += 13) {
+      const tiers = 1 + Math.floor(hash01(u * 0.3, v * 0.7) * 4);
+      for (let t = 0; t < tiers; t++) k.box(u, v, u + 12.2, v + 2.5, 0.3 + t * 2.6, 2.9 + t * 2.6, box(i++, t));
+    }
+  }
+  // Rubber-tyred gantries over the yard
+  for (const u of [-w / 2 + 34, -w / 2 + 73]) {
+    for (const v of [-d / 2 + 14, berth - 23]) k.box(u - 0.5, v - 0.5, u + 0.5, v + 0.5, 0.3, 14, 0xf2c12e);
+    k.box(u - 0.6, -d / 2 + 14, u + 0.6, berth - 23, 13, 15, 0xf2c12e);
+  }
+  // Warehouse with a blue roof, and the gate with its booths and barriers by the road
+  k.box(w / 2 - 40, -d / 2 + 14, w / 2 - 6, berth - 26, 0.3, 11, 0xdfe3e6);
+  k.box(w / 2 - 40.5, -d / 2 + 13.5, w / 2 - 5.5, berth - 25.5, 11, 12.2, 0x2f6fb0);
+  for (let u = w / 2 - 37; u < w / 2 - 8; u += 7) k.box(u, -d / 2 + 13.9, u + 4.5, -d / 2 + 14, 0.3, 5, 0x7c8287);
+  k.box(-w / 2 + 2, -d / 2 + 2, -w / 2 + 26, -d / 2 + 4, 6, 7, 0xd9343a);
+  for (const u of [-w / 2 + 6, -w / 2 + 14, -w / 2 + 22]) {
+    k.box(u - 1, -d / 2 + 4, u + 1, -d / 2 + 6, 0.3, 3, 0xf2f3f4);
+    k.box(u + 1, -d / 2 + 4.8, u + 4, -d / 2 + 5.2, 1.2, 1.4, 0xf2c12e);
+  }
+  // A container ship at the berth
+  containerShip(k, -w / 2 + 6, w / 2 - 6, berth + 3, berth + 3 + d * 0.3 - 6);
 }
 
-/** 旅遊港 (placeholder, to be detailed): a terminal by the road, a pier and a ferry. */
+/** A ferry to Xiaoliuqiu: white hull with a blue stripe, a two-deck cabin with dark windows. */
+function ferry(k: Kit, u0: number, u1: number, v0: number, v1: number): void {
+  k.box(u0 + 1.5, v0, u1 - 3, v1, -1.6, 1.4, 0xf5f5f5);
+  k.box(u1 - 3, v0 + 1, u1, v1 - 1, -1.2, 1.4, 0xf5f5f5);
+  k.box(u0 + 1.5, v0 - 0.05, u1 - 3, v1 + 0.05, -0.2, 0.5, 0x1f5fa8);
+  k.box(u0 + 3, v0 + 0.6, u1 - 6, v1 - 0.6, 1.4, 4, 0xf2f3f4);
+  k.box(u0 + 3, v0 + 0.55, u1 - 6, v1 - 0.55, 2.3, 3.3, 0x2a3a4a);
+  k.box(u0 + 6, v0 + 1, u1 - 9, v1 - 1, 4, 6, 0xf2f3f4);
+  k.box(u0 + 6, v0 + 0.95, u1 - 9, v1 - 0.95, 4.6, 5.4, 0x2a3a4a);
+  k.box(u0 + 4, v0 + 2, u0 + 6, v1 - 2, 4, 7, 0x3fa7d6);
+}
+
+/**
+ * 旅遊港, after the Donggang ferry pier (東港渡船頭) for Xiaoliuqiu: a red gate arch by the road, a white
+ * terminal under a blue-green roof with a big red name board, a covered walkway out to floating
+ * pontoons, and white-and-blue ferries tied up alongside.
+ */
 function cruisePort(k: Kit, w: number, d: number): void {
   const berth = d / 2 - d * 0.3;
-  k.box(-w / 2, -d / 2, w / 2, berth, -7, 0.3, 0xc9c4b8);
-  k.box(-24, -d / 2 + 6, 24, -d / 2 + 24, 0.3, 9, 0xf2f3f4);
-  k.box(-25, -d / 2 + 5, 25, -d / 2 + 25, 9, 10.5, 0x3f9a8a);
-  k.box(-4, berth, 4, d / 2 - 4, -1, 0.6, 0xb9b6ae);
-  k.box(8, berth + 4, 16, berth + 26, -1.5, 3, 0xf5f5f5);
+  k.box(-w / 2, -d / 2, w / 2, berth, -7, 0.3, 0xb9b3a6);
+  k.rect(-w / 2, -d / 2, w / 2, berth, 0.32, 0xd6cdb8);
+  k.rect(-w / 2, berth - 1, w / 2, berth - 0.5, 0.36, 0xf2c12e);
+  // Gate arch at the road
+  for (const u of [-9, 9]) k.box(u - 0.8, -d / 2 + 1, u + 0.8, -d / 2 + 2.6, 0.3, 7, 0xc8302a);
+  k.box(-11, -d / 2 + 0.8, 11, -d / 2 + 2.8, 7, 8.6, 0xc8302a);
+  k.box(-11.8, -d / 2 + 0.4, 11.8, -d / 2 + 3.2, 8.6, 9.2, 0x2f7f6f);
+  // Terminal: white walls, ticket hall glazing, a blue-green hipped roof and the big name board
+  const t0 = -d / 2 + 8;
+  const t1 = t0 + 18;
+  k.box(-36, t0, 8, t1, 0.3, 9, 0xf4f4f2);
+  k.box(-35.9, t0 - 0.05, 7.9, t1 + 0.05, 1.5, 4, 0x6f93ad);
+  k.box(-35.9, t0 - 0.05, 7.9, t1 + 0.05, 5.5, 7.6, 0x6f93ad);
+  k.box(-37.5, t0 - 1.5, 9.5, t1 + 1.5, 9, 10, 0x2f7f6f);
+  k.box(-33, t0 + 1.5, 5, t1 - 1.5, 10, 11.6, 0x2f7f6f);
+  k.box(-28, t0 + 4, -2, t1 - 4, 11.6, 12.6, 0x2f7f6f);
+  k.box(-26, t0 - 1.7, -6, t0 - 1.2, 10.5, 15, 0xc8302a);
+  k.box(-25.4, t0 - 1.8, -6.6, t0 - 1.7, 11.2, 14.3, 0xf2c12e);
+  // Covered walkway from the terminal out over the water to the pontoons
+  for (let v = t1; v < berth + 14; v += 6) for (const u of [-1.5, 4.5]) k.box(u - 0.3, v - 0.3, u + 0.3, v + 0.3, -0.5, 3.6, 0xf2f3f4);
+  k.box(-2.3, t1, 5.3, berth + 14, 3.6, 4.2, 0x2f7f6f);
+  k.box(-1.2, berth, 4.2, berth + 14, -0.2, 0.25, 0xb9b6ae);
+  // Floating pontoons
+  k.box(-24, berth + 14, 30, berth + 19, -1.1, -0.35, 0xd9d4c7);
+  for (let u = -22; u < 30; u += 6) k.prism(u, berth + 16.5, 0.25, 0.25, -0.35, 0.5, 0x2a2a2a, 6);
+  // Ferries tied up either side of the walkway
+  ferry(k, -30, -4, berth + 19.5, berth + 25.5);
+  ferry(k, 8, 32, berth + 19.5, berth + 25);
+  ferry(k, 10, 34, berth + 4, berth + 10);
+  // Benches and palms on the forecourt
+  for (const u of [-30, 20, 34]) {
+    k.prism(u, -d / 2 + 5, 0.25, 0.2, 0.3, 6, 0x8a6a4a, 5);
+    k.prism(u, -d / 2 + 5, 2.6, 0, 5.4, 7, 0x4f8f45, 6);
+  }
 }
 
 /** Every park, school, station, hospital and landmark as one coloured mesh. */

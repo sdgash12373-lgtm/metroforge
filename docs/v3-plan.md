@@ -1,7 +1,7 @@
 # v3.0.0 plan: 工業種類、港口與屏東區
 
-Claude builds the core (regions, industry rules, port placement and the trade economy) and hands the 3D
-work to Codex (tasks D and E at the end), then integrates and reviews it all.
+Claude builds the core (regions, industry rules, port placement and the trade economy). Tasks D and E (the
+3D work) were first planned for Codex; in the end Claude built them too, so everything here is done.
 Read `AGENTS.md` first: saves must keep loading, the simulation stays deterministic, the renderer stays
 cheap on phones, touch targets are about 40 px, money is per simulation step (`DAY_STEPS` = 2400 a day)
 and shown per month, and all player-facing text is Traditional Chinese.
@@ -144,7 +144,7 @@ Already in this PR for Codex to build on: the new `Zone` values and `ZONES` entr
 `INDUSTRY_ZONES`, `isIndustry`, the `cargoPort` / `cruisePort` facility kinds (`PORT_KINDS`, `isPort`,
 `PORT_LAND`, `PORT_BERTH`), and placeholder models for both.
 
-### Task D (Codex): industry buildings
+### Task D: industry buildings (done by Claude)
 
 Only `src/render/buildings.ts`. Replace the plain-factory stand-in for the five new zones with the looks in
 package B's rendering list (加工工業區, 林業, 化工業, 科學園區, 產業園區), keeping general 工業 as it is.
@@ -152,7 +152,7 @@ Use the existing instanced meshes and `part()` (bodies, gable roofs, cylinders, 
 building; stay under the `MAX`/`MAX_PARTS` capacities; vary details by `lot.seed` and grow with
 `lot.level` (science parks and industrial parks go to level 4). `buildingShape` may get a case per zone.
 
-### Task E (Codex): port models and ships
+### Task E: port models and ships (done by Claude)
 
 - `src/render/facilities.ts`: replace the placeholder `cargoPort` and `cruisePort` models with detailed
   low-poly ones as described in package C (高雄港 container terminal; 東港渡船頭 ferry terminal). The

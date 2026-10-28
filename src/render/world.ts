@@ -26,6 +26,7 @@ import { airportMaterial, buildAirportGeometry, PlaneLayer, TaxiRank } from './a
 import { buildTrackGeometries } from './railMesh';
 import { StationLayer } from './stations';
 import { TrainLayer } from './trains';
+import { ShipLayer } from './ships';
 
 /** Everything drawn for one kind of train. */
 interface RailLayer {
@@ -90,6 +91,8 @@ export class World {
   private readonly rails: Record<RailKind, RailLayer>;
   private readonly airports: THREE.Mesh;
   private readonly planes: PlaneLayer;
+  /** ships sailing in and out of the ports */
+  private readonly ships: ShipLayer;
   private readonly taxiRanks: TaxiRank;
   private readonly signals: SignalLayer;
   private aviationVersion = -1;
@@ -258,6 +261,8 @@ export class World {
     this.airports.receiveShadow = true;
     this.airports.castShadow = false;
     this.planes = new PlaneLayer(shadows);
+    this.ships = new ShipLayer(shadows);
+    this.scene.add(this.ships.group);
     this.taxiRanks = new TaxiRank(airportMat, shadows);
     this.signals = new SignalLayer(shadows);
     this.facilities = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
@@ -419,6 +424,7 @@ export class World {
     this.decluttered = on;
     this.buildings.group.visible = !on;
     this.facilities.visible = !on;
+    this.ships.group.visible = !on;
     this.trees.trunks.visible = !on;
     this.trees.crowns.visible = !on;
     this.streetTrees.visible = !on;
@@ -658,6 +664,7 @@ export class World {
     this.vehicles.update(city.traffic, (v) => city.transit.lines.get(v.line ?? -1)?.color ?? 0xf2b134);
     for (const k of RAIL_KINDS) this.rails[k].trains.update(city.rails[k]);
     this.planes.update(city.aviation);
+    this.ships.update(city, simDt);
     this.taxiRanks.update(city.aviation, simDt);
     this.signals.update(city.traffic, city.net);
     this.peopleAge += dt;
