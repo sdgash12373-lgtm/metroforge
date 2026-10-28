@@ -22,7 +22,7 @@ export interface Terrain {
   readonly regions: RegionName[];
 }
 
-export type TerrainName = 'flat' | 'kaohsiung' | 'kaohsiung-classic';
+export type TerrainName = 'flat' | 'kaohsiung' | 'flat-classic' | 'kaohsiung-classic';
 
 /** Parts of the map a city opens one at a time: Kaohsiung, and Pingtung across the Gaoping River. */
 export type RegionName = 'kaohsiung' | 'pingtung';
@@ -246,32 +246,51 @@ function pingtungHeight(x: number, y: number, u: number, v: number): number {
 }
 
 /**
- * Kaohsiung as it was before v3.0.0 inside the original square (the old ground carries on past the
- * Gaoping River), with the new Pingtung only beyond it. Saves from then that built across the river
- * load onto this, so the rivers and coast of the new Pingtung don't sink what they built.
+ * Before v3.0.0 the map had no edge for building, only for the camera (its middle stayed within the
+ * square), so old saves can reach a little past the square. The classic terrains below keep that land.
+ */
+const LEGACY_REACH = HALF_MAP + 600;
+const nearSquare = (x: number, y: number) => Math.abs(x) <= LEGACY_REACH && Math.abs(y) <= LEGACY_REACH;
+
+/** The flat map as it was before v3.0.0: no edge to build up to. Old saves that built past the square load onto it. */
+export const FLAT_CLASSIC: Terrain = { ...FLAT, name: 'flat-classic', region: () => 'kaohsiung' };
+
+/**
+ * Kaohsiung as it was before v3.0.0 near the original square (the old ground carries on past the
+ * Gaoping River and a little past the square's edge), with the new Pingtung only beyond it. Saves from
+ * then that built across the river or past the edge load onto this, so the rivers and coast of the new
+ * Pingtung or the map's edge don't take away what they built.
  */
 export const KAOHSIUNG_CLASSIC: Terrain = {
   ...KAOHSIUNG,
   name: 'kaohsiung-classic',
   height(x, y) {
-    if (!inSquare(x, y)) return KAOHSIUNG.height(x, y);
-    const u = (x - y) * S;
-    const v = (x + y) * S;
-    return kaohsiungHeight(x, y, u, v);
+    if (!nearSquare(x, y)) return KAOHSIUNG.height(x, y);
+    return kaohsiungHeight(x, y, (x - y) * S, (x + y) * S);
   },
   water(x, y) {
-    if (!inSquare(x, y)) return KAOHSIUNG.water(x, y);
+    if (!nearSquare(x, y)) return KAOHSIUNG.water(x, y);
     const u = (x - y) * S;
     const v = (x + y) * S;
     return seaDepth(u, v) > 0 || riverDepth(u, v) > 0;
   },
   sea(x, y) {
-    if (!inSquare(x, y)) return KAOHSIUNG.sea(x, y);
+    if (!nearSquare(x, y)) return KAOHSIUNG.sea(x, y);
     return seaDepth((x - y) * S, (x + y) * S) > 0;
+  },
+  region(x, y) {
+    const r = KAOHSIUNG.region(x, y);
+    if (r || !nearSquare(x, y)) return r;
+    return (x + y) * S < riverCentre((x - y) * S) ? 'kaohsiung' : 'pingtung';
   },
 };
 
-export const TERRAINS: Record<TerrainName, Terrain> = { flat: FLAT, kaohsiung: KAOHSIUNG, 'kaohsiung-classic': KAOHSIUNG_CLASSIC };
+export const TERRAINS: Record<TerrainName, Terrain> = {
+  flat: FLAT,
+  kaohsiung: KAOHSIUNG,
+  'flat-classic': FLAT_CLASSIC,
+  'kaohsiung-classic': KAOHSIUNG_CLASSIC,
+};
 
 /** Display names of the regions. */
 export const REGION_NAMES: Record<RegionName, string> = { kaohsiung: '高雄區', pingtung: '屏東區' };

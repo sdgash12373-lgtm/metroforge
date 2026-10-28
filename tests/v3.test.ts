@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { City, FOREST_REACH, GOODS_PER_JOB, PORT_CAPACITY, REGION_COST, TRADE_SHARE, budgetTotals, freewayTown } from '../src/sim/city';
 import { FACILITIES } from '../src/sim/facilities';
 import { UNLOCK } from '../src/sim/levels';
-import { KAOHSIUNG, KAOHSIUNG_CLASSIC } from '../src/sim/terrain';
+import { FLAT_CLASSIC, KAOHSIUNG, KAOHSIUNG_CLASSIC } from '../src/sim/terrain';
 import { ZONES, Zone } from '../src/sim/zoning';
 
 const free = (x: number, y: number) => ({ kind: 'free' as const, p: { x, y } });
@@ -89,6 +89,24 @@ describe('regions', () => {
     expect(City.deserialize(copy.serialize()).terrain).toBe(KAOHSIUNG_CLASSIC);
     // Old saves that stayed on the Kaohsiung side get the new map
     expect(City.deserialize({ ...new City(T).serialize(), v: 8, regions: undefined }).terrain).toBe(T);
+  });
+
+  it('keeps what old saves built past the edge of the map', () => {
+    for (const [classic, name, a, b] of [
+      [FLAT_CLASSIC, 'flat', free(1970, 0), free(2090, 0)],
+      [KAOHSIUNG_CLASSIC, 'kaohsiung', free(-1600, -1970), free(-1600, -2090)],
+    ] as const) {
+      const city = new City(classic);
+      city.money = 1e9;
+      expect(city.buildRoad(a, null, b, true).ok).toBe(true);
+      city.paint({ x: (a.p.x + b.p.x) / 2, y: (a.p.y + b.p.y) / 2 }, 60, Zone.ResidentialLow);
+      for (const l of lots(city)) if (l.zone && !l.blocked) l.level = 2;
+      const built = lots(city).filter((l) => l.level === 2).length;
+      expect(built).toBeGreaterThan(0);
+      const copy = City.deserialize({ ...city.serialize(), v: 8, terrain: name, regions: undefined });
+      expect(copy.terrain).toBe(classic);
+      expect(lots(copy).filter((l) => l.level === 2).length).toBe(built);
+    }
   });
 
   it('can start in Pingtung with Kaohsiung locked', () => {

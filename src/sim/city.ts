@@ -24,7 +24,7 @@ import { type StationPose, stationCovers, stationPose, stationSide } from './sta
 import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
-import { FLAT, KAOHSIUNG, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
+import { FLAT, FLAT_CLASSIC, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic } from './traffic';
 import { Transit } from './transit';
 import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, isIndustry, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
@@ -620,7 +620,7 @@ export class City {
       const locked = this.regionProblem(p);
       if (locked) return locked;
     }
-    if (this.terrain === FLAT) return null;
+    if (this.terrain === FLAT || this.terrain === FLAT_CLASSIC) return null;
     for (const p of pts) {
       const h = ha + (hb - ha) * p.t;
       if (h < -1) continue;
@@ -1740,18 +1740,23 @@ export class City {
 }
 
 /**
- * Saves from before regions that built across the Gaoping River: they keep the Kaohsiung ground they
- * were built on there, as the new Pingtung's rivers and coast would sink some of it.
+ * Saves from before regions that built across the Gaoping River or past the map's edge: they keep the
+ * ground they were built on, as the new Pingtung's rivers and coast or the edge would take some of it.
  */
 function legacyTerrain(data: SaveData): TerrainName | null {
-  if (data.regions || data.terrain !== 'kaohsiung') return null;
+  if (data.regions) return null;
+  const terrain = data.terrain ?? 'flat';
+  if (terrain !== 'flat' && terrain !== 'kaohsiung') return null;
+  const now = TERRAINS[terrain];
   const points: [number, number][] = [
     ...data.nodes.map(([, x, y]) => [x, y] as [number, number]),
     ...RAIL_KINDS.flatMap((k) => (data.rails?.[k]?.nodes ?? []).map(([, x, y]) => [x, y] as [number, number])),
     ...(data.facilities ?? []).map(([, , x, y]) => [x, y] as [number, number]),
     ...(data.airports ?? []).map(([, x, y]) => [x, y] as [number, number]),
   ];
-  return points.some(([x, y]) => KAOHSIUNG.region(x, y) === 'pingtung') ? 'kaohsiung-classic' : null;
+  // Anything now in Pingtung (new ground across the river) or off the map (past the new edge)
+  const changed = (x: number, y: number) => now.region(x, y) !== 'kaohsiung';
+  return points.some(([x, y]) => changed(x, y)) ? (`${terrain}-classic` as TerrainName) : null;
 }
 
 function saveNet(net: RoadNetwork): NetSave {
