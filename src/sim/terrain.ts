@@ -18,6 +18,8 @@ export interface Terrain {
   region(x: number, y: number): RegionName | null;
   /** the map's extent, for the ground, the trees and the camera */
   readonly bounds: Bounds;
+  /** the regions this land has */
+  readonly regions: RegionName[];
 }
 
 export type TerrainName = 'flat' | 'kaohsiung';
@@ -45,6 +47,7 @@ export const FLAT: Terrain = {
   sea: () => false,
   region: (x, y) => (inSquare(x, y) ? 'kaohsiung' : null),
   bounds: SQUARE,
+  regions: ['kaohsiung'],
 };
 
 /** Flat dry land, where streets and buildings can go. */
@@ -132,6 +135,7 @@ export const KAOHSIUNG: Terrain = {
   },
   // The square plus the Pingtung band to its south-east
   bounds: { minX: -HALF_MAP, minY: -HALF_MAP, maxX: (PINGTUNG.u + PINGTUNG.v) * S, maxY: (PINGTUNG.u + PINGTUNG.v) * S },
+  regions: ['kaohsiung', 'pingtung'],
 };
 
 function kaohsiungHeight(x: number, y: number, u: number, v: number): number {

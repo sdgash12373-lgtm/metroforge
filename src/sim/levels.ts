@@ -31,7 +31,7 @@ export const LEVELS: CityLevel[] = [
     balance: 10_000_000,
     subsidy: 260,
     admin: 2200,
-    unlocks: ['道路升級：雙向雙線道、雙向四線道', '天橋', '人行道', '綠化建設'],
+    unlocks: ['道路升級：雙向雙線道、雙向四線道', '天橋', '人行道', '綠化建設', '開通其他區域（NT$100萬）'],
   },
   {
     name: '直轄市',
@@ -45,7 +45,7 @@ export const LEVELS: CityLevel[] = [
 ];
 
 /** Rank at which each later feature opens. */
-export const UNLOCK = { roadUpgrade: 3, footbridge: 3, greenery: 3, tallOffices: 4, themePark: 4, mall: 4 } as const;
+export const UNLOCK = { roadUpgrade: 3, footbridge: 3, greenery: 3, region: 3, tallOffices: 4, themePark: 4, mall: 4 } as const;
 
 /** Days in a game month. */
 export const MONTH_DAYS = 30;
