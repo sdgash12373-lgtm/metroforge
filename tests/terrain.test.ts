@@ -46,11 +46,11 @@ describe('Kaohsiung terrain', () => {
     for (const l of lots) if (KAOHSIUNG.water(l.x, l.y)) expect(l.blocked).toBe(true);
   });
 
-  it('is kept by a save, and old saves stay flat', () => {
+  it('is kept by a save, and old saves load on the 平地 map', () => {
     const city = new City(KAOHSIUNG);
     const copy = City.deserialize(JSON.parse(JSON.stringify(city.serialize())));
     expect(copy.terrain.name).toBe('kaohsiung');
     const old = { ...city.serialize(), v: 4, terrain: undefined };
-    expect(City.deserialize(old).terrain.name).toBe('flat');
+    expect(City.deserialize(old).terrain.name).toBe('plain');
   });
 });

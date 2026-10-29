@@ -39,7 +39,7 @@ type View = 'home' | 'pause' | 'new' | 'load' | 'save' | 'settings';
 const START_CHOICES: { id: string; terrain: TerrainName; region: RegionName; title: string; desc: string }[] = [
   { id: 'kaohsiung', terrain: 'kaohsiung', region: 'kaohsiung', title: '高雄', desc: '海岸、平原、河流與東北高山；屏東區之後可開通' },
   { id: 'pingtung', terrain: 'kaohsiung', region: 'pingtung', title: '屏東', desc: '屏東平原、大武山、東港與小琉球；高雄區之後可開通' },
-  { id: 'flat', terrain: 'flat', region: 'kaohsiung', title: '平地', desc: '一望無際的平原' },
+  { id: 'flat', terrain: 'plain', region: 'kaohsiung', title: '平地', desc: '大片平原，北邊高山、河川流向大海，西南臨海' },
 ];
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] {

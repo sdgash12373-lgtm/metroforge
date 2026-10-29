@@ -134,7 +134,8 @@ describe('save', () => {
     const copy = City.deserialize(data);
     expect(copy.net.segments.size).toBe(city.net.segments.size);
     expect(copy.stats.buildings).toBe(city.measure().length && city.stats.buildings);
-    expect(copy.serialize()).toEqual(city.serialize());
+    // A flat city whose roads all fit the new 平地 ground loads onto it; nothing else changes
+    expect(copy.serialize()).toEqual({ ...city.serialize(), terrain: 'plain' });
   });
 });
 
