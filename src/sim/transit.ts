@@ -1,3 +1,4 @@
+import type { RegionName } from './terrain';
 import { type Vec2, bboxNear, clamp, closestOnSamples, dist, lengthAt, quadPoint, tAtLength } from './geometry';
 import type { RoadNetwork, RoadSegment } from './roads';
 import type { Dir, RoadPoint, Traffic, Vehicle, VehicleKind } from './traffic';
@@ -145,7 +146,16 @@ export interface BusStop {
   at: RoadPoint | null;
   /** riders waiting, by line and then by the stop they are going to */
   waiting: Map<number, Map<number, number>>;
+  /**
+   * A train station built on its own, before any line: 'standard', or a region's own station in the style of its
+   * real one. It stays when no line uses it. Stops made by tapping track while drawing a line have none.
+   */
+  style?: StationStyle;
+  /** which side of the track its building stands on, when built on its own */
+  face?: 1 | -1;
 }
+
+export type StationStyle = 'standard' | RegionName;
 
 /** A piece of a line's route: one lane, from and to travel distances along it. */
 export interface PathPiece {
@@ -253,7 +263,7 @@ export class Transit {
   pruneStops(): void {
     const used = new Set<number>();
     for (const l of this.lines.values()) for (const s of l.stops) used.add(s);
-    for (const id of [...this.stops.keys()]) if (!used.has(id)) this.stops.delete(id);
+    for (const [id, stop] of [...this.stops]) if (!used.has(id) && !stop.style) this.stops.delete(id);
     this.version++;
   }
 

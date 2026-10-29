@@ -1,6 +1,7 @@
 import { angleGuides } from '../sim/angles';
 import { FACILITIES, type FacilityKind, type GreenKind, type LandmarkKind, type PortKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners, isPort } from '../sim/facilities';
 import { ntd } from '../sim/format';
+import { stationCovers } from '../sim/stations';
 import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
 import { BULLDOZE_REFUND, type City, type RoadStyle } from '../sim/city';
 import { LEVELS, UNLOCK } from '../sim/levels';
@@ -38,7 +39,7 @@ export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greene
   t === 'landmark' || t === 'greenery' || t === 'footbridge' || t === 'port' || (SERVICE_KINDS as string[]).includes(t);
 
 /** Train tools either lay track or plan lines through stations. */
-export type RailAction = 'track' | 'line';
+export type RailAction = 'station' | 'track' | 'line';
 
 export const isRail = (t: Tool): t is RailKind => t === 'metro' || t === 'train' || t === 'hsr';
 
@@ -112,6 +113,8 @@ export class ToolController {
   /** every line under the last tap, so one under another (a train beneath a bus route) can be picked in the dock */
   lineChoices: { transit: Transit; id: number }[] = [];
   railAction: RailAction = 'track';
+  /** the station tool builds the region's own station instead of a standard one */
+  specialStation = false;
   /** track tools draw curves instead of straight track */
   trackCurve = false;
   trackLevel: Record<RailKind, RoadLevel> = {
@@ -162,7 +165,13 @@ export class ToolController {
     this.selectedStreet = null;
     this.selectedDistrict = null;
     // A train system without track starts with laying track; one with lines, with the lines
-    if (isRail(tool)) this.railAction = this.city.rails[tool].transit.lines.size ? 'line' : this.city.rails[tool].net.segments.size ? this.railAction : 'track';
+    if (isRail(tool)) {
+      const sys = this.city.rails[tool];
+      if (sys.transit.lines.size) this.railAction = 'line';
+      // Trains start from a station; other kinds from track
+      else if (!sys.net.segments.size) this.railAction = tool === 'train' ? 'station' : 'track';
+      if (tool !== 'train' && this.railAction === 'station') this.railAction = 'track';
+    }
     this.world.setShowEmptyCells(tool === 'zone');
     this.world.setTrafficOverlay(tool === 'traffic');
     this.world.setLineOverlay(tool === 'bus' ? 'bus' : isRail(tool) ? tool : tool === 'bulldoze' && this.demolishLines ? 'all' : null);
@@ -183,6 +192,12 @@ export class ToolController {
   /** Level the active drawing tool builds on. */
   get level(): RoadLevel {
     return isRail(this.tool) ? this.trackLevel[this.tool] : this.roadLevel;
+  }
+
+  setSpecialStation(on: boolean): void {
+    this.specialStation = on;
+    this.events.changed();
+    this.refresh();
   }
 
   setRailAction(action: RailAction): void {
@@ -538,6 +553,7 @@ export class ToolController {
       case 'metro':
       case 'train':
       case 'hsr':
+        if (this.railAction === 'station') return this.specialStation ? '點在路邊蓋地區特色車站（高雄區：高雄車站、屏東區：屏東車站，每區一座）' : '點在路邊蓋火車站，車站會沿著道路，自帶一段月台軌道';
         return this.railAction === 'track' ? this.drawHint(`${RAIL_SPECS[this.tool].mode.label}軌道`, '拉軌道') : this.lineHint();
       case 'airport':
         return this.airportHint();
@@ -718,6 +734,11 @@ export class ToolController {
     this.hover = p;
     if (this.isRoadTool) this.tapRoad(p);
     else if (this.plansLines) this.tapLine(p);
+    else if (this.tool === 'train' && this.railAction === 'station') {
+      const r = this.city.buildTrainStation(p, this.specialStation);
+      const what = r.style === 'kaohsiung' ? '高雄車站（地下化，兩端有坡道）' : r.style === 'pingtung' ? '屏東車站（高架化，兩端有坡道）' : '火車站';
+      this.events.toast(r.ok ? `${what}完成，花費 ${ntd(r.cost)}；接著用「軌道」從車站兩端拉軌道` : (r.reason ?? '這裡不能蓋車站'));
+    }
     else if (this.tool === 'upgradeRoad') {
       const seg = this.streetAt(p);
       if (!seg) this.events.toast('點一條道路來升級（圓環除外）');
@@ -837,14 +858,19 @@ export class ToolController {
       this.finishLine();
       return;
     }
-    // A new train station in Kaohsiung or Pingtung takes its track underground or up onto a viaduct
-    if (isRail(this.tool)) {
-      const sunk = this.city.regionStationTrack(this.tool, p, r);
-      if (sunk.reason) {
-        this.events.toast(sunk.reason);
+    // Train lines run between stations already built: tap anywhere on one
+    if (this.tool === 'train') {
+      const spot = this.city.stationSpots().find((st) => st.kind === 'train' && stationCovers('train', st.pose, st.side, p, 2, st.wide));
+      const stop = spot?.stop ?? transit.stopNear(p, r);
+      if (!stop) {
+        this.events.toast('請點選已蓋好的火車站（先用「車站」在路邊蓋車站，再拉軌道接起來）');
         return;
       }
-      if (sunk.changed) this.events.toast(this.city.terrain.region(p.x, p.y) === 'pingtung' ? '屏東區車站：軌道已自動高架化，兩端有坡道接回地面' : '高雄區車站：軌道已自動地下化，兩端有坡道接回地面');
+      if (stop.id !== this.lineDraft[this.lineDraft.length - 1]) {
+        this.lineDraft.push(stop.id);
+        this.draftPath = transit.plan(this.lineDraft, false).path;
+      }
+      return;
     }
     const stop = transit.stopAt(p, r);
     if (!stop) {

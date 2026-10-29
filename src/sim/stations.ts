@@ -40,6 +40,11 @@ const BUILDING: Record<RailKind, Rect[]> = {
 /** Ground Kaohsiung's underground train stations cover: their park roof, towers and sunken plaza. */
 export const KAOHSIUNG_STATION: Rect = [-60, 60, -28, 38];
 
+/** How far from the track a train station's building reaches on its own side: where the street it fronts must run. */
+export function stationFront(wide: boolean): number {
+  return wide ? KAOHSIUNG_STATION[3] : BUILDING.train[0][3];
+}
+
 /**
  * The parts of a station that stand on the ground: at street level, or raised over it. A `wide` station (Kaohsiung's,
  * underground) spreads its roof and sunken plaza over the tracks as well as beside them.
