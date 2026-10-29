@@ -22,7 +22,7 @@ export interface Terrain {
   readonly regions: RegionName[];
 }
 
-export type TerrainName = 'flat' | 'kaohsiung' | 'flat-classic' | 'kaohsiung-classic';
+export type TerrainName = 'flat' | 'plain' | 'kaohsiung' | 'flat-classic' | 'kaohsiung-classic';
 
 /** Parts of the map a city opens one at a time: Kaohsiung, and Pingtung across the Gaoping River. */
 export type RegionName = 'kaohsiung' | 'pingtung';
@@ -343,6 +343,75 @@ function plainHeight(x: number, y: number, u: number, v: number): number {
 const LEGACY_REACH = HALF_MAP + 600;
 const nearSquare = (x: number, y: number) => Math.abs(x) <= LEGACY_REACH && Math.abs(y) <= LEGACY_REACH;
 
+/**
+ * The 平地 map since v3.1.0: still mostly open plain around where the city starts, with mountains rising
+ * in the north and north-east, a river running down from them to the sea, a lake, two lone hills, and
+ * the sea along the west and south. Saves from before keep the all-flat FLAT map.
+ */
+export const PLAIN: Terrain = {
+  name: 'plain',
+  height: (x, y) => plainMapHeight(x, y),
+  water: (x, y) => plainSea(x, y) > 0 || plainRiver(x, y) > 0 || plainLake(x, y) > 0,
+  sea: (x, y) => plainSea(x, y) > 0,
+  region: (x, y) => (inSquare(x, y) ? 'kaohsiung' : null),
+  bounds: SQUARE,
+  regions: ['kaohsiung'],
+};
+
+/** How far out to sea a point on the 平地 map lies (≤ 0 on land): the west coast, the south coast and a bay between. */
+function plainSea(x: number, y: number): number {
+  const west = -1480 + 85 * Math.sin(y / 310) + 45 * Math.sin(y / 113 + 2) + 50 * (noise(y / 200, 4.4) - 0.5);
+  const south = 1560 + 70 * Math.sin(x / 290 + 1) + 40 * Math.sin(x / 97) + 45 * (noise(x / 210, 6.2) - 0.5);
+  // A sheltered bay biting into the south coast, a good spot for a harbour
+  const bay = 1 - Math.hypot((x + 250) / 260, (y - 1560) / 300);
+  return Math.max(west - x, y - south, bay * 120);
+}
+
+/** The river's middle line: from the mountains in the north-east, south-west across the plain to the south coast. */
+function plainRiverCentre(y: number): number {
+  return 1300 - 0.42 * (y + HALF_MAP) + 95 * Math.sin(y / 240) + 40 * Math.sin(y / 97 + 1);
+}
+
+/** How far inside the river a point lies (≤ 0 off it). */
+function plainRiver(x: number, y: number): number {
+  const half = 16 + 22 * smooth(-1200, 1400, y);
+  return half - Math.abs(x - plainRiverCentre(y));
+}
+
+/** A lake on the plain south-west of town. */
+const PLAIN_LAKE = { x: -1020, y: 980, rx: 170, ry: 110 };
+
+function plainLake(x: number, y: number): number {
+  const d = Math.hypot((x - PLAIN_LAKE.x) / PLAIN_LAKE.rx, (y - PLAIN_LAKE.y) / PLAIN_LAKE.ry) * (0.92 + 0.16 * noise(x / 60, y / 60));
+  return (1 - d) * Math.min(PLAIN_LAKE.rx, PLAIN_LAKE.ry);
+}
+
+function plainMapHeight(x: number, y: number): number {
+  const sea = plainSea(x, y);
+  if (sea > 0) return -Math.min(7, 1 + sea * 0.12);
+  const river = plainRiver(x, y);
+  if (river > 0) return -Math.min(5, 1 + river * 0.15);
+  const lake = plainLake(x, y);
+  if (lake > 0) return -Math.min(4, 1 + lake * 0.1);
+  // How far towards the mountains (north and north-east; north is -y)
+  const m = -0.8 * y + 0.6 * x;
+  let h = 0;
+  const hills = 950 + 120 * (noise(x / 450, 2.9) - 0.5);
+  if (m > hills) h += smooth(hills, hills + 220, m) * (12 + 34 * fbm(x / 170, y / 170));
+  const mountains = 1350 + 150 * (noise(x / 520, 7.4) - 0.5);
+  if (m > mountains) {
+    const k = (m - mountains) / 1100;
+    const ridges = 0.55 + 0.45 * fbm(x / 240, y / 240) + 0.25 * Math.abs(Math.sin(x / 150 + fbm(x / 400, y / 400) * 4));
+    h += 560 * k ** 1.15 * ridges;
+  }
+  // The river cuts a valley down through the hills and mountains
+  h *= smooth(20, 170, Math.abs(x - plainRiverCentre(y)));
+  // A coastal hill in the north-west and a lone hill east of town
+  h += hill(x, y, -1250, -900, 150, 260, 58) * (0.8 + 0.4 * noise(x / 60, y / 60));
+  h += hill(x, y, 980, 560, 200, 150, 42) * (0.85 + 0.3 * noise(x / 50, y / 50));
+  return h < 0.4 ? 0 : h;
+}
+
 /** The flat map as it was before v3.0.0: no edge to build up to. Old saves that built past the square load onto it. */
 export const FLAT_CLASSIC: Terrain = { ...FLAT, name: 'flat-classic', region: () => 'kaohsiung' };
 
@@ -378,6 +447,7 @@ export const KAOHSIUNG_CLASSIC: Terrain = {
 
 export const TERRAINS: Record<TerrainName, Terrain> = {
   flat: FLAT,
+  plain: PLAIN,
   kaohsiung: KAOHSIUNG,
   'flat-classic': FLAT_CLASSIC,
   'kaohsiung-classic': KAOHSIUNG_CLASSIC,

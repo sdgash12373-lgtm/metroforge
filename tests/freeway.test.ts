@@ -10,7 +10,7 @@ function rng(seed = 3) {
   return () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 }
 
-function fresh(terrain: 'flat' | 'kaohsiung' = 'flat'): City {
+function fresh(terrain: 'flat' | 'plain' | 'kaohsiung' = 'flat'): City {
   const city = new City(TERRAINS[terrain]);
   city.money = 1e7;
   city.buildFreeway();
@@ -19,7 +19,7 @@ function fresh(terrain: 'flat' | 'kaohsiung' = 'flat'): City {
 
 describe('the freeway a new city starts with', () => {
   it('runs north–south on viaducts, two lanes each way, leaving the map at both ends', () => {
-    for (const terrain of ['flat', 'kaohsiung'] as const) {
+    for (const terrain of ['flat', 'plain', 'kaohsiung'] as const) {
       const city = fresh(terrain);
       expect(city.outside.size).toBe(2);
       const ends = [...city.outside].map((n) => city.net.node(n));
