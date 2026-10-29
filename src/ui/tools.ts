@@ -661,8 +661,12 @@ export class ToolController {
     const air = this.city.aviation;
     const f = this.selectedFlight !== null ? air.flights.get(this.selectedFlight) : undefined;
     if (f) return `${f.name}：已載客 ${f.passengers.toLocaleString()} 人　每班約 ${air.passengersPerFlight(this.city.stats.population)} 人`;
+    if (this.hover) {
+      const problem = this.city.planAirport(this.hover, this.radians, this.runways).reason;
+      if (problem) return problem;
+    }
     const cost = AIRPORT_COST[this.runways];
-    const base = `${this.runways === 2 ? '雙' : '四'}跑道機場 · ${ntd(cost)}　點空地蓋機場，「旋轉」調整方向`;
+    const base = `${this.runways === 2 ? '雙' : '四'}跑道機場 · ${ntd(cost)} 起　點道路旁的空地蓋機場，航廈那一側會自動接一條聯外道路到最近的路，「旋轉」調整方向`;
     if (!air.airports.size) return base;
     return `航班 ${air.flights.size} 班 · 每班約 ${air.passengersPerFlight(this.city.stats.population)} 人；按「新增航班」開航，點航班改名稱與機身顏色`;
   }
@@ -842,7 +846,7 @@ export class ToolController {
     }
     if (this.tool === 'airport' && this.hover) {
       const plan: Airport = { id: -1, p: this.hover, angle: this.radians, runways: this.runways };
-      w.setFootprint(Aviation.corners(plan), this.city.money >= AIRPORT_COST[this.runways]);
+      w.setFootprint(Aviation.corners(plan), !this.city.planAirport(this.hover, this.radians, this.runways).reason);
     } else if (this.facilityKind && this.hover) {
       const kind = this.facilityKind;
       const spot = this.city.facilitySpot(kind, this.hover);

@@ -128,6 +128,12 @@ export interface CityStats {
 
 /** Facility ends at most this far from a road's edge. */
 const FACILITY_ROAD_GAP = 4;
+/** A new airport's access road reaches this far for a street, meters. */
+export const AIRPORT_ROAD_REACH = 400;
+/** Where the access road starts, just outside the airport's landside road. */
+const AIRPORT_ROAD_SETBACK = 6.5;
+/** A building's road side must be this close to a street's middle, meters. */
+const FACILITY_ROAD_REACH = 20;
 /** Residential levels need this many services in reach: level 2 one service, level 3 two, ... */
 const SERVICES_PER_LEVEL = 1;
 
@@ -750,9 +756,12 @@ export class City {
     return { ok: true, cost, endNode: created[created.length - 1].b };
   }
 
-  /** Places an airport centred on p, its runways turned by `angle`. */
-  buildAirport(p: Vec2, angle: number, runways: RunwayCount, free = false): { ok: boolean; cost: number; reason?: string; airport?: Airport } {
-    const cost = free ? 0 : AIRPORT_COST[runways];
+  /**
+   * Whether an airport can go here and what it costs: the airfield on flat open land, and an access
+   * road from the middle of its landside (the terminal's side) to the nearest street it can reach.
+   */
+  planAirport(p: Vec2, angle: number, runways: RunwayCount, free = false): { cost: number; reason?: string; access?: { start: Vec2; end: Snap } } {
+    let cost = free ? 0 : AIRPORT_COST[runways];
     const plan: Airport = { id: -1, p, angle, runways };
     const inside = (q: Vec2) => Aviation.contains(plan, q, 6);
     const blocked = (net: RoadNetwork) =>
@@ -763,21 +772,56 @@ export class City {
       const bottom = lerp(land[3], land[2], i / 8);
       const q = lerp(top, bottom, j / 8);
       const locked = this.regionProblem(q);
-      if (locked) return { ok: false, cost, reason: locked };
-      if (!buildable(this.terrain, q)) return { ok: false, cost, reason: '機場要蓋在平坦的陸地上' };
+      if (locked) return { cost, reason: locked };
+      if (!buildable(this.terrain, q)) return { cost, reason: '機場要蓋在平坦的陸地上' };
     }
-    if (blocked(this.net)) return { ok: false, cost, reason: '機場範圍內有道路，請換個空地' };
-    if (RAIL_KINDS.some((k) => blocked(this.rails[k].net))) return { ok: false, cost, reason: '機場範圍內有軌道，請換個空地' };
+    if (blocked(this.net)) return { cost, reason: '機場範圍內有道路，請換個空地' };
+    if (RAIL_KINDS.some((k) => blocked(this.rails[k].net))) return { cost, reason: '機場範圍內有軌道，請換個空地' };
     for (const a of this.aviation.airports.values()) {
       if (Aviation.corners(plan).some((q) => Aviation.contains(a, q)) || Aviation.corners(a).some((q) => inside(q)) || dist(a.p, p) < 300) {
-        return { ok: false, cost, reason: '離另一座機場太近' };
+        return { cost, reason: '離另一座機場太近' };
       }
     }
-    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
-    this.spend(cost);
+    const access = this.airportAccess(plan);
+    if (!access) return { cost, reason: `航廈那一側 ${AIRPORT_ROAD_REACH} 公尺內要有道路，機場才接得上聯外道路（可以「旋轉」讓航廈朝向道路）` };
+    if (!free) cost += this.roadCost(access.start, null, access.end.p, 0, 0);
+    if (cost > this.money) return { cost, reason: `資金不足，需要 ${ntd(cost)}` };
+    return { cost, access };
+  }
+
+  /** The access road a new airport gets: straight out from the middle of its landside to the nearest street it can reach without crossing an airfield. */
+  private airportAccess(plan: Airport): { start: Vec2; end: Snap } | null {
+    const start = Aviation.toWorld(plan, { x: 0, y: Aviation.extent(plan.runways).maxY + AIRPORT_ROAD_SETBACK });
+    const spots: { seg: RoadSegment; t: number; d: number }[] = [];
+    for (const seg of this.net.segments.values()) {
+      if (!this.net.isStreet(seg) || !bboxNear(seg.bbox, start, AIRPORT_ROAD_REACH)) continue;
+      for (const q of seg.samples) {
+        const d = dist(q, start);
+        if (d < AIRPORT_ROAD_REACH && d > 6 && Math.abs(this.net.heightAt(seg, q.t)) < LEVEL_TOLERANCE) spots.push({ seg, t: q.t, d });
+      }
+    }
+    spots.sort((a, b) => a.d - b.d || a.seg.id - b.seg.id || a.t - b.t);
+    for (const s of spots.slice(0, 60)) {
+      const end: Snap = { kind: 'segment', seg: s.seg, t: s.t, p: quadPoint(this.net.quad(s.seg), s.t) };
+      const line = sampleQuad({ a: start, c: lerp(start, end.p, 0.5), b: end.p }, 24);
+      if (line.some((q) => Aviation.contains(plan, q, 4))) continue;
+      if (this.crossesAirport(start, null, end.p, 0, 0)) continue;
+      if (this.buildProblem({ kind: 'free', p: start }, null, end, 0)) continue;
+      return { start, end };
+    }
+    return null;
+  }
+
+  /** Places an airport centred on p, its runways turned by `angle`, with an access road out to the streets. */
+  buildAirport(p: Vec2, angle: number, runways: RunwayCount, free = false): { ok: boolean; cost: number; reason?: string; airport?: Airport } {
+    const plan = this.planAirport(p, angle, runways, free);
+    if (!plan.access) return { ok: false, cost: plan.cost, reason: plan.reason };
+    this.spend(plan.cost);
+    this.net.addRoad({ kind: 'free', p: plan.access.start }, null, plan.access.end, 0);
     const airport = this.aviation.addAirport(p, angle, runways);
+    this.roadsChanged();
     this.landChanged();
-    return { ok: true, cost, airport };
+    return { ok: true, cost: plan.cost, airport };
   }
 
   /**
@@ -834,8 +878,11 @@ export class City {
         return `這裡已經有${FACILITIES[f.kind].label}`;
       }
     }
-    const reach = Math.max(spec.w, spec.d) / 2 + this.widestRoadNear(p, Math.max(spec.w, spec.d)) / 2 + FACILITY_ROAD_GAP + 2;
-    if (!this.net.segmentAt(p, reach, 0)) return `${spec.label}要蓋在道路旁邊`;
+    // The side facing the road (its front, -v) has to sit on a street, so the building is reached from it
+    const front = this.net.segmentAt(toWorld(plan, 0, -spec.d / 2 - FACILITY_ROAD_GAP / 2), FACILITY_ROAD_REACH, 0);
+    if (!front || !this.net.isStreet(front.seg)) {
+      return isPort(kind) ? `${spec.label}靠陸地的一側要接上道路：點海邊道路靠海的一側興建` : `${spec.label}要蓋在道路旁邊：點道路旁的空地興建`;
+    }
     if (spec.cost > this.money) return `資金不足，需要 ${ntd(spec.cost)}`;
     return null;
   }
@@ -887,13 +934,6 @@ export class City {
     }
     this.portCache = { key, ports };
     return ports;
-  }
-
-  /** Widest street near p, so facilities set back from wide roads still count as beside one. */
-  private widestRoadNear(p: Vec2, r: number): number {
-    let w = ROAD_WIDTH;
-    for (const seg of this.net.segments.values()) if (bboxNear(seg.bbox, p, r + 40)) w = Math.max(w, roadWidth(seg));
-    return w;
   }
 
   /** The road a footbridge at p would cross: a street, away from junctions. */
@@ -1731,6 +1771,11 @@ export class City {
         const r = city.terrain.region(p.x, p.y);
         if (r) city.regions.add(r);
       }
+    }
+    // Airports from before access roads: lay theirs to the nearest street, free
+    for (const a of city.aviation.airports.values()) {
+      const access = city.airportAccess(a);
+      if (access && !city.net.segmentAt(access.start, 3, 0)) city.net.addRoad({ kind: 'free', p: access.start }, null, access.end, 0);
     }
     city.restoreGate();
     city.roadsChanged();
