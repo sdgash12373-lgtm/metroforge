@@ -24,7 +24,7 @@ import { type StationPose, stationCovers, stationPose, stationSide } from './sta
 import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
-import { FLAT, FLAT_CLASSIC, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
+import { FLAT, FLAT_CLASSIC, PLAIN, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic } from './traffic';
 import { Transit } from './transit';
 import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, isIndustry, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
@@ -1735,7 +1735,37 @@ export class City {
 
   static deserialize(data: SaveData): City {
     if (data.v < 1 || data.v > SAVE_VERSION) throw new Error(`unsupported save version ${data.v}`);
-    const city = new City(TERRAINS[legacyTerrain(data) ?? data.terrain ?? 'flat'] ?? FLAT);
+    const terrain = TERRAINS[legacyTerrain(data) ?? data.terrain ?? 'flat'] ?? FLAT;
+    // Cities on the all-flat 平地 map move onto its mountains, river and coast, unless something they built would end up on them
+    if (terrain === FLAT) {
+      const plain = City.load(data, PLAIN);
+      if (plain.fitsTerrain()) return plain;
+    }
+    return City.load(data, terrain);
+  }
+
+  /** Whether everything built stands where this city's land allows it: roads and tracks, grown buildings, facilities and airports. */
+  private fitsTerrain(): boolean {
+    for (const net of [this.net, ...RAIL_KINDS.map((k) => this.rails[k].net)]) {
+      for (const seg of net.segments.values()) {
+        const a = net.node(seg.a);
+        const b = net.node(seg.b);
+        if (this.terrainProblem(a.p, seg.c, b.p, a.h, b.h)) return false;
+        if (seg.lots.some((l) => l.level > 0 && !buildable(this.terrain, l))) return false;
+      }
+    }
+    for (const f of this.facilities.values()) if (footprintGrid(f).some((q) => !buildable(this.terrain, q))) return false;
+    for (const a of this.aviation.airports.values()) {
+      const land = Aviation.corners(a);
+      for (let i = 0; i <= 8; i++) for (let j = 0; j <= 8; j++) {
+        if (!buildable(this.terrain, lerp(lerp(land[0], land[1], i / 8), lerp(land[3], land[2], i / 8), j / 8))) return false;
+      }
+    }
+    return true;
+  }
+
+  private static load(data: SaveData, terrain: Terrain): City {
+    const city = new City(terrain);
     city.money = data.money;
     city.steps = Math.round(data.day * DAY_STEPS);
     if (data.name) city.name = data.name;

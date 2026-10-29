@@ -22,7 +22,7 @@ describe('the 平地 map', () => {
     expect(PLAIN.water(-1020, 980) && !PLAIN.sea(-1020, 980)).toBe(true);
   });
 
-  it('starts new cities on the freeway, and old flat saves stay flat', () => {
+  it('starts new cities on the freeway, and moves old flat cities onto it when everything they built fits', () => {
     const city = new City(PLAIN);
     city.money = 1e7;
     city.buildFreeway();
@@ -30,11 +30,23 @@ describe('the 平地 map', () => {
     expect(city.buildRoad(free(-300, 0), null, free(-300, -300), true).ok).toBe(true);
     expect(City.deserialize(city.serialize()).terrain).toBe(PLAIN);
 
-    const old = new City(FLAT);
-    old.money = 1e7;
-    expect(old.buildRoad(free(1700, -1800), null, free(1700, -1500), true).ok).toBe(true);
-    const back = City.deserialize(old.serialize());
-    expect(back.terrain).toBe(FLAT);
-    expect(back.net.segments.size).toBe(old.net.segments.size);
+    // Built only on what is still plain: the city moves onto the new map
+    const town = new City(FLAT);
+    town.money = 1e7;
+    town.buildFreeway();
+    expect(town.buildRoad(free(-300, 0), null, free(-300, -400), true).ok).toBe(true);
+    const moved = City.deserialize(town.serialize());
+    expect(moved.terrain).toBe(PLAIN);
+    expect(moved.net.segments.size).toBe(town.net.segments.size);
+
+    // A street where the mountains now are, or across the river: it keeps the flat ground
+    for (const [a, b] of [[free(1700, -1800), free(1700, -1500)], [free(0, 300), free(800, 300)]]) {
+      const old = new City(FLAT);
+      old.money = 1e7;
+      expect(old.buildRoad(a, null, b, true).ok).toBe(true);
+      const back = City.deserialize(old.serialize());
+      expect(back.terrain).toBe(FLAT);
+      expect(back.net.segments.size).toBe(old.net.segments.size);
+    }
   });
 });
