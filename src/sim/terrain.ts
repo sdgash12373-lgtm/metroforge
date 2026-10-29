@@ -94,6 +94,8 @@ const S = Math.SQRT1_2;
 
 /** Pingtung reaches this far along the coast (v) and up and down the plain (u). */
 const PINGTUNG = { v: 3900, u: 2400 };
+/** The Hengchun Peninsula's part of the map: south (u) to past Eluanbi, along v from the west sea to the Pacific. */
+const HENGCHUN = { u: -5300, minV: 2400, maxV: 4400 };
 
 /**
  * Southern Taiwan in turned axes: u runs south-west → north-east (inland, roughly real north), v runs
@@ -131,10 +133,17 @@ export const KAOHSIUNG: Terrain = {
     const u = (x - y) * S;
     const v = (x + y) * S;
     if (v < riverCentre(u)) return inSquare(x, y) ? 'kaohsiung' : null;
-    return inSquare(x, y) || (v <= PINGTUNG.v && Math.abs(u) <= PINGTUNG.u) ? 'pingtung' : null;
+    if (inSquare(x, y) || (v <= PINGTUNG.v && Math.abs(u) <= PINGTUNG.u)) return 'pingtung';
+    // The Hengchun Peninsula, reaching south to Eluanbi with the Pacific on its east
+    return u >= HENGCHUN.u && u < -PINGTUNG.u + 800 && v >= HENGCHUN.minV && v <= HENGCHUN.maxV ? 'pingtung' : null;
   },
-  // The square plus the Pingtung band to its south-east
-  bounds: { minX: -HALF_MAP, minY: -HALF_MAP, maxX: (PINGTUNG.u + PINGTUNG.v) * S, maxY: (PINGTUNG.u + PINGTUNG.v) * S },
+  // The square, the Pingtung band to its south-east and the Hengchun Peninsula to the south
+  bounds: {
+    minX: (HENGCHUN.u + HENGCHUN.minV) * S,
+    minY: -HALF_MAP,
+    maxX: (PINGTUNG.u + PINGTUNG.v) * S,
+    maxY: (HENGCHUN.maxV - HENGCHUN.u) * S,
+  },
   regions: ['kaohsiung', 'pingtung'],
 };
 
@@ -143,6 +152,12 @@ function kaohsiungHeight(x: number, y: number, u: number, v: number): number {
   if (sea > 0) return -Math.min(7, 1 + sea * 0.12);
   const river = riverDepth(u, v);
   if (river > 0) return -Math.min(5, 1 + river * 0.15);
+  const h = kaohsiungLand(x, y, u, v);
+  return h < 0.4 ? 0 : h;
+}
+
+/** Kaohsiung's hills and mountains, before the sea and river are cut in. */
+function kaohsiungLand(x: number, y: number, u: number, v: number): number {
   let h = 0;
   // Low hills, then mountains climbing steeply inland
   const hills = 380 + 80 * (noise(v / 420, 3.7) - 0.5);
@@ -156,7 +171,7 @@ function kaohsiungHeight(x: number, y: number, u: number, v: number): number {
   // Coastal hill and a lone ridge on the plain
   h += hill(u, v, -1010, -520, 130, 340, 62) * (0.8 + 0.4 * noise(x / 60, y / 60));
   h += hill(u, v, -420, -1080, 55, 230, 34) * (0.85 + 0.3 * noise(x / 50, y / 50));
-  return h < 0.4 ? 0 : h;
+  return h;
 }
 
 /** How far into the sea a point lies (≤ 0 on land). */
@@ -188,13 +203,55 @@ const DAPENG = { u: -1390, v: 2470, ru: 105, rv: 190 };
 
 const ellipse = (u: number, v: number, e: { u: number; v: number; ru: number; rv: number }) => ((u - e.u) / e.ru) ** 2 + ((v - e.v) / e.rv) ** 2;
 
+/**
+ * The Hengchun Peninsula: from Fangliao the west coast runs south past Fenggang, Checheng and Haikou to
+ * Maobitou; Nanwan bay curves between Maobitou and Eluanbi at the tip; the Pacific coast runs back north
+ * past Jialeshui, Manzhou, Jiupeng and Xuhai.
+ */
+function peninsulaWest(u: number): number {
+  const t = Math.max(0, -1850 - u);
+  return (
+    2760 + 0.08 * t + 25 * Math.sin(t / 170) + 30 * (noise(u / 160, 7.3) - 0.5) +
+    45 * Math.exp(-(((u + 3350) / 200) ** 2)) -
+    80 * Math.exp(-(((u + 4250) / 380) ** 2)) -
+    45 * Math.exp(-(((u + 4900) / 130) ** 2))
+  );
+}
+
+function peninsulaEast(u: number): number {
+  return 3860 + 0.1 * Math.min(3200, Math.max(0, u + 5050)) + 30 * Math.sin(u / 210) + 25 * (noise(u / 180, 2.6) - 0.5);
+}
+
+/** The south coast: Maobitou, round Nanwan bay to Eluanbi. */
+function peninsulaSouth(v: number): number {
+  const t = Math.max(0, Math.min(1, (v - 2930) / (3820 - 2930)));
+  return -4960 + 300 * Math.sin(Math.PI * t) ** 1.4 - 70 * Math.exp(-(((v - 3820) / 90) ** 2)) + 15 * Math.sin(v / 60);
+}
+
+/** How far out to sea from the peninsula a point lies (≤ 0 on it). */
+function peninsulaOut(u: number, v: number): number {
+  return Math.max(peninsulaWest(u) - v, v - peninsulaEast(u), peninsulaSouth(v) - u);
+}
+
+/** How far out to sea a point in Pingtung lies (≤ 0 on land). */
+function pingtungSeaDepth(u: number, v: number): number {
+  // The Pacific, east of the peninsula and of the range to its north
+  const pacific = v - peninsulaEast(u);
+  if (pacific > 0) return pacific;
+  const west = pingtungCoast(v) - u;
+  return west > 0 ? Math.min(west, peninsulaOut(u, v)) : west;
+}
+
 function pingtungSea(u: number, v: number): boolean {
   if (ellipse(u, v, LIUQIU) < 1) return false;
   if (ellipse(u, v, DAPENG) < 1) return true;
   // Mouth of the lagoon
   if (Math.abs(v - (DAPENG.v - 120)) < 14 && u < DAPENG.u && u > pingtungCoast(v) - 5) return true;
-  return u < pingtungCoast(v);
+  return pingtungSeaDepth(u, v) > 0;
 }
+
+/** Longluan Lake: a freshwater lake on the Hengchun plain. */
+const LONGLUAN = { u: -4380, v: 3020, ru: 95, rv: 60 };
 
 /** Donggang River: down the middle of the plain to the sea at Donggang. */
 function donggangCentre(u: number): number {
@@ -206,11 +263,15 @@ function linbianCentre(v: number): number {
   return -1750 + (v - 2900) / 2.5 + 30 * Math.sin(v / 120);
 }
 
-/** How far inside the Donggang or Linbian river a point lies (≤ 0 off both). */
+/** How far inside one of Pingtung's rivers or Longluan Lake a point lies (≤ 0 off them). */
 function pingtungRivers(u: number, v: number): number {
   const dong = (16 + 10 * smooth(0, -1500, u)) * smooth(1700, 1300, u) - Math.abs(v - donggangCentre(u));
   const lin = (14 + 12 * smooth(3100, 2850, v)) * smooth(3600, 3300, v) - Math.abs(u - linbianCentre(v));
-  return Math.max(dong, lin);
+  // Sichong River out of the hills to the sea at Checheng, and the Gangkou River down to the Pacific
+  const sichong = 11 * smooth(3450, 3300, v) - Math.abs(u - (-3350 + 25 * Math.sin(v / 90)));
+  const gangkou = 10 * smooth(3650, 3780, v) - Math.abs(u - (-4150 + 20 * Math.sin(v / 70) + 0.2 * (v - 3800)));
+  const lake = 40 * (1 - ellipse(u, v, LONGLUAN));
+  return Math.max(dong, lin, sichong, gangkou, lake);
 }
 
 /** Where the Central Range rises out of the plain, nearer the sea in the south. */
@@ -223,10 +284,40 @@ function pingtungHeight(x: number, y: number, u: number, v: number): number {
   if (island < 1) return Math.max(0.6, 22 * (1 - island) ** 0.7 * (0.8 + 0.3 * noise(x / 40, y / 40)));
   if (pingtungSea(u, v)) {
     if (ellipse(u, v, DAPENG) < 1.2) return -2.5;
-    return -Math.min(7, 1 + (pingtungCoast(v) - u) * 0.12);
+    return -Math.min(7, 1 + Math.max(0, pingtungSeaDepth(u, v)) * 0.12);
   }
   const river = Math.max(riverDepth(u, v), pingtungRivers(u, v));
   if (river > 0) return -Math.min(5, 1 + river * 0.15);
+  // Near the Gaoping River the hills and mountains carry on from the Kaohsiung bank, then give way
+  // to Pingtung's own; in the south the Central Range runs on down the peninsula
+  const fromKaohsiung = 1 - smooth(riverCentre(u), riverCentre(u) + 650, v);
+  const south = smooth(-1750, -2500, u);
+  let h = (1 - south) * plainHeight(x, y, u, v) + south * peninsulaHeight(x, y, u, v);
+  if (fromKaohsiung > 0) h = fromKaohsiung * kaohsiungLand(x, y, u, v) + (1 - fromKaohsiung) * h;
+  return h < 0.4 ? 0 : h;
+}
+
+/** The Hengchun Peninsula's hills: the range's tail down its east side, the Hengchun plain, Kenting. */
+function peninsulaHeight(x: number, y: number, u: number, v: number): number {
+  // The spine drifts east and sinks southwards, leaving the Hengchun plain open on the west
+  const spine = 3420 + 280 * smooth(-3500, -4300, u);
+  const half = 620 - 230 * smooth(-3500, -4300, u);
+  const peak = 520 * smooth(-4300, -2000, u) ** 1.3 + 45;
+  const across = 1 - ((v - spine) / half) ** 2;
+  let h = 0;
+  if (across > 0) {
+    const ridges = 0.55 + 0.45 * fbm(x / 210, y / 210) + 0.25 * Math.abs(Math.sin(u / 140 + fbm(x / 380, y / 380) * 4));
+    h += peak * across ** 1.2 * ridges;
+  }
+  // Dajianshan above Kenting, the Sheding plateau, a low hill at Maobitou
+  h += hill(u, v, -4600, 3480, 140, 120, 58) * (0.85 + 0.3 * noise(x / 40, y / 40));
+  h += hill(u, v, -4760, 3660, 200, 170, 32) * (0.8 + 0.4 * noise(x / 60, y / 60));
+  h += hill(u, v, -4880, 2990, 80, 60, 18);
+  return h;
+}
+
+/** The Pingtung Plain with the Central Range on its east and hills up the river. */
+function plainHeight(x: number, y: number, u: number, v: number): number {
   let h = 0;
   // Foothills, then the Central Range climbing steeply eastwards, Dawu Mountain highest
   const front = rangeFront(u);
@@ -242,7 +333,7 @@ function pingtungHeight(x: number, y: number, u: number, v: number): number {
   if (u > hills) h += smooth(hills, hills + 200, u) * (16 + 40 * fbm(x / 170, y / 170));
   const mountains = 1950 + 120 * (noise(v / 500, 2.9) - 0.5);
   if (u > mountains) h += 640 * ((u - mountains) / 1200) ** 1.15 * (0.55 + 0.45 * fbm(x / 240, y / 240));
-  return h < 0.4 ? 0 : h;
+  return h;
 }
 
 /**
