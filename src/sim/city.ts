@@ -801,10 +801,14 @@ export class City {
       }
     }
     spots.sort((a, b) => a.d - b.d || a.seg.id - b.seg.id || a.t - b.t);
-    for (const s of spots.slice(0, 60)) {
+    // Spots whose line runs over the new airfield are dropped first, so the costlier checks below
+    // are capped only among roads the access road could actually reach.
+    let tries = 0;
+    for (const s of spots) {
       const end: Snap = { kind: 'segment', seg: s.seg, t: s.t, p: quadPoint(this.net.quad(s.seg), s.t) };
       const line = sampleQuad({ a: start, c: lerp(start, end.p, 0.5), b: end.p }, 24);
       if (line.some((q) => Aviation.contains(plan, q, 4))) continue;
+      if (++tries > 60) break;
       if (this.crossesAirport(start, null, end.p, 0, 0)) continue;
       if (this.buildProblem({ kind: 'free', p: start }, null, end, 0)) continue;
       return { start, end };

@@ -190,6 +190,15 @@ describe('airports', () => {
     expect(city.disconnectedRoads()).toHaveLength(0);
   });
 
+  it('look past nearby roads the access road could only reach across the airfield', () => {
+    const city = new City();
+    city.money = 1e7;
+    expect(city.buildRoad(free(-320, 0), null, free(-320, 120), true).ok).toBe(true);
+    expect(city.buildRoad(free(320, 0), null, free(320, 120), true).ok).toBe(true);
+    expect(city.buildRoad(free(-100, 485), null, free(100, 485), true).ok).toBe(true);
+    expect(city.buildAirport({ x: 0, y: 0 }, 0, 2).ok).toBe(true);
+  });
+
   it('lay the access road for airports from older saves when they load', () => {
     const city = new City();
     city.money = 1e6;
