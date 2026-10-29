@@ -1,7 +1,7 @@
 import { type Vec2, closestOnSamples, quadPoint, quadTangent, tAtLength } from './geometry';
 import type { RailKind, RailSystem } from './rail';
 import { type RoadNetwork, roadWidth } from './roads';
-import type { BusStop } from './transit';
+import type { BusStop, StationStyle } from './transit';
 
 /** Where a station stands on its track: the point, the heading, and the track's height. */
 export interface StationPose {
@@ -40,30 +40,34 @@ const BUILDING: Record<RailKind, Rect[]> = {
 /** Ground Kaohsiung's underground train stations cover: their park roof, towers and sunken plaza. */
 export const KAOHSIUNG_STATION: Rect = [-60, 60, -28, 38];
 
+/** Ground Pingtung's elevated train stations cover: the hall under the tracks and the plaza with its pool in front. */
+export const PINGTUNG_STATION: Rect = [-50, 50, -12, 34];
+
 /** How far from the track a train station's building reaches on its own side: where the street it fronts must run. */
-export function stationFront(wide: boolean): number {
-  return wide ? KAOHSIUNG_STATION[3] : BUILDING.train[0][3];
+export function stationFront(style?: StationStyle): number {
+  return style === 'kaohsiung' ? KAOHSIUNG_STATION[3] : style === 'pingtung' ? PINGTUNG_STATION[3] : BUILDING.train[0][3];
 }
 
 /**
- * The parts of a station that stand on the ground: at street level, or raised over it. A `wide` station (Kaohsiung's,
- * underground) spreads its roof and sunken plaza over the tracks as well as beside them.
+ * The parts of a station that stand on the ground: at street level, or raised over it. A region's own train station
+ * (`style`) covers more: Kaohsiung's spreads its roof and sunken plaza over the tracks, Pingtung's its plaza in front.
  */
-export function stationRects(kind: RailKind, h: number, wide = false): Rect[] {
+export function stationRects(kind: RailKind, h: number, style?: StationStyle): Rect[] {
   // Underground, only a train station's building is at street level; metro entrances find their own spots
-  if (h < 0 && wide && kind === 'train') return [KAOHSIUNG_STATION];
+  if (kind === 'train' && style === 'kaohsiung' && h < 0) return [KAOHSIUNG_STATION];
+  if (kind === 'train' && style === 'pingtung' && h > 0) return [PINGTUNG_STATION];
   if (h < 0) return kind === 'metro' ? [] : [BUILDING[kind][0]];
   return [PLATFORMS[kind], ...BUILDING[kind]];
 }
 
 /** Whether `pt` is within `margin` of the ground a station covers, with its building on side `side` (±1). */
-export function stationCovers(kind: RailKind, pose: StationPose, side: number, pt: Vec2, margin: number, wide = false): boolean {
+export function stationCovers(kind: RailKind, pose: StationPose, side: number, pt: Vec2, margin: number, style?: StationStyle): boolean {
   const dx = pt.x - pose.p.x;
   const dy = pt.y - pose.p.y;
   // A building on the -1 side is the station turned round, so u flips with v
   const u = (dx * pose.d.x + dy * pose.d.y) * side;
   const v = (-dx * pose.d.y + dy * pose.d.x) * side;
-  return stationRects(kind, pose.h, wide).some(([u0, u1, v0, v1]) => u >= u0 - margin && u <= u1 + margin && v >= v0 - margin && v <= v1 + margin);
+  return stationRects(kind, pose.h, style).some(([u0, u1, v0, v1]) => u >= u0 - margin && u <= u1 + margin && v >= v0 - margin && v <= v1 + margin);
 }
 
 /**

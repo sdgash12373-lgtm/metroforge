@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { closestOnSamples, quadPoint } from '../sim/geometry';
 import type { RailSystem } from '../sim/rail';
-import { KAOHSIUNG_STATION, stationPose, stationSide } from '../sim/stations';
+import { KAOHSIUNG_STATION, PINGTUNG_STATION, stationPose, stationSide } from '../sim/stations';
 import { type RoadNetwork, asphaltWidth, roadWidth } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { Builder } from './roadMesh';
@@ -16,6 +16,7 @@ const STEEL_WHITE = 0xf1f2ef;
 const GRANITE = 0x8d8f8c;
 const GRANITE_LIGHT = 0xc9c6bd;
 const PAVING = 0xd8cdb8;
+const STONE_DARK = 0x56595b;
 
 /** 0 below a, 1 above b, eased between. */
 const smooth = (a: number, b: number, x: number) => {
@@ -603,42 +604,81 @@ function palm(f: Frame, u: number, v: number, y: number): void {
 }
 
 /**
- * Pingtung station on raised track, like the real one: the platforms on the upper floor under a long white roof
- * arched over the tracks, a glass hall on the ground floor beneath them, and a front of glass and white fins two
- * storeys high facing a plaza with palms and a canopy over the way in.
+ * Pingtung station on raised track, after the design drawing of the real one: a long hall carrying the platforms,
+ * dark stone below with a band of glass, a pale roof curved over the top with white rounded eaves, and a row of
+ * white arched ribs striding over it. In front, under a white canopy that ripples along the entrance, a plaza
+ * with a long pool of fountains, trees and pavilions, and the bus station's low round-roofed hall to one side.
  */
 function pingtungElevated(f: Frame, h: number, color: number): void {
   platforms(f, h, 84);
-  // Upper floor: the arched roof over the platforms on slim columns
-  for (let u = -36; u <= 36; u += 12) for (const side of [-1, 1]) f.box(u, side * 7.3, 0.45, 0.45, h + 1.1, h + 6.4, STEEL_WHITE);
-  f.vault(0, 0, 84, 16, h + 6.4, 4, STEEL_WHITE, 12);
-  for (const e of [-1, 1]) f.box(e * 42, 0, 0.3, 16, h + 6, h + 6.6, color);
-  f.box(0, -7.4, 80, 0.1, h + 1.1, h + 6.2, GLASS);
-  // Ground floor: the hall under the platforms, glass between white piers
-  f.box(0, 0, 66, 14, 0, 0.2, GRANITE_LIGHT);
-  f.box(0, 0, 64, 12, 0.2, h - 1.4, GLASS);
-  for (let u = -30; u <= 30; u += 6) for (const side of [-1, 1]) f.box(u, side * 6.2, 0.8, 0.8, 0, h - 1.2, STEEL_WHITE);
-  f.box(0, 0, 66, 14, h - 1.4, h - 0.6, STEEL_WHITE);
-  // The front: glass two storeys high behind white fins, from the plaza up to the roof's edge
-  const front = 8.4;
-  f.box(0, front, 40, 0.15, 0.2, h + 7, GLASS);
-  for (let u = -19.5; u <= 19.5; u += 1.5) f.box(u, front + 0.4, 0.22, 0.7, 0, h + 7.4, STEEL_WHITE);
-  f.box(0, front + 0.2, 41, 1.2, h + 7.2, h + 8, STEEL_WHITE);
-  f.box(0, front + 0.85, 12, 0.15, h + 3, h + 4.6, TR_BLUE);
-  f.box(0, front + 0.95, 10.5, 0.05, h + 3.4, h + 4.2, 0xf7f7f4);
-  // Plaza in front: paving, a canopy over the way in, palms in rows and a band of lawn
-  f.box(0, 17.2, 34.6, 15, 0, 0.06, GRANITE_LIGHT);
-  f.box(0, 12.4, 16, 4.6, 3.8, 4.1, STEEL_WHITE);
-  for (const cu of [-7.6, 7.6]) f.box(cu, 14.4, 0.3, 0.3, 0, 3.8, STEEL_WHITE);
-  for (const lu of [-12, 12]) f.box(lu, 20, 9, 6, 0.06, 0.2, ROOF_GREEN);
-  for (const pu of [-15, -11, -7, 7, 11, 15]) {
-    for (const pv of [17.5, 22.5]) {
-      if (Math.abs(pu) < 8 && pv > 20) continue;
-      palm(f, pu, pv, 0);
+  const [u0, u1, , v1] = PINGTUNG_STATION;
+  const len = 92;
+  const half = 9.5;
+  // Ground floor and concourse: dark stone piers, glass between them, a band of glass under the platform floor
+  f.box(0, 0, len, half * 2, 0, h - 0.4, STONE_DARK);
+  for (const side of [-1, 1]) {
+    for (let u = -42; u < 42; u += 6) f.box(u + 3, side * (half + 0.05), 4, 0.1, 0.3, h - 2.6, GLASS);
+    f.box(0, side * (half + 0.1), len - 2, 0.1, h - 2.2, h - 0.8, 0x8fb4c4);
+  }
+  // Platform level: glass walls round the platforms, the tracks open at the ends
+  for (const side of [-1, 1]) f.box(0, side * half, len, 0.3, h - 0.4, h + 6, 0xa9c4cf);
+  for (let u = -42; u <= 42; u += 6) for (const side of [-1, 1]) f.box(u, side * (half + 0.1), 0.5, 0.4, h - 0.4, h + 6, 0xe4e6e3);
+  // The roof: pale and curved over the top, rounded white eaves along both sides
+  f.vault(0, 0, len + 4, half * 2 + 4, h + 6, 3.2, 0xd5d8d6, 12);
+  for (const side of [-1, 1]) {
+    f.box(0, side * (half + 2), len + 4.4, 1.2, h + 5.2, h + 6.4, STEEL_WHITE);
+    f.panel(0, len + 4.4, side * (half + 2.6), h + 5.4, side * (half + 1.4), h + 4.6, STEEL_WHITE);
+  }
+  for (const e of [-1, 1]) f.box(e * (len / 2 + 2), 0, 0.4, half * 2 + 4, h + 5.2, h + 6.6, color);
+  // White arched ribs over the roof, each a pointed arch from eave to eave
+  const ribs = 13;
+  for (let k = 0; k < ribs; k++) {
+    const u = -len / 2 + 4 + (k * (len - 8)) / (ribs - 1);
+    const base = h + 5.6;
+    const top = h + 15;
+    const pts: [number, number][] = [];
+    for (let j = 0; j <= 6; j++) {
+      const t = j / 6;
+      // From the eave up to the apex, bowed outwards like a pointed arch
+      pts.push([(half + 3) * (1 - t), base + (top - base) * Math.sin((t * Math.PI) / 2) ** 0.8]);
+    }
+    for (const side of [-1, 1]) {
+      for (let j = 0; j < 6; j++) f.beam(u, side * pts[j][0], pts[j][1], u, side * pts[j + 1][0], pts[j + 1][1], 0.55, STEEL_WHITE);
     }
   }
-  // Stair and lift up to the platforms at one end
-  f.box(20, 10.5, 4, 3, 0, h + 1.1, STEEL_WHITE);
+  // The station's name in blue on the front, by the entrance
+  f.box(-20, half + 0.3, 12, 0.2, h - 3.2, h - 1.2, TR_BLUE);
+  f.box(-20, half + 0.42, 10.5, 0.05, h - 2.7, h - 1.7, 0xf7f7f4);
+  // Entrance canopy: a white membrane rippling along the front on slim posts
+  const canopy = (u: number, v: number) => 6 + 1.1 * Math.cos((u / 7.5) * Math.PI) - 0.9 * ((v - half) / 8);
+  f.sheet(-16, 40, half + 0.5, half + 8.5, 56, 4, canopy, () => 0xf4f6f6);
+  for (let u = -12; u <= 36; u += 7.5) f.box(u, half + 7.6, 0.3, 0.3, 0, canopy(u, half + 7.6), STEEL_WHITE);
+  // The plaza: paving, a long pool with fountains, trees, little pavilions
+  f.box(0, (half + v1) / 2, u1 - u0, v1 - half, -0.02, 0.05, PAVING);
+  f.box(-2, 25, 30, 11, 0.05, 0.35, GRANITE_LIGHT);
+  f.box(-2, 25, 28.6, 9.6, 0.05, 0.4, 0x5fb8b5);
+  for (let k = 0; k < 12; k++) {
+    const a = (k / 12) * Math.PI * 2;
+    f.box(-2 + Math.cos(a) * 3, 25 + Math.sin(a) * 2.2, 0.15, 0.15, 0.4, 2.6 + (k % 3) * 0.8, 0xf2f6f8);
+  }
+  f.box(-2, 25, 0.25, 0.25, 0.4, 4.2, 0xf2f6f8);
+  const tree = (u: number, v: number, r: number) => {
+    f.box(u, v, 0.35, 0.35, 0, 2.6, TRUNK);
+    f.prism(u, v, r, 2.4, 2.4 + r * 1.3, 0x5f9446, 8);
+    f.prism(u, v, r * 0.7, 2.4 + r * 1.3, 2.4 + r * 1.9, 0x6ea350, 8);
+  };
+  for (const [tu, tv, r] of [[-44, 14, 2.4], [-38, 20, 2.8], [-44, 27, 2.6], [-36, 31, 2.2], [-27, 15, 2], [-25, 31, 2.4], [20, 31, 2.2], [-16, 32, 1.8]]) tree(tu, tv, r);
+  for (const [pu, pv, c] of [[-31, 24, 0xd4785a], [-21, 22, 0x6aa38f]] as const) {
+    for (const cu of [-1.6, 1.6]) for (const cv of [-1.6, 1.6]) f.box(pu + cu, pv + cv, 0.2, 0.2, 0, 2.6, STEEL_WHITE);
+    f.gable(pu, pv, 4.6, 4.6, 2.6, 3.4, c);
+  }
+  // The bus station's hall to one side: low, glass-fronted, a curved roof
+  f.box(39, 27, 18, 10, 0, 4, 0xe8e9e6);
+  f.box(39, 32.05, 16, 0.1, 0.3, 3.4, GLASS);
+  f.vault(39, 27, 19, 11, 4, 1.4, 0xcfd3d3, 8);
+  f.box(34, 32.3, 4, 0.1, 2.6, 3.4, TR_BLUE);
+  // Stair and lift up to the platforms at the far end
+  f.box(46, 0, 4, 4, 0, h + 1.1, STEEL_WHITE);
 }
 
 /**

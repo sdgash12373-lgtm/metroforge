@@ -93,7 +93,8 @@ export interface StationSpot {
   kind: RailKind;
   pose: StationPose;
   side: 1 | -1;
-  wide: boolean;
+  /** a region's own station, which covers more ground */
+  style?: StationStyle;
   stop: BusStop;
 }
 
@@ -460,7 +461,7 @@ export class City {
   /** Water, hillside, track, a station or an airfield on this spot, so nothing can be built on it. */
   occupied(p: Vec2): boolean {
     if (!this.open(p) || !buildable(this.terrain, p)) return true;
-    for (const st of this.stationSpots()) if (stationCovers(st.kind, st.pose, st.side, p, CELL * 0.45, st.wide)) return true;
+    for (const st of this.stationSpots()) if (stationCovers(st.kind, st.pose, st.side, p, CELL * 0.45, st.stop.style)) return true;
     // Footbridges stand on the sidewalks and leave the lots beside them free
     for (const f of this.facilities.values()) if (f.kind !== 'footbridge' && footprintContains(f, p, 2)) return true;
     for (const a of this.aviation.airports.values()) if (Aviation.contains(a, p, 2)) return true;
@@ -535,7 +536,7 @@ export class City {
         const pose = stop && stationPose(sys, stop);
         if (!stop || !pose) continue;
         const side = stop.face ?? (kind === 'metro' ? 1 : stationSide(this.net, kind, pose));
-        spots.push({ kind, pose, side, wide: stop.style === 'kaohsiung', stop });
+        spots.push({ kind, pose, side, style: stop.style, stop });
       }
     }
     this.stationCache = { key, spots };
@@ -817,8 +818,7 @@ export class City {
     // Out from the street towards where the player tapped
     let n = { x: -tan.y, y: tan.x };
     if ((p.x - at.x) * n.x + (p.y - at.y) * n.y < 0) n = { x: -n.x, y: -n.y };
-    const wide = style === 'kaohsiung';
-    const offset = stationFront(wide) + roadWidth(best.seg) / 2 + 1.5;
+    const offset = stationFront(style) + roadWidth(best.seg) / 2 + 1.5;
     const centre = { x: at.x + n.x * offset, y: at.y + n.y * offset };
     // The building stands on the side of the track towards the street
     const face: 1 | -1 = -tan.y * -n.x + tan.x * -n.y > 0 ? 1 : -1;
@@ -838,7 +838,7 @@ export class City {
     const pose: StationPose = { p: centre, d: tan, h: level };
     for (const seg of this.net.segments.values()) {
       if (seg === best.seg || !bboxNear(seg.bbox, centre, 120)) continue;
-      if (seg.samples.some((pt) => stationCovers('train', pose, face, pt, roadWidth(seg) / 2, wide) && this.net.heightAt(seg, pt.t) >= 0)) {
+      if (seg.samples.some((pt) => stationCovers('train', pose, face, pt, roadWidth(seg) / 2, style) && this.net.heightAt(seg, pt.t) >= 0)) {
         return { cost: 0, reason: '車站範圍內有其他道路，請換個地方' };
       }
     }
@@ -883,7 +883,7 @@ export class City {
   private bulldozeTrainStation(p: Vec2): { ok: boolean; refund: number; reason?: string; what?: string } | null {
     const sys = this.rails.train;
     for (const st of this.stationSpots()) {
-      if (st.kind !== 'train' || !st.stop.style || !stationCovers('train', st.pose, st.side, p, 0, st.wide)) continue;
+      if (st.kind !== 'train' || !st.stop.style || !stationCovers('train', st.pose, st.side, p, 0, st.style)) continue;
       const line = [...sys.transit.lines.values()].find((l) => l.stops.includes(st.stop.id));
       if (line) return { ok: false, refund: 0, reason: `「${line.name}」還停靠這個車站，請先拆除路線` };
       sys.transit.stops.delete(st.stop.id);

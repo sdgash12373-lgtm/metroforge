@@ -860,7 +860,7 @@ export class ToolController {
     }
     // Train lines run between stations already built: tap anywhere on one
     if (this.tool === 'train') {
-      const spot = this.city.stationSpots().find((st) => st.kind === 'train' && stationCovers('train', st.pose, st.side, p, 2, st.wide));
+      const spot = this.city.stationSpots().find((st) => st.kind === 'train' && stationCovers('train', st.pose, st.side, p, 2, st.style));
       const stop = spot?.stop ?? transit.stopNear(p, r);
       if (!stop) {
         this.events.toast('請點選已蓋好的火車站（先用「車站」在路邊蓋車站，再拉軌道接起來）');
