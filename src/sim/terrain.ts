@@ -369,7 +369,9 @@ function plainSea(x: number, y: number): number {
 
 /** The river's middle line: from the mountains in the north-east, south-west across the plain to the south coast. */
 function plainRiverCentre(y: number): number {
-  return 1300 - 0.42 * (y + HALF_MAP) + 95 * Math.sin(y / 240) + 40 * Math.sin(y / 97 + 1);
+  // A wide bend east around the plain south of town, where old flat cities put their airports
+  const bend = 300 * smooth(450, 650, y) * (1 - smooth(980, 1150, y));
+  return 1300 - 0.42 * (y + HALF_MAP) + 95 * Math.sin(y / 240) + 40 * Math.sin(y / 97 + 1) + bend;
 }
 
 /** How far inside the river a point lies (≤ 0 off it). */
