@@ -760,7 +760,7 @@ export class City {
    * Whether an airport can go here and what it costs: the airfield on flat open land, and an access
    * road from the middle of its landside (the terminal's side) to the nearest street it can reach.
    */
-  planAirport(p: Vec2, angle: number, runways: RunwayCount, free = false): { cost: number; reason?: string; access?: { start: Vec2; end: Snap } } {
+  planAirport(p: Vec2, angle: number, runways: RunwayCount, free = false, checkMoney = true): { cost: number; reason?: string; access?: { start: Vec2; end: Snap } } {
     let cost = free ? 0 : AIRPORT_COST[runways];
     const plan: Airport = { id: -1, p, angle, runways };
     const inside = (q: Vec2) => Aviation.contains(plan, q, 6);
@@ -785,7 +785,7 @@ export class City {
     const access = this.airportAccess(plan);
     if (!access) return { cost, reason: `航廈那一側 ${AIRPORT_ROAD_REACH} 公尺內要有道路，機場才接得上聯外道路（可以「旋轉」讓航廈朝向道路）` };
     if (!free) cost += this.roadCost(access.start, null, access.end.p, 0, 0);
-    if (cost > this.money) return { cost, reason: `資金不足，需要 ${ntd(cost)}` };
+    if (checkMoney && cost > this.money) return { cost, reason: `資金不足，需要 ${ntd(cost)}` };
     return { cost, access };
   }
 
