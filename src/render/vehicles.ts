@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { Traffic, Vehicle } from '../sim/traffic';
+import { type Traffic, type Vehicle, isTaxi } from '../sim/traffic';
 import { GLASS, HEADLIGHT, TAILLIGHT, painted, tint, wheel } from './kit';
 import { PORTAL_DEPTH } from './roadMesh';
 
@@ -176,7 +176,7 @@ export class VehicleLayer {
       if (!pose) continue;
       // Cars come in three body styles and some are taxis; the police drive sedans
       const style = Math.floor(((v.tint * 97) % 1) * 3);
-      const taxi = v.kind === 'car' && (v.tint * 13) % 1 < 0.1;
+      const taxi = isTaxi(v);
       const k = v.kind === 'scooter' ? 3 : v.kind === 'truck' ? 4 : v.kind === 'bus' ? 5 : v.kind === 'police' || taxi ? 0 : style;
       const i = counts[k];
       if (i >= this.paint[k].instanceMatrix.count) continue;

@@ -1,4 +1,4 @@
-import { AIRPORT_COST, AIRPORT_UPKEEP, type Airport, Aviation, FLIGHT_UPKEEP, type RunwayCount } from './airport';
+import { ACCESS_Y, AIRPORT_COST, AIRPORT_UPKEEP, type Airport, Aviation, FLIGHT_UPKEEP, type RunwayCount } from './airport';
 import {
   FACILITIES,
   type Facility,
@@ -25,7 +25,7 @@ import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMEN
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, FLAT_CLASSIC, PLAIN, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
-import { type RoadPoint, Traffic } from './traffic';
+import { type RoadPoint, Traffic, taxiTint } from './traffic';
 import { Transit } from './transit';
 import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, isIndustry, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
@@ -130,8 +130,8 @@ export interface CityStats {
 const FACILITY_ROAD_GAP = 4;
 /** A new airport's access road reaches this far for a street, meters. */
 export const AIRPORT_ROAD_REACH = 400;
-/** Where the access road starts, just outside the airport's landside road. */
-const AIRPORT_ROAD_SETBACK = 6.5;
+/** An airport's access road has two lanes each way. */
+export const AIRPORT_ROAD_LANES: LaneCount = 2;
 /** A building's road side must be this close to a street's middle, meters. */
 const FACILITY_ROAD_REACH = 20;
 /** Residential levels need this many services in reach: level 2 one service, level 3 two, ... */
@@ -784,14 +784,15 @@ export class City {
     }
     const access = this.airportAccess(plan);
     if (!access) return { cost, reason: `航廈那一側 ${AIRPORT_ROAD_REACH} 公尺內要有道路，機場才接得上聯外道路（可以「旋轉」讓航廈朝向道路）` };
-    if (!free) cost += this.roadCost(access.start, null, access.end.p, 0, 0);
+    // A road with its extra lanes, priced as building one and widening it
+    if (!free) cost += this.roadCost(access.start, null, access.end.p, 0, 0) * (2 * AIRPORT_ROAD_LANES - 1);
     if (checkMoney && cost > this.money) return { cost, reason: `資金不足，需要 ${ntd(cost)}` };
     return { cost, access };
   }
 
   /** The access road a new airport gets: straight out from the middle of its landside to the nearest street it can reach without crossing an airfield. */
   private airportAccess(plan: Airport): { start: Vec2; end: Snap } | null {
-    const start = Aviation.toWorld(plan, { x: 0, y: Aviation.extent(plan.runways).maxY + AIRPORT_ROAD_SETBACK });
+    const start = Aviation.toWorld(plan, { x: 0, y: ACCESS_Y });
     const spots: { seg: RoadSegment; t: number; d: number }[] = [];
     for (const seg of this.net.segments.values()) {
       if (!this.net.isStreet(seg) || !bboxNear(seg.bbox, start, AIRPORT_ROAD_REACH)) continue;
@@ -816,12 +817,41 @@ export class City {
     return null;
   }
 
+  /** Widens an access road from its start at the airport up to the first junction. */
+  private widenAccess(start: Vec2): void {
+    const hit = this.net.segmentAt(start, 3, 0);
+    if (!hit) return;
+    let seg: RoadSegment | undefined = hit.seg;
+    let node = dist(this.net.node(seg.a).p, start) <= dist(this.net.node(seg.b).p, start) ? seg.a : seg.b;
+    for (let i = 0; seg && i < 50; i++) {
+      if (seg.highway || !this.net.isStreet(seg)) return;
+      if ((seg.lanes ?? 1) < AIRPORT_ROAD_LANES) applyStyle(this.net, seg, { lanes: AIRPORT_ROAD_LANES });
+      node = seg.a === node ? seg.b : seg.a;
+      if (this.net.degree(node) !== 2) return;
+      const prev: RoadSegment = seg;
+      seg = [...this.net.segments.values()].find((s) => s !== prev && (s.a === node || s.b === node));
+    }
+  }
+
+  private layAccess(access: { start: Vec2; end: Snap }): void {
+    for (const s of this.net.addRoad({ kind: 'free', p: access.start }, null, access.end, 0)) applyStyle(this.net, s, { lanes: AIRPORT_ROAD_LANES });
+  }
+
+  /** Where an airport's access road starts, as a road point, if the road is there and reaches the highway. */
+  private airportExit(a: Airport): RoadPoint | null {
+    const start = Aviation.toWorld(a, { x: 0, y: ACCESS_Y });
+    const hit = this.net.segmentAt(start, 3, 0);
+    if (!hit || !this.isConnected(hit.seg)) return null;
+    const seg = hit.seg;
+    return dist(this.net.node(seg.a).p, start) <= dist(this.net.node(seg.b).p, start) ? { seg: seg.id, s: 1 } : { seg: seg.id, s: seg.length - 1 };
+  }
+
   /** Places an airport centred on p, its runways turned by `angle`, with an access road out to the streets. */
   buildAirport(p: Vec2, angle: number, runways: RunwayCount, free = false): { ok: boolean; cost: number; reason?: string; airport?: Airport } {
     const plan = this.planAirport(p, angle, runways, free);
     if (!plan.access) return { ok: false, cost: plan.cost, reason: plan.reason };
     this.spend(plan.cost);
-    this.net.addRoad({ kind: 'free', p: plan.access.start }, null, plan.access.end, 0);
+    this.layAccess(plan.access);
     const airport = this.aviation.addAirport(p, angle, runways);
     this.roadsChanged();
     this.landChanged();
@@ -1675,6 +1705,14 @@ export class City {
     // Each police station keeps two patrol cars out on the streets, setting off from the blocks near it
     const stations = [...this.facilities.values()].filter((f) => f.kind === 'police');
     const placed = homes.concat(work);
+    // Taxis that pulled out of an airport rank head off into town
+    for (; this.aviation.taxisDue > 0; this.aviation.taxisDue--) {
+      if (!placed.length) continue;
+      for (const a of this.aviation.airports.values()) {
+        const from = this.airportExit(a);
+        if (from && this.traffic.vehicles.length < this.maxVehicles) this.traffic.spawn(from, at(pick(placed)), 'car', taxiTint(rng()));
+      }
+    }
     if (stations.length && placed.length && rng() < 0.3) {
       const out = this.traffic.vehicles.filter((v) => v.kind === 'police').length;
       if (out < stations.length * PATROLS_PER_STATION) {
@@ -1804,10 +1842,14 @@ export class City {
         if (r) city.regions.add(r);
       }
     }
-    // Airports from before access roads: lay theirs to the nearest street, free
+    // Airports from before access roads: lay theirs to the nearest street, free; ones from v3.0.2 widen to two lanes each way
     for (const a of city.aviation.airports.values()) {
-      const access = city.airportAccess(a);
-      if (access && !city.net.segmentAt(access.start, 3, 0)) city.net.addRoad({ kind: 'free', p: access.start }, null, access.end, 0);
+      const start = Aviation.toWorld(a, { x: 0, y: ACCESS_Y });
+      if (city.net.segmentAt(start, 3, 0)) city.widenAccess(start);
+      else {
+        const access = city.airportAccess(a);
+        if (access) city.layAccess(access);
+      }
     }
     city.restoreGate();
     city.roadsChanged();

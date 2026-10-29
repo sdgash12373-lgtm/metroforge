@@ -40,6 +40,11 @@ export const TRAIN_CARS: Partial<Record<VehicleKind, { cars: number; length: num
   hsr: { cars: 6, length: 20 },
 };
 
+/** Cars whose tint falls here are yellow taxis. */
+export const isTaxi = (v: { kind: VehicleKind; tint: number }): boolean => v.kind === 'car' && (v.tint * 13) % 1 < 0.1;
+/** A tint that makes a car a taxi, from r in 0..1. */
+export const taxiTint = (r: number): number => (Math.floor(r * 13) + 0.05) / 13;
+
 export const VEHICLE_LENGTH: Record<VehicleKind, number> = { car: 4.5, police: 4.5, scooter: 2, truck: 8, bus: 12, metro: 42, train: 80, hsr: 120 };
 
 /** How vehicles drive on one network: roads, or the tracks of one kind of train. */

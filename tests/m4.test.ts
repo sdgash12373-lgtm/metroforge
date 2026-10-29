@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { AIRPORT_COST, Aviation } from '../src/sim/airport';
-import { City } from '../src/sim/city';
+import { ACCESS_Y, AIRPORT_COST, Aviation } from '../src/sim/airport';
+import { AIRPORT_ROAD_LANES, City, FREEWAY } from '../src/sim/city';
+import { isTaxi } from '../src/sim/traffic';
 import type { RailKind } from '../src/sim/rail';
 import { ELEVATED_HEIGHT, TUNNEL_DEPTH } from '../src/sim/roads';
 import { Zone } from '../src/sim/zoning';
@@ -199,6 +200,33 @@ describe('airports', () => {
     expect(city.buildAirport({ x: 0, y: 0 }, 0, 2).ok).toBe(true);
   });
 
+  it('lay a four-lane access road that taxis from the rank drive into town on', () => {
+    const city = new City();
+    city.money = 1e7;
+    city.buildFreeway();
+    const p = { x: 400, y: -700 };
+    const plan = { id: -1, p, angle: 0, runways: 2 as const };
+    const y = Aviation.extent(2).maxY + 60;
+    const a = Aviation.toWorld(plan, { x: -350, y });
+    const b = Aviation.toWorld(plan, { x: 350, y });
+    expect(city.buildRoad(free(a.x, a.y), null, free(b.x, b.y), true).ok).toBe(true);
+    expect(city.buildRoad(city.net.snap(FREEWAY.town, 3), null, city.net.snap(a, 3), true).ok).toBe(true);
+    const r = city.buildAirport(p, 0, 2);
+    expect(r.ok).toBe(true);
+    const gate = Aviation.toWorld(r.airport!, { x: 0, y: ACCESS_Y });
+    const access = city.net.segmentAt(gate, 3, 0)!.seg;
+    expect(access.lanes).toBe(AIRPORT_ROAD_LANES);
+    // Homes along the town street for the cabs to drive to
+    for (const seg of city.net.segments.values()) if (seg !== access) for (const l of seg.lots) Object.assign(l, { zone: Zone.ResidentialLow, level: 1 });
+    const seen = new Set<number>();
+    for (let i = 0; i < 200 && !seen.size; i++) {
+      city.drive(0.5);
+      city.tick();
+      for (const v of city.traffic.vehicles) if (isTaxi(v) && v.seg === access.id) seen.add(v.id);
+    }
+    expect(seen.size).toBeGreaterThan(0);
+  });
+
   it('lay the access road for airports from older saves when they load', () => {
     const city = new City();
     city.money = 1e6;
@@ -212,6 +240,22 @@ describe('airports', () => {
     // and only once
     const again = City.deserialize(JSON.parse(JSON.stringify(copy.serialize())));
     expect(again.net.segments.size).toBe(copy.net.segments.size);
+    expect(again.net.segmentAt(gate, 3, 0)!.seg.lanes).toBe(AIRPORT_ROAD_LANES);
+  });
+
+  it('widen the narrow access roads of v3.0.2 airports when they load', () => {
+    const city = new City();
+    city.money = 1e6;
+    landsideStreet(city, { x: 0, y: 0 }, 0, 2);
+    const a = city.buildAirport({ x: 0, y: 0 }, 0, 2).airport!;
+    const gate = Aviation.toWorld(a, { x: 0, y: ACCESS_Y });
+    const access = city.net.segmentAt(gate, 3, 0)!.seg;
+    access.lanes = undefined;
+    const street = [...city.net.segments.values()].filter((s) => s !== access && !s.lanes).length;
+    const copy = City.deserialize(JSON.parse(JSON.stringify(city.serialize())));
+    expect(copy.net.segmentAt(gate, 3, 0)!.seg.lanes).toBe(AIRPORT_ROAD_LANES);
+    // The street it joins stays as it was
+    expect([...copy.net.segments.values()].filter((s) => !s.lanes).length).toBe(street);
   });
 
   it('keep flights, names and plane colours through a save', () => {

@@ -12,6 +12,13 @@ export const GATE_Y = 74;
 export const TERMINAL_Y = 92;
 export const TERMINAL_DEPTH = 34;
 const GATE_SPACING = 34;
+/** Local y where an airport's access road starts, just past its landside road. */
+export const ACCESS_Y = TERMINAL_Y + TERMINAL_DEPTH + 16 + 6.5;
+/** The taxi rank: the head of the queue waits at local x RANK_X, and one cab leaves every TAXI_CYCLE seconds. */
+export const RANK_X = 14;
+export const TAXI_CYCLE = 9;
+/** Seconds into a cycle when the leaving cab, pulling away at 2 m/s², reaches the access road at x = 0. */
+const TAXI_LEAVE = Math.sqrt(RANK_X);
 /** Free land kept around the airfield. */
 const MARGIN = 50;
 
@@ -79,6 +86,10 @@ export class Aviation {
   fare = AIR_FARE;
   incomeToday = 0;
   passengersToday = 0;
+  /** where the taxi ranks are in their cycle, in seconds */
+  taxiTime = 0;
+  /** cabs that have left each rank for the access road and not yet been put on the streets */
+  taxisDue = 0;
 
   /** Local y range of an airport's land (runways below, terminal above). */
   static extent(runways: RunwayCount): { minX: number; maxX: number; minY: number; maxY: number } {
@@ -242,6 +253,9 @@ export class Aviation {
 
   /** Advances every flight by dt seconds. */
   step(dt: number, population: number): void {
+    const t = this.taxiTime + dt;
+    if (this.airports.size) this.taxisDue = Math.min(4, this.taxisDue + Math.floor((t - TAXI_LEAVE) / TAXI_CYCLE) - Math.floor((this.taxiTime - TAXI_LEAVE) / TAXI_CYCLE));
+    this.taxiTime = t % TAXI_CYCLE;
     for (const f of this.flights.values()) {
       const a = this.airports.get(f.airport);
       if (!a) continue;
