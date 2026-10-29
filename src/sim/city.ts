@@ -18,10 +18,10 @@ import {
 } from './facilities';
 import { ntd } from './format';
 import { type Households, PEOPLE_PER_HOUSEHOLD, bracketOf, emptyHouseholds, residentIncome } from './income';
-import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, quadPoint, sampleQuad } from './geometry';
+import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lengthAt, lerp, quadPoint, sampleQuad, tAtLength } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
 import { type StationPose, stationCovers, stationPose, stationSide } from './stations';
-import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
+import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, type RoadNode, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, FLAT_CLASSIC, PLAIN, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
@@ -77,6 +77,13 @@ export interface FreewaySpec {
 
 const RS = Math.SQRT1_2;
 /** Each region's freeway: 國道 1 號 west of Kaohsiung, 國道 3 號 up the Pingtung Plain east of Pingtung city. */
+/** Level the train stations of each region are built at: Kaohsiung's underground, Pingtung's on a viaduct. */
+export const STATION_LEVEL: Record<RegionName, number> = { kaohsiung: TUNNEL_DEPTH, pingtung: ELEVATED_HEIGHT };
+/** Track kept level either side of such a station, a little longer than its platforms. */
+export const STATION_LEVEL_HALF = 50;
+/** Ramp from there back to street level, as steep as track may be. */
+export const STATION_RAMP = 48;
+
 export const FREEWAYS: Record<RegionName, FreewaySpec> = {
   kaohsiung: { center: { x: FREEWAY.x, y: 0 }, axis: { x: 0, y: -1 }, side: { x: 1, y: 0 }, north: -FREEWAY.north, south: FREEWAY.south, ramp: FREEWAY.ramp, exit: 140, town: 396, name: FREEWAY.name },
   // Turned axes: up the plain (u) and away from the Gaoping River (v), the town on the river side
@@ -359,7 +366,7 @@ export class City {
   regions = new Set<RegionName>(['kaohsiung']);
   /** bumped when a region is opened */
   regionsVersion = 0;
-  private stationCache: { key: string; spots: { kind: RailKind; pose: StationPose; side: 1 | -1 }[] } | null = null;
+  private stationCache: { key: string; spots: { kind: RailKind; pose: StationPose; side: 1 | -1; wide: boolean }[] } | null = null;
   private stationsSeen: number[] = [];
 
   constructor(readonly terrain: Terrain = FLAT) {
@@ -438,7 +445,7 @@ export class City {
   /** Water, hillside, track, a station or an airfield on this spot, so nothing can be built on it. */
   occupied(p: Vec2): boolean {
     if (!this.open(p) || !buildable(this.terrain, p)) return true;
-    for (const st of this.stationSpots()) if (stationCovers(st.kind, st.pose, st.side, p, CELL * 0.45)) return true;
+    for (const st of this.stationSpots()) if (stationCovers(st.kind, st.pose, st.side, p, CELL * 0.45, st.wide)) return true;
     // Footbridges stand on the sidewalks and leave the lots beside them free
     for (const f of this.facilities.values()) if (f.kind !== 'footbridge' && footprintContains(f, p, 2)) return true;
     for (const a of this.aviation.airports.values()) if (Aviation.contains(a, p, 2)) return true;
@@ -498,10 +505,10 @@ export class City {
   }
 
   /** Train, high-speed and metro stations on lines, where they stand and which side their building is on. */
-  stationSpots(): { kind: RailKind; pose: StationPose; side: 1 | -1 }[] {
+  stationSpots(): { kind: RailKind; pose: StationPose; side: 1 | -1; wide: boolean }[] {
     const key = `${this.roadsVersion}:${RAIL_KINDS.map((k) => `${this.rails[k].version}.${this.rails[k].transit.version}`).join(':')}`;
     if (this.stationCache?.key === key) return this.stationCache.spots;
-    const spots: { kind: RailKind; pose: StationPose; side: 1 | -1 }[] = [];
+    const spots: { kind: RailKind; pose: StationPose; side: 1 | -1; wide: boolean }[] = [];
     for (const kind of RAIL_KINDS) {
       const sys = this.rails[kind];
       const used = new Set<number>();
@@ -509,7 +516,10 @@ export class City {
       for (const id of used) {
         const stop = sys.transit.stops.get(id);
         const pose = stop && stationPose(sys, stop);
-        if (pose) spots.push({ kind, pose, side: kind === 'metro' ? 1 : stationSide(this.net, kind, pose) });
+        if (!pose) continue;
+        // Kaohsiung's train stations are built in the style of its main station, whose roof spreads over the tracks
+        const wide = kind === 'train' && this.terrain.region(pose.p.x, pose.p.y) === 'kaohsiung';
+        spots.push({ kind, pose, side: kind === 'metro' ? 1 : stationSide(this.net, kind, pose), wide });
       }
     }
     this.stationCache = { key, spots };
@@ -754,6 +764,81 @@ export class City {
     this.spend(cost);
     this.railChanged(kind);
     return { ok: true, cost, endNode: created[created.length - 1].b };
+  }
+
+  /**
+   * Train stations in Kaohsiung are built underground and in Pingtung on a viaduct, as the real ones are. A new
+   * station on track at street level there takes the track down (or up) with it: level for STATION_LEVEL_HALF metres
+   * either side of the stop, with a ramp of STATION_RAMP metres at each end back to the track at street level.
+   * Returns whether the track changed, or why it can't, and does nothing for track already off the ground, an
+   * existing stop, or anywhere else.
+   */
+  regionStationTrack(kind: RailKind, p: Vec2, radius: number): { changed: boolean; reason?: string } {
+    const r = this.terrain.region(p.x, p.y);
+    if (kind !== 'train' || !r) return { changed: false };
+    const sys = this.rails[kind];
+    const net = sys.net;
+    if (sys.transit.stopNear(p, radius)) return { changed: false };
+    const hit = net.segmentAt(p, Math.max(radius, 12));
+    if (!hit || net.node(hit.seg.a).h !== 0 || net.node(hit.seg.b).h !== 0) return { changed: false };
+    const level = STATION_LEVEL[r];
+    const reach = STATION_LEVEL_HALF + STATION_RAMP;
+    const what = level < 0 ? '地下化' : '高架化';
+    const refuse = `${REGION_NAMES[r]}的火車站會自動${what}：車站前後各 ${reach} 公尺要是沒有岔路、沒有其他車站的平面軌道`;
+    // Walk along the track from the stop each way, through plain joins only, to where the work would end
+    const s0 = lengthAt(hit.seg.samples, hit.t);
+    // Another station this close would have its platforms on the ramps
+    if ([...sys.transit.stops.values()].some((st) => dist(st.p, p) < reach + 42)) return { changed: false, reason: refuse };
+    const inner: { node: RoadNode; d: number }[] = [];
+    const ends: Vec2[] = [];
+    for (const dir of [-1, 1]) {
+      let seg = hit.seg;
+      let pos = s0 + dir * reach;
+      for (;;) {
+        if (seg.highway || net.node(seg.a).h !== 0 || net.node(seg.b).h !== 0) return { changed: false, reason: refuse };
+        if (pos >= 0 && pos <= seg.length) break;
+        const out = pos < 0 ? seg.a : seg.b;
+        const carry = pos < 0 ? -pos : pos - seg.length;
+        const node = net.node(out);
+        const next = [...net.segments.values()].filter((o) => o !== seg && (o.a === out || o.b === out));
+        if (next.length !== 1) return { changed: false, reason: refuse };
+        inner.push({ node, d: dir * (reach - carry) });
+        seg = next[0];
+        pos = seg.a === out ? carry : seg.length - carry;
+      }
+      ends.push(quadPoint(net.quad(seg), tAtLength(seg.samples, pos)));
+    }
+    // The four points where the ramps start and end, found along the same walk
+    const along = (d: number): Vec2 => {
+      let seg = hit.seg;
+      let pos = s0 + d;
+      while (pos < 0 || pos > seg.length) {
+        const out = pos < 0 ? seg.a : seg.b;
+        const carry = pos < 0 ? -pos : pos - seg.length;
+        const cur = seg;
+        seg = [...net.segments.values()].find((o) => o !== cur && (o.a === out || o.b === out))!;
+        pos = seg.a === out ? carry : seg.length - carry;
+      }
+      return quadPoint(net.quad(seg), tAtLength(seg.samples, pos));
+    };
+    const marks = [-reach, -STATION_LEVEL_HALF, STATION_LEVEL_HALF, reach].map((d) => ({ d, p: along(d) }));
+    const extra = this.trackCost(kind, ends[0], null, ends[1], level, level) - this.trackCost(kind, ends[0], null, ends[1]);
+    if (extra > this.money) return { changed: false, reason: `資金不足：車站${what}需要 ${ntd(extra)}` };
+    if (this.crossesAirport(ends[0], null, ends[1], level, level)) return { changed: false, reason: '不能穿過機場' };
+    // Split the track at the four points and set every node between them to its height along the ramps
+    const heightAt = (d: number) => {
+      const a = Math.abs(d);
+      return a <= STATION_LEVEL_HALF ? level : a >= reach ? 0 : (level * (reach - a)) / STATION_RAMP;
+    };
+    for (const m of marks) {
+      const at = net.segmentAt(m.p, 1, 0);
+      if (!at) return { changed: false, reason: refuse };
+      inner.push({ node: net.split(at.seg, at.t), d: m.d });
+    }
+    for (const { node, d } of inner) node.h = heightAt(d);
+    this.spend(extra);
+    this.railChanged(kind);
+    return { changed: true };
   }
 
   /**

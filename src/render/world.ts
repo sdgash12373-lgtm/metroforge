@@ -800,7 +800,7 @@ export class World {
       layer.transitVersion = sys.transit.version;
       layer.roadsVersion = city.roadsVersion;
       layer.zoningVersion = city.zoningVersion;
-      layer.stations.rebuild(sys, city.net);
+      layer.stations.rebuild(sys, city.net, (x, y) => city.terrain.region(x, y));
       layer.lines.geometry.dispose();
       layer.lines.geometry = buildLinePaths(sys.net, [...sys.transit.lines.values()], 1.4, TRACK_OFFSET);
     }

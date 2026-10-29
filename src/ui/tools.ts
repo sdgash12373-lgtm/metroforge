@@ -837,6 +837,15 @@ export class ToolController {
       this.finishLine();
       return;
     }
+    // A new train station in Kaohsiung or Pingtung takes its track underground or up onto a viaduct
+    if (isRail(this.tool)) {
+      const sunk = this.city.regionStationTrack(this.tool, p, r);
+      if (sunk.reason) {
+        this.events.toast(sunk.reason);
+        return;
+      }
+      if (sunk.changed) this.events.toast(this.city.terrain.region(p.x, p.y) === 'pingtung' ? '屏東區車站：軌道已自動高架化，兩端有坡道接回地面' : '高雄區車站：軌道已自動地下化，兩端有坡道接回地面');
+    }
     const stop = transit.stopAt(p, r);
     if (!stop) {
       const { label } = transit.mode;
