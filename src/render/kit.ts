@@ -20,6 +20,22 @@ export function wheel(x: number, z: number, r: number, t = 0.25, color = 0x1d1f2
   return tint(new THREE.CylinderGeometry(r, r, t, 10).rotateX(Math.PI / 2).translate(x, r, z), color);
 }
 
+/**
+ * Bake shading into a vehicle's vertex colours: darker along the sills and underneath, where the body is shut off
+ * from the sky and close to the road, so it looks rounded and grounded with no extra cost when drawn.
+ */
+export function shade<T extends THREE.BufferGeometry>(g: T, depth = 0.58): T {
+  if (!g.getAttribute('color')) tint(g, 0xffffff);
+  const pos = g.getAttribute('position');
+  const rgb = g.getAttribute('color');
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    const f = 1 - depth * (1 - THREE.MathUtils.smoothstep(y, 0.15, 1.4));
+    rgb.setXYZ(i, rgb.getX(i) * f, rgb.getY(i) * f, rgb.getZ(i) * f);
+  }
+  return g;
+}
+
 export const GLASS = 0x26323d;
 export const TYRE = 0x1d1f22;
 export const HEADLIGHT = 0xf4f1e2;
