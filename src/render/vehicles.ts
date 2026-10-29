@@ -20,11 +20,42 @@ interface Model {
   trim: THREE.BufferGeometry;
 }
 
-/** Wheels, lights and glass shared by the cars. `cabin` is the box the windows wrap, a touch proud of it. */
-function carTrim(len: number, wheelbase: number, cabin: { w: number; h: number; d: number; x: number; y: number }, extra: THREE.BufferGeometry[] = []): THREE.BufferGeometry {
+const ARCH = 0x1b1d20;
+const SEAM = 0x34373c;
+const CHROME = 0xc9ccd0;
+
+/** A black wheel arch over a wheel at x, on both sides of a body `half` wide: a lip over the top and down each side. */
+function arches(x: number, r: number, half: number): THREE.BufferGeometry[] {
+  const top = 2 * r + 0.06;
+  return pair(half + 0.006, (z) =>
+    merge([box(r * 2.7, 0.1, 0.03, x, top, z, ARCH), ...[-1, 1].map((s) => box(0.07, r + 0.02, 0.03, x + s * r * 1.32, top - r / 2, z, ARCH))]),
+  );
+}
+
+/**
+ * Wheels, lights, glass, and the lines that make a car read as one: black wheel arches, door seams and handles
+ * down the body sides, and window frames (B-pillar, belt line, drip rail) round the glass. `cabin` is the box
+ * the windows wrap, a touch proud of it; `body` is the lower body's half width and the height of its top.
+ */
+function carTrim(len: number, wheelbase: number, cabin: { w: number; h: number; d: number; x: number; y: number }, body: { half: number; top: number }, extra: THREE.BufferGeometry[] = []): THREE.BufferGeometry {
+  const glassY = cabin.y + cabin.h * 0.05;
+  const glassH = cabin.h * 0.75;
+  const pillar = cabin.x + cabin.w * 0.05;
+  const front = cabin.x + cabin.w / 2 - 0.02;
+  const rear = cabin.x - cabin.w / 2 + 0.22;
+  const seamH = body.top - 0.44;
+  const seamY = 0.42 + seamH / 2;
   return merge([
     ...[-1, 1].flatMap((sx) => pair(0.78, (z) => wheel((sx * wheelbase) / 2, z, 0.34, 0.24))),
-    box(cabin.w + 0.04, cabin.h * 0.75, cabin.d + 0.04, cabin.x, cabin.y + cabin.h * 0.05, 0, GLASS),
+    ...[-1, 1].flatMap((sx) => arches((sx * wheelbase) / 2, 0.34, body.half)),
+    box(cabin.w + 0.04, glassH, cabin.d + 0.04, cabin.x, glassY, 0, GLASS),
+    // Window frames: belt line under the glass, drip rail over it, and the B-pillar between the doors
+    box(cabin.w + 0.06, 0.05, cabin.d + 0.08, cabin.x, glassY - glassH / 2, 0, ARCH),
+    box(cabin.w + 0.02, 0.035, cabin.d + 0.07, cabin.x, glassY + glassH / 2, 0, ARCH),
+    box(0.1, glassH, cabin.d + 0.08, pillar, glassY, 0, ARCH),
+    // Door seams and handles on both sides
+    ...[front, pillar, rear].flatMap((x) => pair(body.half + 0.006, (z) => box(0.025, seamH, 0.02, x, seamY, z, SEAM))),
+    ...[pillar + 0.18, rear + 0.16].flatMap((x) => pair(body.half + 0.01, (z) => box(0.16, 0.04, 0.025, x, body.top - 0.12, z, CHROME))),
     ...pair(0.62, (z) => box(0.08, 0.16, 0.36, len / 2, 0.75, z, HEADLIGHT)),
     ...pair(0.66, (z) => box(0.08, 0.16, 0.3, -len / 2, 0.8, z, TAILLIGHT)),
     box(0.1, 0.18, 1.7, len / 2 - 0.02, 0.38, 0, 0x2a2c30),
@@ -37,7 +68,7 @@ function carTrim(len: number, wheelbase: number, cabin: { w: number; h: number; 
 function sedan(): Model {
   return {
     paint: merge([box(4.6, 0.62, 1.8, 0, 0.62, 0), box(2.3, 0.56, 1.6, -0.15, 1.2, 0), box(1.2, 0.14, 1.76, 1.6, 0.98, 0), box(0.9, 0.1, 1.76, -1.85, 0.98, 0)]),
-    trim: carTrim(4.6, 2.7, { w: 2.3, h: 0.56, d: 1.6, x: -0.15, y: 1.2 }),
+    trim: carTrim(4.6, 2.7, { w: 2.3, h: 0.56, d: 1.6, x: -0.15, y: 1.2 }, { half: 0.9, top: 0.93 }),
   };
 }
 
@@ -45,7 +76,7 @@ function sedan(): Model {
 function suv(): Model {
   return {
     paint: merge([box(4.45, 0.82, 1.84, 0, 0.75, 0), box(2.9, 0.66, 1.7, -0.3, 1.49, 0)]),
-    trim: carTrim(4.45, 2.65, { w: 2.9, h: 0.66, d: 1.7, x: -0.3, y: 1.49 }, [
+    trim: carTrim(4.45, 2.65, { w: 2.9, h: 0.66, d: 1.7, x: -0.3, y: 1.49 }, { half: 0.92, top: 1.16 }, [
       ...pair(0.62, (z) => box(2.4, 0.06, 0.06, -0.3, 1.86, z, 0x2a2c30)),
       ...[-1, 1].flatMap((sx) => pair(0.93, (z) => box(0.95, 0.16, 0.04, sx * 1.33, 0.7, z, 0x2a2c30))),
     ]),
@@ -56,7 +87,7 @@ function suv(): Model {
 function hatchback(): Model {
   return {
     paint: merge([box(3.95, 0.66, 1.72, 0, 0.62, 0), box(2.45, 0.58, 1.58, -0.45, 1.24, 0)]),
-    trim: carTrim(3.95, 2.5, { w: 2.45, h: 0.58, d: 1.58, x: -0.45, y: 1.24 }),
+    trim: carTrim(3.95, 2.5, { w: 2.45, h: 0.58, d: 1.58, x: -0.45, y: 1.24 }, { half: 0.86, top: 0.95 }),
   };
 }
 
@@ -101,6 +132,10 @@ function truck(): Model {
       ...pair(1.11, (z) => box(1.2, 0.6, 0.02, 2.95, 1.75, z, GLASS)),
       ...pair(0.75, (z) => box(0.06, 0.2, 0.3, 3.86, 0.75, z, HEADLIGHT)),
       ...[2.85, -1.6, -2.7].flatMap((x) => pair(1.0, (z) => wheel(x, z, 0.45, 0.32))),
+      ...arches(2.85, 0.45, 1.1),
+      // Cab door seams and window frames
+      ...pair(1.106, (z) => box(0.03, 1.5, 0.02, 2.25, 1.25, z, SEAM)),
+      ...pair(1.12, (z) => box(1.28, 0.05, 0.03, 2.95, 1.43, z, ARCH)),
       box(4, 0.25, 1.2, -0.5, 0.35, 0, 0x2a2c30),
     ]),
   };
@@ -123,6 +158,11 @@ function bus(): Model {
       box(1.0, 2.0, 0.04, 3.9, 1.45, 1.26, 0x3b4148),
       ...pair(0.95, (z) => box(0.08, 0.2, 0.35, 5.84, 0.8, z, HEADLIGHT)),
       ...[3.7, -3.0].flatMap((x) => pair(1.05, (z) => wheel(x, z, 0.5, 0.32))),
+      ...[3.7, -3.0].flatMap((x) => arches(x, 0.5, 1.25)),
+      // Window pillars down both sides, a frame under the window band, and the door's split line
+      ...Array.from({ length: 8 }, (_, i) => -5.2 + i * 1.3).flatMap((x) => pair(1.29, (z) => box(0.1, 1.15, 0.03, x, 2.18, z, ARCH))),
+      ...pair(1.29, (z) => box(10.4, 0.06, 0.03, -0.4, 1.6, z, ARCH)),
+      box(0.03, 2.0, 0.03, 3.9, 1.45, 1.285, ARCH),
     ]),
   };
 }
@@ -149,7 +189,8 @@ export class VehicleLayer {
     const sizes = [MAX, MAX, MAX, MAX, MAX / 4, MAX / 8];
     [sedan(), suv(), hatchback(), scooter(), truck(), bus()].forEach((model, k) => {
       this.paint.push(new THREE.InstancedMesh(shade(model.paint), mat, sizes[k]));
-      this.trim.push(new THREE.InstancedMesh(shade(model.trim), fixed, sizes[k]));
+      // Lights and trim keep more of their own colour than the paint
+      this.trim.push(new THREE.InstancedMesh(shade(model.trim, 0.35), fixed, sizes[k]));
     });
     this.taxiSigns = new THREE.InstancedMesh(taxiSign(), fixed, MAX / 4);
     this.lightBars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.45, 0.18, 1.3).translate(-0.2, 1.57, 0), new THREE.MeshBasicMaterial(), MAX / 8);
