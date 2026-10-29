@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { City, FREEWAY } from '../src/sim/city';
 import { FLAT, PLAIN, buildable } from '../src/sim/terrain';
+import { Zone } from '../src/sim/zoning';
 
 const free = (x: number, y: number) => ({ kind: 'free' as const, p: { x, y } });
 
@@ -48,5 +49,20 @@ describe('the 平地 map', () => {
       expect(back.terrain).toBe(FLAT);
       expect(back.net.segments.size).toBe(old.net.segments.size);
     }
+  });
+
+  it('keeps flat ground for a city whose buildings stand where the lake now is, even with its roads on dry land', () => {
+    const old = new City(FLAT);
+    old.money = 1e7;
+    expect(old.buildRoad(free(-1150, 840), null, free(-900, 840), true).ok).toBe(true);
+    expect(buildable(PLAIN, { x: -1150, y: 840 }) && buildable(PLAIN, { x: -900, y: 840 })).toBe(true);
+    // Offices already grown beside it, on what is now the lake shore
+    for (const seg of old.net.segments.values()) for (const l of seg.lots) if (l.side > 0) Object.assign(l, { zone: Zone.Office, level: 1 });
+    const wet = () => [...old.net.segments.values()].flatMap((s) => s.lots).filter((l) => l.level > 0 && !buildable(PLAIN, l)).length;
+    const before = wet();
+    expect(before).toBeGreaterThan(0);
+    const back = City.deserialize(JSON.parse(JSON.stringify(old.serialize())));
+    expect(back.terrain).toBe(FLAT);
+    expect([...back.net.segments.values()].flatMap((s) => s.lots).filter((l) => l.level > 0 && !buildable(PLAIN, l)).length).toBe(before);
   });
 });
