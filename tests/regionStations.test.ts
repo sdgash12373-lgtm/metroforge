@@ -57,7 +57,7 @@ describe('train stations built before their track', () => {
     expect(r.ok).toBe(true);
     expect(r.style).toBe('kaohsiung');
     const spot = city.stationSpots()[0];
-    expect(spot.wide).toBe(true);
+    expect(spot.style).toBe('kaohsiung');
     const p = spot.pose.p;
     const d = spot.pose.d;
     expect(heightAt(city, p)).toBe(TUNNEL_DEPTH);
