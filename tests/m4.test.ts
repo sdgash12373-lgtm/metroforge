@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Aviation } from '../src/sim/airport';
+import { AIRPORT_COST, Aviation } from '../src/sim/airport';
 import { City } from '../src/sim/city';
 import type { RailKind } from '../src/sim/rail';
 import { ELEVATED_HEIGHT, TUNNEL_DEPTH } from '../src/sim/roads';
@@ -124,12 +124,22 @@ describe('rail', () => {
   });
 });
 
+/** A street running past where an airport at p would have its terminal, `gap` meters out from the airfield. */
+function landsideStreet(city: City, p: { x: number; y: number }, angle: number, runways: 2 | 4, gap = 60): void {
+  const plan = { id: -1, p, angle, runways };
+  const y = Aviation.extent(runways).maxY + gap;
+  const a = Aviation.toWorld(plan, { x: -350, y });
+  const b = Aviation.toWorld(plan, { x: 350, y });
+  expect(city.buildRoad(free(a.x, a.y), null, free(b.x, b.y), true).ok).toBe(true);
+}
+
 describe('airports', () => {
   it('need clear land, and roads cannot cross them except in a tunnel', () => {
     const city = new City();
     city.money = 1e6;
     city.buildRoad(free(-100, 0), null, free(100, 0), true);
     expect(city.buildAirport({ x: 0, y: 0 }, 0, 2).ok).toBe(false);
+    landsideStreet(city, { x: 0, y: 600 }, 0, 4);
     const r = city.buildAirport({ x: 0, y: 600 }, 0, 4);
     expect(r.ok).toBe(true);
     expect(city.buildRoad(free(0, 450), null, free(0, 750), true).ok).toBe(false);
@@ -140,6 +150,7 @@ describe('airports', () => {
   it('fly flights that land, board at a gate, take off and earn fares', () => {
     const city = new City();
     city.money = 1e6;
+    landsideStreet(city, { x: 0, y: 0 }, Math.PI / 6, 2);
     const a = city.buildAirport({ x: 0, y: 0 }, Math.PI / 6, 2).airport!;
     const f = city.aviation.addFlight()!;
     expect(f.airport).toBe(a.id);
@@ -157,9 +168,56 @@ describe('airports', () => {
     expect(f.passengers).toBeGreaterThan(0);
   });
 
+  it('get an access road from the terminal side to the nearest street, and need one in reach', () => {
+    const city = new City();
+    city.money = 1e6;
+    // No street at all, or one only behind the runways: nothing to join the terminal to
+    expect(city.buildAirport({ x: 0, y: 0 }, 0, 2).reason).toContain('道路');
+    landsideStreet(city, { x: 0, y: 0 }, Math.PI, 2, 120);
+    expect(city.buildAirport({ x: 0, y: 0 }, 0, 2).ok).toBe(false);
+    // Turned round, the terminal faces that street and a road is laid to it
+    const roads = city.net.segments.size;
+    const money = city.money;
+    const r = city.buildAirport({ x: 0, y: 0 }, Math.PI, 2);
+    expect(r.ok).toBe(true);
+    expect(city.net.segments.size).toBeGreaterThan(roads);
+    expect(r.cost).toBeGreaterThan(AIRPORT_COST[2]);
+    expect(money - city.money).toBe(r.cost);
+    const gate = Aviation.toWorld(r.airport!, { x: 0, y: Aviation.extent(2).maxY + 6.5 });
+    const access = city.net.segmentAt(gate, 2, 0);
+    expect(access).toBeTruthy();
+    expect(access!.seg.a !== access!.seg.b).toBe(true);
+    expect(city.disconnectedRoads()).toHaveLength(0);
+  });
+
+  it('look past nearby roads the access road could only reach across the airfield', () => {
+    const city = new City();
+    city.money = 1e7;
+    expect(city.buildRoad(free(-320, 0), null, free(-320, 120), true).ok).toBe(true);
+    expect(city.buildRoad(free(320, 0), null, free(320, 120), true).ok).toBe(true);
+    expect(city.buildRoad(free(-100, 485), null, free(100, 485), true).ok).toBe(true);
+    expect(city.buildAirport({ x: 0, y: 0 }, 0, 2).ok).toBe(true);
+  });
+
+  it('lay the access road for airports from older saves when they load', () => {
+    const city = new City();
+    city.money = 1e6;
+    landsideStreet(city, { x: 0, y: 0 }, 0, 2);
+    // Placed the old way, with no road to it
+    const a = city.aviation.addAirport({ x: 0, y: 0 }, 0, 2);
+    const gate = Aviation.toWorld(a, { x: 0, y: Aviation.extent(2).maxY + 6.5 });
+    expect(city.net.segmentAt(gate, 3, 0)).toBeNull();
+    const copy = City.deserialize(JSON.parse(JSON.stringify(city.serialize())));
+    expect(copy.net.segmentAt(gate, 3, 0)).toBeTruthy();
+    // and only once
+    const again = City.deserialize(JSON.parse(JSON.stringify(copy.serialize())));
+    expect(again.net.segments.size).toBe(copy.net.segments.size);
+  });
+
   it('keep flights, names and plane colours through a save', () => {
     const city = new City();
     city.money = 1e6;
+    landsideStreet(city, { x: 0, y: 0 }, 0.5, 4);
     city.buildAirport({ x: 0, y: 0 }, 0.5, 4);
     const f = city.aviation.addFlight()!;
     city.aviation.editFlight(f.id, { name: 'BR 189', color: 0x6a994e });

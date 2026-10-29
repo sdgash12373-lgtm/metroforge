@@ -120,6 +120,19 @@ export class ToolController {
     hsr: RAIL_SPECS.hsr.defaultLevel,
   };
   runways: RunwayCount = 2;
+  /** the last airport plan and what it was worked out for */
+  private planKey: {
+    plan: ReturnType<City['planAirport']> | null;
+    city: City | null;
+    x: number;
+    y: number;
+    angle: number;
+    runways: number;
+    roads: number;
+    lots: number;
+    air: number;
+    regions: number;
+  } = { plan: null, city: null, x: 0, y: 0, angle: 0, runways: 0, roads: -1, lots: -1, air: -1, regions: -1 };
   /** airport heading, degrees */
   airportAngle = 0;
   selectedFlight: number | null = null;
@@ -225,7 +238,7 @@ export class ToolController {
   }
 
   turnAirport(): void {
-    this.airportAngle = (this.airportAngle + AIRPORT_TURN) % 180;
+    this.airportAngle = (this.airportAngle + AIRPORT_TURN) % 360;
     this.events.changed();
     this.refresh();
   }
@@ -657,12 +670,41 @@ export class ToolController {
     return `${label} ${t.buses().length} ${t.mode.streetsOnly ? '台' : '列'} · 累計載客 ${riders.toLocaleString()} 人 · 候車 ${waiting.toLocaleString()} 人　點${t.mode.streetsOnly ? '道路' : '軌道'}開新路線`;
   }
 
+  /** What an airport at the hover point would need, worked out again only when the spot or the city changes (the hint asks every frame). */
+  private airportPlan(): ReturnType<City['planAirport']> | null {
+    const p = this.hover;
+    if (!p) return null;
+    const c = this.city;
+    const k = this.planKey;
+    if (
+      k.plan && k.city === c && k.x === p.x && k.y === p.y && k.angle === this.radians && k.runways === this.runways &&
+      k.roads === c.roadsVersion && k.lots === c.lotsVersion && k.air === c.aviation.version && k.regions === c.regionsVersion
+    ) return k.plan;
+    k.city = c;
+    k.x = p.x;
+    k.y = p.y;
+    k.angle = this.radians;
+    k.runways = this.runways;
+    k.roads = c.roadsVersion;
+    k.lots = c.lotsVersion;
+    k.air = c.aviation.version;
+    k.regions = c.regionsVersion;
+    // Money changes every step: it is checked by whoever uses the plan, not cached in it
+    k.plan = c.planAirport(p, this.radians, this.runways, false, false);
+    return k.plan;
+  }
+
   private airportHint(): string {
     const air = this.city.aviation;
     const f = this.selectedFlight !== null ? air.flights.get(this.selectedFlight) : undefined;
     if (f) return `${f.name}：已載客 ${f.passengers.toLocaleString()} 人　每班約 ${air.passengersPerFlight(this.city.stats.population)} 人`;
+    if (this.hover) {
+      const plan = this.airportPlan();
+      if (plan?.reason) return plan.reason;
+      if (plan && plan.cost > this.city.money) return `資金不足，需要 ${ntd(plan.cost)}`;
+    }
     const cost = AIRPORT_COST[this.runways];
-    const base = `${this.runways === 2 ? '雙' : '四'}跑道機場 · ${ntd(cost)}　點空地蓋機場，「旋轉」調整方向`;
+    const base = `${this.runways === 2 ? '雙' : '四'}跑道機場 · ${ntd(cost)} 起　點道路旁的空地蓋機場，航廈那一側會自動接一條聯外道路到最近的路，「旋轉」調整方向`;
     if (!air.airports.size) return base;
     return `航班 ${air.flights.size} 班 · 每班約 ${air.passengersPerFlight(this.city.stats.population)} 人；按「新增航班」開航，點航班改名稱與機身顏色`;
   }
@@ -842,7 +884,8 @@ export class ToolController {
     }
     if (this.tool === 'airport' && this.hover) {
       const plan: Airport = { id: -1, p: this.hover, angle: this.radians, runways: this.runways };
-      w.setFootprint(Aviation.corners(plan), this.city.money >= AIRPORT_COST[this.runways]);
+      const ready = this.airportPlan();
+      w.setFootprint(Aviation.corners(plan), !!ready && !ready.reason && ready.cost <= this.city.money);
     } else if (this.facilityKind && this.hover) {
       const kind = this.facilityKind;
       const spot = this.city.facilitySpot(kind, this.hover);

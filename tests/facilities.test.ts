@@ -34,6 +34,10 @@ describe('public services and landmarks', () => {
     // Not on top of it, not far from roads, not twice for a landmark
     expect(city.buildFacility('park', spot.p, spot.angle).ok).toBe(false);
     expect(city.buildFacility('park', { x: 0, y: 300 }, 0).reason).toContain('道路旁邊');
+    // Close to the road but turned with its back to it: no way in from the street
+    const back = city.facilitySpot('park', { x: 200, y: 30 });
+    expect(city.facilityProblem('park', back.p, back.angle)).toBeNull();
+    expect(city.buildFacility('park', back.p, back.angle + Math.PI).reason).toContain('道路旁邊');
     const t = city.facilitySpot('tower85', { x: -200, y: -30 });
     expect(city.buildFacility('tower85', t.p, t.angle).ok).toBe(true);
     const t2 = city.facilitySpot('tower85', { x: 250, y: -30 });
