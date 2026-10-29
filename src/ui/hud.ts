@@ -492,10 +492,21 @@ export class Hud {
       this.renderLineDock(option);
     } else if (isRail(this.tools.tool)) {
       const t = this.tools;
+      // Trains: build a station beside a street first, then draw track from its ends, then lines between stations
+      if (t.tool === 'train') option('車站', t.railAction === 'station', () => t.setRailAction('station'));
       option('軌道', t.railAction === 'track', () => t.setRailAction('track'));
-      option('車站路線', t.railAction === 'line', () => t.setRailAction('line'));
+      option(t.tool === 'train' ? '路線' : '車站路線', t.railAction === 'line', () => t.setRailAction('line'));
       this.sub.append(el('span', 'divider'));
-      if (t.railAction === 'track') {
+      if (t.railAction === 'station') {
+        option('一般車站', !t.specialStation, () => {
+          t.setSpecialStation(false);
+          this.render();
+        });
+        option('特色車站', t.specialStation, () => {
+          t.setSpecialStation(true);
+          this.render();
+        });
+      } else if (t.railAction === 'track') {
         option('直線', !t.trackCurve, () => t.setTrackCurve(false));
         option('曲線', t.trackCurve, () => t.setTrackCurve(true));
         this.levelOptions(option, '結束拉軌');

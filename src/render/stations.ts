@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { closestOnSamples, quadPoint } from '../sim/geometry';
 import type { RailSystem } from '../sim/rail';
 import { KAOHSIUNG_STATION, stationPose, stationSide } from '../sim/stations';
-import type { RegionName } from '../sim/terrain';
 import { type RoadNetwork, asphaltWidth, roadWidth } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { Builder } from './roadMesh';
@@ -212,8 +211,7 @@ export class StationLayer {
   }
 
   /** `streets` is the road network above, which underground metro entrances must stand beside, not on. */
-  /** `region` says which region a point is in, for the train stations each region builds in its own style. */
-  rebuild(sys: RailSystem, streets: RoadNetwork, region: (x: number, y: number) => RegionName | null = () => null): void {
+  rebuild(sys: RailSystem, streets: RoadNetwork): void {
     const b = new Builder(0);
     const m = new Builder(0);
     const colorOf = new Map<number, number>();
@@ -238,12 +236,12 @@ export class StationLayer {
       } else {
         // The station building stands on the side of the tracks facing the town, off the roads: turn the frame
         // round if that is the other side
-        const side = stationSide(streets, sys.kind, pose);
+        const side = stop.face ?? stationSide(streets, sys.kind, pose);
         const g = side > 0 ? new Frame(b, p.x, p.y, d.x, d.y, m) : new Frame(b, p.x, p.y, -d.x, -d.y, m);
         if (sys.kind === 'train') {
-          const r = region(p.x, p.y);
-          if (r === 'kaohsiung') kaohsiungStation(g, h, color);
-          else if (r === 'pingtung') pingtungStation(g, h, color);
+          // A region's own station where the player built one; every other station in the standard style
+          if (stop.style === 'kaohsiung') kaohsiungStation(g, h, color);
+          else if (stop.style === 'pingtung') pingtungStation(g, h, color);
           else trainStation(g, h, color);
         } else hsrStation(g, h, color);
       }
