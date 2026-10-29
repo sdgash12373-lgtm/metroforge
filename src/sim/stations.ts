@@ -37,13 +37,16 @@ const BUILDING: Record<RailKind, Rect[]> = {
   metro: [[-3.7, 4.5, 8.2, 13.5]],
 };
 
+/** Ground Kaohsiung's underground train stations cover: their park roof, towers and sunken plaza. */
+export const KAOHSIUNG_STATION: Rect = [-60, 60, -28, 38];
+
 /**
  * The parts of a station that stand on the ground: at street level, or raised over it. A `wide` station (Kaohsiung's,
  * underground) spreads its roof and sunken plaza over the tracks as well as beside them.
  */
 export function stationRects(kind: RailKind, h: number, wide = false): Rect[] {
   // Underground, only a train station's building is at street level; metro entrances find their own spots
-  if (h < 0 && wide && kind === 'train') return [[PLATFORMS.train[0], PLATFORMS.train[1], PLATFORMS.train[2], BUILDING.train[0][3]]];
+  if (h < 0 && wide && kind === 'train') return [KAOHSIUNG_STATION];
   if (h < 0) return kind === 'metro' ? [] : [BUILDING[kind][0]];
   return [PLATFORMS[kind], ...BUILDING[kind]];
 }

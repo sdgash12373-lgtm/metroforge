@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { closestOnSamples, quadPoint } from '../sim/geometry';
 import type { RailSystem } from '../sim/rail';
-import { stationPose, stationSide } from '../sim/stations';
+import { KAOHSIUNG_STATION, stationPose, stationSide } from '../sim/stations';
 import type { RegionName } from '../sim/terrain';
 import { type RoadNetwork, asphaltWidth, roadWidth } from '../sim/roads';
 import { Zone } from '../sim/zoning';
@@ -16,6 +16,13 @@ const KMRT_GLASS = 0x86bfd6;
 const STEEL_WHITE = 0xf1f2ef;
 const GRANITE = 0x8d8f8c;
 const GRANITE_LIGHT = 0xc9c6bd;
+const PAVING = 0xd8cdb8;
+
+/** 0 below a, 1 above b, eased between. */
+const smooth = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
 /** Taiwan Railway: red brick and pale stone, green-tiled roofs, TR blue on the signs */
 const BRICK = 0xa9533c;
 const STONE = 0xe8e0cc;
@@ -50,6 +57,30 @@ class Frame {
     const sv = ((u1 - u0) / len) * (w / 2);
     this.b.quad(this.at(u0 - su, v0 - sv, y0), this.at(u0 + su, v0 + sv, y0), this.at(u1 - su, v1 - sv, y1), this.at(u1 + su, v1 + sv, y1));
     this.b.quad(this.at(u0, v0, y0 - w / 2), this.at(u0, v0, y0 + w / 2), this.at(u1, v1, y1 - w / 2), this.at(u1, v1, y1 + w / 2));
+  }
+
+  /** A square cell `size` across at (u, v), its corners at heights y(du, dv). */
+  cell(u: number, v: number, size: number, y: (du: number, dv: number) => number, color: number): void {
+    this.b.color = new THREE.Color(color);
+    this.b.quad(this.at(u, v, y(0, 0)), this.at(u + size, v, y(size, 0)), this.at(u, v + size, y(0, size)), this.at(u + size, v + size, y(size, size)));
+  }
+
+  /** An upright strip from (u0, v0) to (u1, v1), from height lo(u, v) up to hi(u, v). */
+  wall(u0: number, v0: number, u1: number, v1: number, lo: (u: number, v: number) => number, hi: (u: number, v: number) => number, color: number): void {
+    this.b.color = new THREE.Color(color);
+    this.b.quad(this.at(u0, v0, hi(u0, v0)), this.at(u0, v0, lo(u0, v0)), this.at(u1, v1, hi(u1, v1)), this.at(u1, v1, lo(u1, v1)));
+  }
+
+  /** An upright round prism of radius r, in n sides, from y0 to y1. */
+  prism(u: number, v: number, r: number, y0: number, y1: number, color: number, n = 16): void {
+    this.b.color = new THREE.Color(color);
+    const pt = (k: number) => [u + r * Math.cos((2 * Math.PI * k) / n), v + r * Math.sin((2 * Math.PI * k) / n)];
+    for (let k = 0; k < n; k++) {
+      const [au, av] = pt(k);
+      const [bu, bv] = pt(k + 1);
+      this.b.quad(this.at(au, av, y1), this.at(au, av, y0), this.at(bu, bv, y1), this.at(bu, bv, y0));
+      this.b.quad(this.at(u, v, y1), this.at(u, v, y1), this.at(au, av, y1), this.at(bu, bv, y1));
+    }
   }
 
   /** Cut the ground away over u0..u1, v0..v1, so what is built below street level there shows from above. */
@@ -465,79 +496,112 @@ function oldKaohsiungStation(f: Frame, base: number): void {
 }
 
 /**
- * Kaohsiung station on track underground, like the real one since 2018. Over the tracks and the plaza beside them,
- * the 城市之心: a white roof rolling in waves, open in round skylights and planted in drifts, held up on white
- * columns that branch at the top like trees. Under it a sunken plaza steps down in terraces with trees, past
- * escalators in the middle, to a glass wall into the concourse beside the platforms. The old station stands in front.
+ * Kaohsiung station on track underground, after Mecanoo's design for the real one. Over the tracks lies a park
+ * roof: lawns in flowing lobes edged in white bands, cut through by round skylights, sloping down towards the front.
+ * In the middle of the front a sunken plaza opens in a long oval and steps down from the street, with the old
+ * 帝冠式 station standing on its floor among palms and a glass wall at the back into the concourse. Two rounded
+ * towers banded floor by floor rise through the roof either side, two round towers behind, and the park runs on
+ * along the line in green ribbons.
  */
 function kaohsiungUnderground(f: Frame, h: number, color: number): void {
   platforms(f, h, 84);
   trench(f, h);
-  const floor = Math.max(h + 2.4, -5.6);
-  const pit = { u: 30, v0: 8.2, v1: 16.4 };
-  // Street-level plaza over the tracks
-  f.box(0, 0.2, 84, 16, -0.05, 0.03, GRANITE_LIGHT);
-  // The sunken plaza: floor, end walls, glass into the concourse on the track side
-  f.opening(-pit.u, pit.u, pit.v0, pit.v1);
-  f.box(0, (pit.v0 + pit.v1) / 2, pit.u * 2, pit.v1 - pit.v0, floor - 0.3, floor, GRANITE_LIGHT);
-  for (const e of [-1, 1]) f.box(e * (pit.u + 0.3), (pit.v0 + pit.v1) / 2, 0.6, pit.v1 - pit.v0, floor, 0.1, GRANITE);
-  f.box(0, pit.v0 - 0.3, pit.u * 2, 0.6, floor, 0.1, GRANITE);
-  f.box(0, pit.v0 + 0.05, pit.u * 2 - 2, 0.1, floor, -0.4, GLASS);
-  for (let u = -27; u <= 27; u += 3) f.box(u, pit.v0 + 0.15, 0.15, 0.2, floor, -0.4, STEEL_WHITE);
-  // Terraces down from the street on the town side, planted with trees, either side of the escalators
-  const steps = 6;
-  const tread = 1.15;
-  for (const e of [-1, 1]) {
-    const u0 = e * 7;
-    const u1 = e * pit.u;
-    const um = (u0 + u1) / 2;
-    const ul = Math.abs(u1 - u0);
-    for (let k = 0; k < steps; k++) {
-      const v = pit.v1 - tread * (k + 0.5);
-      const top = -((k + 1) / steps) * -floor;
-      f.box(um, v, ul, tread, floor, top, k % 2 ? GRANITE : GRANITE_LIGHT);
-    }
-    for (const tu of [10, 17, 24]) {
-      const k = tu % 3;
-      const v = pit.v1 - tread * (k + 1.5);
-      const y = -((k + 2) / steps) * -floor;
-      f.box(e * tu, v, 1.6, 1.6, y, y + 0.5, ROOF_GREEN);
-      f.box(e * tu, v, 0.25, 0.25, y + 0.5, y + 2.6, TRUNK);
-      f.box(e * tu, v, 2.2, 2.2, y + 2.4, y + 3.6, PALM);
-      f.box(e * tu, v, 1.4, 1.4, y + 3.6, y + 4.3, PALM);
+  const [u0, u1, v0, v1] = KAOHSIUNG_STATION;
+  const floor = -5;
+  const ellipse = (u: number, v: number, cu: number, cv: number, ru: number, rv: number) => ((u - cu) / ru) ** 2 + ((v - cv) / rv) ** 2;
+  // The sunken plaza, and the towers that stand up through the roof
+  const inPit = (u: number, v: number) => ellipse(u, v, 0, 23, 20, 14) < 1;
+  const towers = [-30, 30].map((tu) => ({ u: tu, v: 2, r: 9, half: 7 }));
+  const rounds = [-13, 13].map((ru) => ({ u: ru, v: -19, r: 7.5 }));
+  const inTower = (u: number, v: number, pad: number) =>
+    towers.some((t) => Math.abs(u - t.u) < t.r + pad && Math.abs(v - t.v) < t.half + (t.r + pad) * Math.sqrt(Math.max(0, 1 - ((u - t.u) / (t.r + pad)) ** 2))) ||
+    rounds.some((t) => Math.hypot(u - t.u, v - t.v) < t.r + pad);
+  const skylights = [
+    [-30, 20, 3.5], [31, 23, 4.2], [-44, 27, 2.4], [45, 17, 2.6], [-9, 2, 5], [9, 5, 3.4], [0, -6, 2.4],
+    [-48, 6, 2.2], [48, 8, 2.2], [-28, -19, 2.6], [28, -20, 3], [0, -16, 3.2],
+  ];
+  const inHole = (u: number, v: number) => skylights.some(([su, sv, r]) => Math.hypot(u - su, v - sv) < r);
+  const inRoof = (u: number, v: number) => {
+    if (u < u0 || u > u1 || v < v0 || v > v1) return false;
+    if (ellipse(u, v, 0, 23, 21.5, 15.5) < 1 || inHole(u, v) || inTower(u, v, 0.8)) return false;
+    return (
+      ellipse(u, v, -35, 21, 23, 14) < 1 ||
+      ellipse(u, v, 35, 21, 23, 14) < 1 ||
+      ellipse(u, v, 0, 0, 34, 13) < 1 ||
+      ellipse(u, v, 0, -16, 28, 10) < 1 ||
+      (Math.abs(v) < 5.5 && Math.abs(u) < 60)
+    );
+  };
+  // The roof's height: rolling gently, sloping down to the front and to the ends of the green ribbons
+  const roofY = (u: number, v: number) =>
+    7.5 + 0.9 * Math.sin(u / 9) + 0.6 * Math.sin(v / 6 + 1) - 4 * smooth(26, 36, v) - 4.5 * smooth(44, 60, Math.abs(u)) * smooth(-6, 0, -Math.abs(v) + 6);
+  const step = 0.8;
+  const grass = [ROOF_GREEN, 0x7aa65a, 0x678f4b];
+  for (let u = u0; u < u1; u += step) {
+    for (let v = v0; v < v1; v += step) {
+      const cu = u + step / 2;
+      const cv = v + step / 2;
+      if (inPit(cu, cv)) {
+        // Plaza floor, stepping up to the street at the front in broad stairs; white walls round it, glass at the back
+        f.opening(u, u + step, v, v + step);
+        const y = cv > 30 ? Math.min(0, floor + Math.floor(((cv - 30) / 7) * 10) * (-floor / 10)) : floor;
+        f.box(cu, cv, step, step, floor - 0.3, y, cv > 30 ? GRANITE_LIGHT : PAVING);
+        const edge = [[step, 0], [-step, 0], [0, step], [0, -step]].some(([du, dv]) => !inPit(cu + du, cv + dv));
+        if (edge && cv < 31) f.box(cu, cv, step, step, y, 0.6, cv < 16 ? GLASS : STEEL_WHITE);
+        continue;
+      }
+      if (!inRoof(cu, cv)) {
+        // Paving under the open sky between the lobes, warm light pooling under the skylights
+        if (!inTower(cu, cv, 0)) f.box(cu, cv, step, step, -0.02, 0.03, inHole(cu, cv) ? 0xf0d9a0 : PAVING);
+        continue;
+      }
+      f.box(cu, cv, step, step, -0.02, 0.03, PAVING);
+      const y = (du: number, dv: number) => roofY(u + du, v + dv);
+      const out = [[step, 0], [-step, 0], [0, step], [0, -step]].filter(([du, dv]) => !inRoof(cu + du, cv + dv));
+      // Lawn on top, the white band along every edge, a pale soffit below
+      const patch = Math.abs(Math.floor(cu / 4) * 7 + Math.floor(cv / 4) * 13 + Math.floor((cu + cv) / 9) * 5) % 3;
+      f.cell(u, v, step, y, out.length ? STEEL_WHITE : grass[patch]);
+      f.cell(u, v, step, (du, dv) => y(du, dv) - 1.1, 0xe7e3da);
+      for (const [du, dv] of out) {
+        const a = du > 0 ? [step, 0, step, step] : du < 0 ? [0, 0, 0, step] : dv > 0 ? [0, step, step, step] : [0, 0, step, 0];
+        f.wall(u + a[0], v + a[1], u + a[2], v + a[3], (pu, pv) => roofY(pu, pv) - 1.1, (pu, pv) => roofY(pu, pv) + 0.15, STEEL_WHITE);
+      }
     }
   }
-  // Escalators and a stair in the middle, running down from the street to the plaza floor
-  const run = pit.v1 - pit.v0 - 2;
-  for (const eu of [-4.5, -2.8, 2.8, 4.5]) {
-    f.panel(eu, 1.2, pit.v1, 0.05, pit.v1 - run, floor + 0.05, 0x3a3f45);
-    for (const s of [-0.7, 0.7]) f.panel(eu + s, 0.12, pit.v1, 1.0, pit.v1 - run, floor + 1.0, GLASS);
+  // Slim white columns under the roof
+  for (let u = -54; u <= 54; u += 12) {
+    for (let v = -24; v <= 34; v += 10) {
+      if (inRoof(u, v) && inRoof(u + 2, v) && inRoof(u - 2, v) && inRoof(u, v + 2) && inRoof(u, v - 2)) f.box(u, v, 0.5, 0.5, 0, roofY(u, v) - 1.1, STEEL_WHITE);
+    }
   }
-  for (let k = 0; k < 8; k++) f.box(0, pit.v1 - (run * (k + 0.5)) / 8, 4, run / 8, floor, -((k + 1) / 8) * -floor, GRANITE_LIGHT);
-  // The roof
-  const top = 11;
-  const wave = (u: number, v: number) => top + 1.8 * Math.sin(u / 10 + 0.4) + 0.9 * Math.sin(v / 5 + 1);
-  const skylights = [[-31, -1, 3], [-15, 3, 2.6], [1, -3, 2.4], [17, 2, 3], [33, -2, 2.4], [-20, 12.5, 4.5], [0, 12, 3.2], [20, 12.5, 4.5]];
-  const cell = (u: number, v: number) => {
-    if (skylights.some(([su, sv, r]) => Math.hypot(u - su, v - sv) < r)) return null;
-    if (skylights.some(([su, sv, r]) => Math.hypot(u - su, v - sv) < r + 0.8)) return STEEL_WHITE;
-    return Math.sin(u / 6.5 + 1) * Math.cos(v / 3.4 - 0.6) + 0.35 * Math.sin(u / 2.3 + v) > 0.55 ? ROOF_GREEN : STEEL_WHITE;
+  // The rounded towers, banded floor by floor in white slabs over glass, and the round towers behind
+  const bands = (draw: (pad: number, y0: number, y1: number, c: number) => void, floors: number) => {
+    for (let k = 0; k < floors; k++) {
+      draw(0.5, k * 3.6, k * 3.6 + 1.1, 0xeee9df);
+      draw(0, k * 3.6 + 1.1, (k + 1) * 3.6, k === 0 ? GLASS : 0x8fb0c0);
+    }
+    draw(0.5, floors * 3.6, floors * 3.6 + 0.9, 0xeee9df);
   };
-  const nu = 84;
-  const nv = 24;
-  f.sheet(-42, 42, -7.8, 17, nu, nv, wave, (i, j) => cell(-42 + i + 0.5, -7.8 + ((j + 0.5) * 24.8) / nv));
-  // Underside in a warm grey so the roof reads as a shell from the street, and a band in the line's colour round it
-  f.sheet(-42, 42, -7.8, 17, nu / 2, nv / 2, (u, v) => wave(u, v) - 0.6, (i, j) => (cell(-42 + 2 * i + 1, -7.8 + ((j + 0.5) * 24.8) / (nv / 2)) === null ? null : 0xdcdad3));
-  f.sheet(-42, 42, 16.8, 17, nu, 1, (u, v) => wave(u, v) - 0.3, () => color);
-  // Tree columns: a trunk splitting into four branches under the roof
-  const tree = (u: number, v: number, y0: number) => {
-    const fork = wave(u, v) - 4;
-    f.box(u, v, 0.6, 0.6, y0, fork, STEEL_WHITE);
-    for (const [bu, bv] of [[-2.6, -2], [2.6, -2], [-2.6, 2], [2.6, 2]]) f.beam(u, v, fork, u + bu, v + bv, wave(u + bu, v + bv) - 0.6, 0.35, STEEL_WHITE);
-  };
-  for (const u of [-34, -22, -8, 8, 22, 34]) tree(u, -1, 0);
-  for (const u of [-24, -12, 12, 24]) tree(u, 12.4, floor);
-  oldKaohsiungStation(f, 0);
+  for (const t of towers) {
+    bands((pad, y0, y1, c) => {
+      f.box(t.u, t.v, (t.r + pad) * 2, t.half * 2, y0, y1, c);
+      for (const e of [-1, 1]) f.prism(t.u, t.v + e * t.half, t.r + pad, y0, y1, c);
+    }, 10);
+  }
+  for (const t of rounds) bands((pad, y0, y1, c) => f.prism(t.u, t.v, t.r + pad, y0, y1, c, 20), 9);
+  // Palms on the plaza floor, and the old station standing on it
+  for (const [pu, pv] of [[-15, 27], [15, 27], [-11, 31], [11, 31], [-17, 21], [17, 21], [-6, 29], [6, 29]]) palm(f, pu, pv, pv > 30 ? floor + ((Math.floor(((pv - 30) / 7) * 10) * -floor) / 10) : floor);
+  oldKaohsiungStation(f, floor);
+  // The line's colour on a band round the plaza's rim
+  f.box(0, 9.3, 30, 0.3, 0.2, 0.7, color);
+}
+
+/** A palm: a slim trunk and a crown of fronds. */
+function palm(f: Frame, u: number, v: number, y: number): void {
+  f.box(u, v, 0.35, 0.35, y, y + 6, TRUNK);
+  f.box(u, v, 3.2, 0.7, y + 5.8, y + 6.3, PALM);
+  f.box(u, v, 0.7, 3.2, y + 5.8, y + 6.3, PALM);
+  f.box(u, v, 1.4, 1.4, y + 6.1, y + 6.8, PALM);
 }
 
 /**
@@ -572,10 +636,7 @@ function pingtungElevated(f: Frame, h: number, color: number): void {
   for (const pu of [-15, -11, -7, 7, 11, 15]) {
     for (const pv of [17.5, 22.5]) {
       if (Math.abs(pu) < 8 && pv > 20) continue;
-      f.box(pu, pv, 0.35, 0.35, 0, 6.5, TRUNK);
-      f.box(pu, pv, 3.2, 0.7, 6.3, 6.8, PALM);
-      f.box(pu, pv, 0.7, 3.2, 6.3, 6.8, PALM);
-      f.box(pu, pv, 1.4, 1.4, 6.6, 7.3, PALM);
+      palm(f, pu, pv, 0);
     }
   }
   // Stair and lift up to the platforms at one end
