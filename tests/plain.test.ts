@@ -21,6 +21,8 @@ describe('the 平地 map', () => {
       expect(xs.some((x) => PLAIN.water(x, y) && !PLAIN.sea(x, y))).toBe(true);
     }
     expect(PLAIN.water(-1020, 980) && !PLAIN.sea(-1020, 980)).toBe(true);
+    // The river bends east round the plain south of town, where old flat cities put airports
+    for (let y = 680; y <= 940; y += 10) for (let x = -480; x <= 150; x += 10) expect(buildable(PLAIN, { x, y })).toBe(true);
   });
 
   it('starts new cities on the freeway, and moves old flat cities onto it when everything they built fits', () => {
