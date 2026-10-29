@@ -238,7 +238,7 @@ export class ToolController {
   }
 
   turnAirport(): void {
-    this.airportAngle = (this.airportAngle + AIRPORT_TURN) % 180;
+    this.airportAngle = (this.airportAngle + AIRPORT_TURN) % 360;
     this.events.changed();
     this.refresh();
   }
