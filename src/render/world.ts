@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Conditions } from '../sim/weather';
 import { SkySystem, addWindows } from './sky';
+import { livelyWater, naturalGround } from './stylize';
 import type { AngleGuide } from '../sim/angles';
 import type { City, District } from '../sim/city';
 import type { GuideLine } from '../sim/guides';
@@ -106,6 +107,8 @@ export class World {
   private readonly streetTrees: THREE.InstancedMesh;
   private terrain: Terrain = FLAT;
   private readonly water: THREE.Mesh;
+  /** seconds, for the ripples on the water */
+  private readonly waterTime = { value: 0 };
   /** veil over the parts of the map not opened yet */
   private readonly locked: THREE.Mesh;
   private lockedCity: City | null = null;
@@ -160,6 +163,9 @@ export class World {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = shadows;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // Gentle filmic tone mapping: bright sun and lit windows roll off softly instead of clipping, colours stay true
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 1;
     container.appendChild(this.renderer.domElement);
 
     this.rig = new CameraRig(1);
@@ -177,11 +183,11 @@ export class World {
     this.scene.add(this.sun, this.sun.target);
     this.sky = new SkySystem(this.scene, this.sun, hemi, matchMedia('(pointer: coarse)').matches);
 
-    this.ground = new THREE.Mesh(buildGroundGeometry(FLAT), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+    this.ground = new THREE.Mesh(buildGroundGeometry(FLAT), naturalGround(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
     this.ground.receiveShadow = true;
     this.water = new THREE.Mesh(
       new THREE.BufferGeometry(),
-      new THREE.MeshLambertMaterial({ color: 0x4f97bf, transparent: true, opacity: 0.88 }),
+      livelyWater(new THREE.MeshLambertMaterial({ color: 0x4f97bf, transparent: true, opacity: 0.88 }), this.waterTime),
     );
     this.water.visible = false;
     this.locked = new THREE.Mesh(
@@ -670,6 +676,7 @@ export class World {
     this.taxiRanks.update(city.aviation);
     this.signals.update(city.traffic, city.net);
     this.peopleAge += dt;
+    this.waterTime.value = (this.waterTime.value + dt) % 1000;
     if (this.peopleAge > 0.5) {
       this.peopleAge = 0;
       this.stops.updatePeople(city);
