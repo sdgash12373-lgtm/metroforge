@@ -3,7 +3,7 @@ import logoUrl from '../assets/logo.png';
 import { CHANGELOG } from '../changelog';
 import { seenLatest } from './updates';
 import { gameDate, ntd } from '../sim/format';
-import type { TerrainName } from '../sim/terrain';
+import type { RegionName, TerrainName } from '../sim/terrain';
 import { AUTO_SLOT, type SaveSlots, type SlotInfo, slotLabel } from '../storage/saves';
 
 export interface Settings {
@@ -22,7 +22,8 @@ export const AUTOSAVE_CHOICES: [number, string][] = [
 export interface MenuActions {
   /** a city was loaded or made: play it */
   play(city: City, slot: string | null): void;
-  newCity(name: string, terrain: TerrainName): City;
+  /** a new city on this land, starting in this region */
+  newCity(name: string, terrain: TerrainName, region: RegionName): City;
   /** saves the city being played into a slot, with a picture of the view */
   saveTo(slot: string): Promise<void>;
   /** leaves the game for the start screen (after an auto-save) */
@@ -34,9 +35,11 @@ export interface MenuActions {
 
 type View = 'home' | 'pause' | 'new' | 'load' | 'save' | 'settings';
 
-const TERRAIN_CHOICES: [TerrainName, string, string][] = [
-  ['kaohsiung', '高雄', '海岸、平原、河流與東北高山'],
-  ['flat', '平地', '一望無際的平原'],
+/** Where a new city starts: the land, and the region opened first (the other opens at 縣轄市). */
+const START_CHOICES: { id: string; terrain: TerrainName; region: RegionName; title: string; desc: string }[] = [
+  { id: 'kaohsiung', terrain: 'kaohsiung', region: 'kaohsiung', title: '高雄', desc: '海岸、平原、河流與東北高山；屏東區之後可開通' },
+  { id: 'pingtung', terrain: 'kaohsiung', region: 'pingtung', title: '屏東', desc: '屏東平原、大武山、東港與小琉球；高雄區之後可開通' },
+  { id: 'flat', terrain: 'flat', region: 'kaohsiung', title: '平地', desc: '一望無際的平原' },
 ];
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] {
@@ -194,7 +197,7 @@ export class Menu {
   }
 
   private newGame(): HTMLElement[] {
-    let terrain: TerrainName = 'kaohsiung';
+    let start = START_CHOICES[0];
     const name = el('input', 'menu-input');
     name.type = 'text';
     name.value = '我的城市';
@@ -203,24 +206,24 @@ export class Menu {
     const label = el('label', 'menu-field');
     label.append(el('span', '', '城市名稱'), name);
     const choices = el('div', 'menu-choices');
-    const pick = (t: TerrainName) => {
-      terrain = t;
-      for (const b of choices.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.t === t));
+    const pick = (c: (typeof START_CHOICES)[number]) => {
+      start = c;
+      for (const b of choices.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.t === c.id));
     };
-    for (const [id, title, desc] of TERRAIN_CHOICES) {
-      const b = button('', 'menu-choice', () => pick(id));
-      b.dataset.t = id;
-      b.append(el('b', '', title), el('small', '', desc));
+    for (const c of START_CHOICES) {
+      const b = button('', 'menu-choice', () => pick(c));
+      b.dataset.t = c.id;
+      b.append(el('b', '', c.title), el('small', '', c.desc));
       choices.append(b);
     }
-    pick(terrain);
+    pick(start);
     const terrainField = el('div', 'menu-field');
     terrainField.append(el('span', '', '地形'), choices);
     const row = el('div', 'menu-row');
     row.append(
       button('返回', 'menu-btn', () => this.back()),
       button('開始', 'menu-btn primary', () => {
-        const city = this.actions.newCity(name.value.trim().slice(0, 24) || '我的城市', terrain);
+        const city = this.actions.newCity(name.value.trim().slice(0, 24) || '我的城市', start.terrain, start.region);
         this.inGame = true;
         this.close();
         this.actions.play(city, null);

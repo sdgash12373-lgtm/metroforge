@@ -1,5 +1,5 @@
 import { angleGuides } from '../sim/angles';
-import { FACILITIES, type FacilityKind, type GreenKind, type LandmarkKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners } from '../sim/facilities';
+import { FACILITIES, type FacilityKind, type GreenKind, type LandmarkKind, type PortKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners, isPort } from '../sim/facilities';
 import { ntd } from '../sim/format';
 import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
 import { BULLDOZE_REFUND, type City, type RoadStyle } from '../sim/city';
@@ -25,6 +25,7 @@ export type Tool =
   | 'bus'
   | RailKind
   | 'airport'
+  | 'port'
   | 'streetName'
   | 'district'
   | ServiceKind
@@ -33,8 +34,8 @@ export type Tool =
   | 'footbridge';
 
 /** Tools that place a public service, landmark, green space or footbridge. */
-export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' =>
-  t === 'landmark' || t === 'greenery' || t === 'footbridge' || (SERVICE_KINDS as string[]).includes(t);
+export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' | 'port' =>
+  t === 'landmark' || t === 'greenery' || t === 'footbridge' || t === 'port' || (SERVICE_KINDS as string[]).includes(t);
 
 /** Train tools either lay track or plan lines through stations. */
 export type RailAction = 'track' | 'line';
@@ -102,6 +103,8 @@ export class ToolController {
   landmark: LandmarkKind = 'tower85';
   /** which green space the 綠化 tool builds */
   green: GreenKind = 'plaza';
+  /** which port the 港口 tool builds */
+  port: PortKind = 'cargoPort';
   /** 拆除 takes out bus and train lines instead of roads and buildings */
   demolishLines = false;
   /** line picked for removal: a second tap on it, or the confirm button, removes it */
@@ -498,6 +501,9 @@ export class ToolController {
         return this.drawHint('道路', '拉路');
       case 'zone':
         if (this.zone === Zone.None) return '在格子上塗抹以清除分區';
+        if (this.zone === Zone.Forestry) return '林業要靠近山林：只有離山坡 160 公尺內的格子塗得上去；雙指移動地圖';
+        if (this.zone === Zone.Chemical) return '化工業：產值高，但 250 公尺內的住宅會受污染、居民不滿意，請和住宅區隔開；雙指移動地圖';
+        if (this.zone === Zone.SciencePark) return '科學園區：產值最高、沒有污染，但附近要有學校才會長大；雙指移動地圖';
         return this.overwriteZones
           ? `更正中：塗到的格子都改成「${ZONES[this.zone].name}」，包括已經有分區的；雙指移動地圖`
           : `塗抹空的格子設為「${ZONES[this.zone].name}」，已有的分區不會被蓋掉（要改請按「更正」）；雙指移動地圖`;
@@ -530,6 +536,7 @@ export class ToolController {
       case 'landmark':
       case 'greenery':
       case 'footbridge':
+      case 'port':
         return this.facilityHint();
       case 'streetName': {
         const seg = this.selectedStreet !== null ? this.city.net.segments.get(this.selectedStreet) : undefined;
@@ -562,11 +569,18 @@ export class ToolController {
   get facilityKind(): FacilityKind | null {
     if (this.tool === 'landmark') return this.landmark;
     if (this.tool === 'greenery') return this.green;
+    if (this.tool === 'port') return this.port;
     return isFacilityTool(this.tool) ? this.tool : null;
   }
 
   setGreen(kind: GreenKind): void {
     this.green = kind;
+    this.events.changed();
+    this.refresh();
+  }
+
+  setPort(kind: PortKind): void {
+    this.port = kind;
     this.events.changed();
     this.refresh();
   }
@@ -586,6 +600,11 @@ export class ToolController {
       if (problem) return problem;
     }
     const tour = spec.tourists ? '・吸引觀光客' : '';
+    if (isPort(kind)) {
+      const t = this.city.trade;
+      const trade = kind === 'cargoPort' && t.ports ? `　目前外貿出口 NT$${Math.round(t.shipped / 1e4).toLocaleString()}萬/月` : '';
+      return `${spec.label} · ${ntd(spec.cost)} · 每兩週維護 ${ntd(spec.upkeep * HOUR_STEPS)}${tour}　${spec.blurb}；點海邊道路靠海的一側興建，碼頭會伸進海裡${trade}`;
+    }
     const where = kind === 'footbridge' ? '點馬路（離路口遠一點）蓋一座橫跨的天橋' : '點道路旁的空地興建';
     const park = spec.serves === 'park' ? '・算作公園' : '';
     return `${spec.label} · ${ntd(spec.cost)} · 每兩週維護 ${ntd(spec.upkeep * HOUR_STEPS)} · 範圍 ${spec.radius} 公尺${tour}${park}　${spec.blurb}；${where}`;
@@ -846,7 +865,7 @@ export class ToolController {
         .filter((f) => f.kind === kind)
         .map((f) => ({ p: f.p, r: FACILITIES[f.kind].radius, color: FACILITIES[f.kind].color }));
       if (this.hover) areas.push({ p: this.city.facilitySpot(kind, this.hover).p, r: FACILITIES[kind].radius, color: 0xffffff });
-      w.setCoverage(areas);
+      w.setCoverage(areas.filter((x) => x.r > 0));
     } else w.setCoverage([]);
     if (this.tool === 'roundabout') {
       const c = this.hover && this.roundaboutCenter(this.hover);

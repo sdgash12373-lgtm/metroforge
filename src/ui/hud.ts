@@ -1,13 +1,14 @@
 import { MAX_AIR_FARE } from '../sim/airport';
 import logoUrl from '../assets/logo.png';
 import { gameDate, ntd } from '../sim/format';
-import { type City, MAX_TAX, budgetTotals } from '../sim/city';
+import { type City, MAX_TAX, REGION_COST, budgetTotals, freewayTown } from '../sim/city';
 import { LEVELS, ntdShort } from '../sim/levels';
-import { FACILITIES, GREEN_KINDS, LANDMARK_KINDS, SERVICE_KINDS } from '../sim/facilities';
+import { FACILITIES, GREEN_KINDS, LANDMARK_KINDS, PORT_KINDS, SERVICE_KINDS } from '../sim/facilities';
 import { RAIL_KINDS } from '../sim/rail';
 import { INCOME_BRACKETS } from '../sim/income';
 import type { Conditions } from '../sim/weather';
-import { ZONES, Zone } from '../sim/zoning';
+import { INDUSTRY_ZONES, ZONES, Zone } from '../sim/zoning';
+import { REGION_NAMES } from '../sim/terrain';
 import { BUS, LINE_COLORS, MODES, type Transit } from '../sim/transit';
 import { EditPanel } from './editPanel';
 import { BRUSH_MAX, BRUSH_MIN, DISTRICT_MAX, DISTRICT_MIN, type Tool, type ToolController, STYLE_CHOICES, isRail } from './tools';
@@ -27,6 +28,7 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
     { id: 'train', label: '火車' },
     { id: 'hsr', label: '高鐵' },
     { id: 'airport', label: '機場' },
+    { id: 'port', label: '港口' },
   ],
   build: [
     ...SERVICE_KINDS.map((k) => ({ id: k as Tool, label: FACILITIES[k].label })),
@@ -43,7 +45,7 @@ const groupOf = (t: Tool): Group | null => (Object.keys(GROUPS) as Group[]).find
 
 type DockItem = Tool | Group;
 type BudgetRow =
-  | 'res' | 'biz' | 'fuel' | 'subsidy' | 'fares' | 'air' | 'tourism' | 'income'
+  | 'res' | 'biz' | 'fuel' | 'subsidy' | 'fares' | 'air' | 'tourism' | 'trade' | 'income'
   | 'roads' | 'transit' | 'airUpkeep' | 'services' | 'admin' | 'running' | 'construction' | 'net';
 const TOOLS: { id: DockItem; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
@@ -126,7 +128,7 @@ export class Hud {
   constructor(
     root: HTMLElement,
     private tools: ToolController,
-    actions: HudActions,
+    private actions: HudActions,
   ) {
     const top = el('header', 'hud panel');
     this.topBar = top;
@@ -248,6 +250,7 @@ export class Hud {
       fares: row('運輸票價（規費）'),
       air: row('機場規費'),
       tourism: row('觀光收入（其他）'),
+      trade: row('外貿收入（其他）'),
       income: row('每月收入', 'sub'),
     };
     group('支出');
@@ -438,7 +441,7 @@ export class Hud {
       this.sub.append(b);
     };
     if (this.tools.tool === 'zone') {
-      const zones = [Zone.ResidentialLow, Zone.ResidentialHigh, Zone.Commercial, Zone.Office, Zone.Industrial] as const;
+      const zones = [Zone.ResidentialLow, Zone.ResidentialHigh, Zone.Commercial, Zone.Office, ...INDUSTRY_ZONES] as const;
       for (const z of zones) {
         option(ZONES[z].name, this.tools.zone === z, () => {
           this.tools.setZone(z);
@@ -523,6 +526,14 @@ export class Hud {
         const lock = unlock && !this.city?.unlocked(unlock) ? '🔒 ' : '';
         option(`${lock}${FACILITIES[k].label}${built.has(k) ? ' · 已興建' : ''}`, t.landmark === k, () => {
           t.setLandmark(k);
+          this.render();
+        }, FACILITIES[k].color);
+      }
+    } else if (this.tools.tool === 'port') {
+      const t = this.tools;
+      for (const k of PORT_KINDS) {
+        option(FACILITIES[k].label, t.port === k, () => {
+          t.setPort(k);
           this.render();
         }, FACILITIES[k].color);
       }
@@ -768,7 +779,7 @@ export class Hud {
   /** 城市等級: this rank, the bars for the next one and a button to move up. */
   private renderLevel(city: City): void {
     const next = city.nextLevel();
-    const key = JSON.stringify([city.level, next?.checks.map((c) => [c.ok, Math.round(c.have / 1000)])]);
+    const key = JSON.stringify([city.level, next?.checks.map((c) => [c.ok, Math.round(c.have / 1000)]), [...city.regions], city.money >= REGION_COST]);
     if (key === this.levelShown) return;
     this.levelShown = key;
     const body: HTMLElement[] = [el('h2', '', `城市等級：${LEVELS[city.level].name}`)];
@@ -793,6 +804,36 @@ export class Hud {
       body.push(up);
       if (next.level.unlocks.length) body.push(el('p', 'note', `升級後開放：${next.level.unlocks.join('、')}`));
     } else body.push(el('p', 'note', '已經是最高等級「直轄市」！'));
+    // Other parts of the map: opened from 縣轄市 for NT$100萬 each
+    const regions = city.terrain.regions;
+    if (regions.length > 1) {
+      body.push(el('h3', 'bgroup', '區域'));
+      for (const r of regions) {
+        const row = el('div', `brow check${city.regions.has(r) ? ' ok' : ''}`);
+        row.append(el('span', '', `${city.regions.has(r) ? '✓' : '🔒'} ${REGION_NAMES[r]}`), el('b', '', city.regions.has(r) ? '已開通' : `開通費 NT$${ntdShort(REGION_COST)}`));
+        body.push(row);
+        if (city.regions.has(r)) continue;
+        const problem = city.regionOpenProblem(r);
+        const open = el('button', `menu-btn${problem ? '' : ' primary'}`, `開通${REGION_NAMES[r]} NT$${ntdShort(REGION_COST)}`);
+        open.type = 'button';
+        open.disabled = !!problem;
+        open.onclick = () => {
+          const done = city.openRegion(r);
+          if (!done.ok) {
+            this.toast(done.reason ?? '不能開通');
+            return;
+          }
+          const road = r === 'pingtung' ? '國道 3 號' : '國道 1 號';
+          this.ticker(`🎉 ${REGION_NAMES[r]}開通了！${road}已經通車`, { loops: 2 });
+          this.levelShown = '';
+          this.showLevel(false);
+          this.actions.lookAt(freewayTown(r));
+          this.render();
+        };
+        body.push(open);
+        if (problem) body.push(el('p', 'note', problem));
+      }
+    }
     const ladder = el('div', 'ladder');
     LEVELS.forEach((l, i) => {
       const row = el('div', `brow${i === city.level ? ' current' : ''}`);
@@ -858,6 +899,9 @@ export class Hud {
     const homes = city.households;
     const key = JSON.stringify([
       Math.round(n.happiness),
+      Math.round(n.polluted * 100),
+      Math.round(city.trade.goods / 1e5),
+      Math.round(city.trade.shipped / 1e5),
       n.wants,
       n.tourists,
       SERVICE_KINDS.map((k) => Math.round(n.coverage[k] * 100)),
@@ -885,6 +929,17 @@ export class Hud {
     else if (!n.wants.length) rows.push(el('p', 'note', '居民對公共服務很滿意！'));
     for (const k of n.wants) rows.push(el('p', 'want', `「${FACILITIES[k].need}」 → 蓋${FACILITIES[k].label}`));
     if (n.tourists) rows.push(el('p', 'note', `每小時觀光客 ${n.tourists.toLocaleString()} 人`));
+    if (n.polluted > 0.005) rows.push(el('p', 'want', `${Math.round(n.polluted * 100)}% 的居民住在化工廠附近，空氣不好 → 住宅和化工業區隔開 250 公尺以上`));
+    const trade = city.trade;
+    if (trade.goods > 0) {
+      rows.push(el('h3', '', '工業與外貿'));
+      const share = trade.goods ? Math.round((trade.shipped / trade.goods) * 100) : 0;
+      rows.push(el('p', 'note', trade.ports
+        ? `工業產值每月 NT$${ntdShort(trade.goods)}，經 ${trade.ports} 座貨櫃港出口 ${share}%，外貿收入每月 NT$${ntdShort(city.budget.trade)}`
+        : `工業產值每月 NT$${ntdShort(trade.goods)}，還沒有貨櫃港可以出口 → 在海岸蓋貨櫃港，並用道路連到工業區`));
+      if (trade.ports && trade.reachable > trade.shipped) rows.push(el('p', 'want', '貨櫃港吞吐量已滿 → 再蓋一座貨櫃港'));
+      else if (trade.ports && trade.reachable < trade.goods * 0.5) rows.push(el('p', 'want', '一半以上的工業區沒有道路連到貨櫃港'));
+    }
     // Income decides how residents get to work
     if (city.stats.population) {
       rows.push(el('h3', '', `居民收入：平均年收 NT$${ntdShort(homes.averageIncome)}`));
@@ -929,6 +984,7 @@ export class Hud {
         fares: b.transitFares,
         air: b.airIncome,
         tourism: b.tourism,
+        trade: b.trade,
         income: t.income,
         roads: -b.roadUpkeep,
         transit: -b.transitUpkeep,

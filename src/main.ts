@@ -1,6 +1,6 @@
 import './style.css';
-import { City, DAY_STEPS, FREEWAY } from './sim/city';
-import { TERRAINS, type TerrainName } from './sim/terrain';
+import { City, DAY_STEPS, FREEWAYS, freewayPoint } from './sim/city';
+import { type RegionName, TERRAINS, type TerrainName } from './sim/terrain';
 import { clock } from './sim/weather';
 import { AUTO_SLOT, SaveSlots, openStore } from './storage/saves';
 import { Menu, type Settings } from './ui/menu';
@@ -16,11 +16,12 @@ const TICK_SECONDS = 0.5;
 const LOCK_KEY = 'skyline-city:build-mode';
 const SETTINGS_KEY = 'skyline-city:settings';
 
-function newCity(name = '我的城市', terrain: TerrainName = 'kaohsiung'): City {
+function newCity(name = '我的城市', terrain: TerrainName = 'kaohsiung', region: RegionName = 'kaohsiung'): City {
   const city = new City(TERRAINS[terrain]);
   city.name = name;
+  city.regions = new Set([region]);
   // The freeway and interchange the city grows from
-  city.buildFreeway();
+  city.buildFreeway(region);
   return city;
 }
 
@@ -114,7 +115,11 @@ function focusCity(): void {
       n++;
     }
   }
-  world.rig.target = n ? { x: x / n, y: y / n } : { x: (FREEWAY.exit.x + FREEWAY.town.x) / 2 - 40, y: FREEWAY.exit.y };
+  // A new city: between the interchange and the end of the road into town, of the region it starts in
+  const f = FREEWAYS[city.regions.has('kaohsiung') ? 'kaohsiung' : [...city.regions][0]];
+  // The new city's map may reach further than the last one's: let the camera go there before it clamps
+  world.rig.bounds = city.terrain.bounds;
+  world.rig.target = n ? { x: x / n, y: y / n } : freewayPoint(f, 0, (f.exit + f.town) / 2 - 40);
   world.rig.distance = coarse ? 360 : 280;
   world.rig.pitch = 0.85;
   world.rig.apply();
@@ -166,7 +171,7 @@ const menu: Menu = new Menu(document.getElementById('ui')!, slots, {
     // Tell the player what this version brought, once, after the menu has closed
     if (!seenLatest()) setTimeout(() => hud!.ticker(latestTicker(), { loops: 2, done: markSeen }), 400);
   },
-  newCity: (name, terrain) => newCity(name, terrain),
+  newCity: (name, terrain, region) => newCity(name, terrain, region),
   saveTo: async (slot) => {
     try {
       await slots.save(slot, city, world.thumbnail());

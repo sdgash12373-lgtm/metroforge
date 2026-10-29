@@ -50,7 +50,7 @@ const TEMPERATE: Climate = {
   },
 };
 
-const CLIMATES: Record<TerrainName, Climate> = { kaohsiung: SUBTROPICAL, flat: TEMPERATE };
+const CLIMATES: Record<TerrainName, Climate> = { kaohsiung: SUBTROPICAL, 'kaohsiung-classic': SUBTROPICAL, flat: TEMPERATE, 'flat-classic': TEMPERATE };
 
 /** Game time → calendar month (0-11) and hour (0-24). */
 export function clock(days: number): { month: number; hour: number } {
@@ -163,6 +163,7 @@ export class Weather {
         temp = temp * 0.85 + 26 * 0.15;
       }
       temp -= h * 0.0065;
+      if (t.region(p.x, p.y) === 'pingtung') region = `屏東${region}`;
     }
     const snow = c.precip > 0 && temp < 1;
     const label = this.label(c.sky, c.precip, snow, c.fog);

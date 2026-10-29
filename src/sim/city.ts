@@ -11,6 +11,10 @@ import {
   footprintContains,
   footprintGrid,
   isLandmark,
+  isPort,
+  PORT_BERTH,
+  PORT_LAND,
+  toWorld,
 } from './facilities';
 import { ntd } from './format';
 import { type Households, PEOPLE_PER_HOUSEHOLD, bracketOf, emptyHouseholds, residentIncome } from './income';
@@ -20,10 +24,10 @@ import { type StationPose, stationCovers, stationPose, stationSide } from './sta
 import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
-import { FLAT, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
+import { FLAT, FLAT_CLASSIC, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic } from './traffic';
 import { Transit } from './transit';
-import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
+import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, isIndustry, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
 /** Upkeep of roads, transit and public buildings is billed once every this many days (each bill is one hour's worth). */
@@ -44,7 +48,7 @@ export const MONTH_STEPS = DAY_STEPS * MONTH_DAYS;
 export const ROAD_UPKEEP = 0.004;
 export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
-const SAVE_VERSION = 8;
+const SAVE_VERSION = 9;
 /** Ring radius of a roundabout by its number of exits. */
 /** Where the single highway road entered the map in cities from before the freeway */
 export const GATE: Vec2 = { x: -480, y: 60 };
@@ -53,6 +57,43 @@ export const GATE: Vec2 = { x: -480, y: 60 };
  * whose two ramps come down at `exit` and an access road running on into town.
  */
 export const FREEWAY = { x: -700, north: -1000, south: 700, ramp: 160, exit: { x: -560, y: 0 }, town: { x: -304, y: 0 }, name: '國道 1 號' };
+
+/**
+ * A freeway laid out along `axis` (pointing to its north end) through `center`: the main line runs `north`
+ * and `south` metres each way, the ramps meet it `ramp` metres either side of the middle, and the
+ * interchange (`exit`) and the end of the access road (`town`) lie that far off it towards `side`.
+ */
+export interface FreewaySpec {
+  center: Vec2;
+  axis: Vec2;
+  side: Vec2;
+  north: number;
+  south: number;
+  ramp: number;
+  exit: number;
+  town: number;
+  name: string;
+}
+
+const RS = Math.SQRT1_2;
+/** Each region's freeway: 國道 1 號 west of Kaohsiung, 國道 3 號 up the Pingtung Plain east of Pingtung city. */
+export const FREEWAYS: Record<RegionName, FreewaySpec> = {
+  kaohsiung: { center: { x: FREEWAY.x, y: 0 }, axis: { x: 0, y: -1 }, side: { x: 1, y: 0 }, north: -FREEWAY.north, south: FREEWAY.south, ramp: FREEWAY.ramp, exit: 140, town: 396, name: FREEWAY.name },
+  // Turned axes: up the plain (u) and away from the Gaoping River (v), the town on the river side
+  pingtung: { center: { x: 1900 * RS, y: 1900 * RS }, axis: { x: RS, y: -RS }, side: { x: -RS, y: -RS }, north: 1300, south: 1250, ramp: 160, exit: 140, town: 400, name: '國道 3 號' },
+};
+
+/** A point `a` metres along a freeway and `c` across it, towards its town. */
+export function freewayPoint(f: FreewaySpec, a: number, c: number): Vec2 {
+  // + 0 turns -0 into 0
+  return { x: f.center.x + f.axis.x * a + f.side.x * c + 0, y: f.center.y + f.axis.y * a + f.side.y * c + 0 };
+}
+
+/** Where a region's access road ends, on a cell centre: a new city starts here. */
+export const freewayTown = (region: RegionName): Vec2 => cellCenter(freewayPoint(FREEWAYS[region], 0, FREEWAYS[region].town));
+
+/** Price of opening another region of the map, and the rank it can be opened at. */
+export const REGION_COST = 1_000_000;
 export const ROUNDABOUT_RADIUS: Record<RoundaboutSize, number> = { 4: 26, 6: 34 };
 /** Length of the short roads a new roundabout puts out at each exit. */
 const SPOKE_LENGTH = 30;
@@ -108,6 +149,8 @@ export interface Budget {
   airIncome: number;
   /** 其他收入: what visitors to the landmarks spend */
   tourism: number;
+  /** 外貿收入: industry's goods shipped abroad through cargo ports */
+  trade: number;
   /** 營運支出 */
   roadUpkeep: number;
   /** buses, trains and track */
@@ -124,9 +167,9 @@ export interface Budget {
 export function budgetTotals(b: Budget): { income: number; taxes: number; fees: number; other: number; running: number; balance: number } {
   const taxes = b.residentialTax + b.businessTax + b.fuelTax;
   const fees = b.transitFares + b.airIncome;
-  const income = taxes + b.subsidy + fees + b.tourism;
+  const income = taxes + b.subsidy + fees + b.tourism + b.trade;
   const running = b.roadUpkeep + b.transitUpkeep + b.airUpkeep + b.servicesUpkeep + b.admin;
-  return { income, taxes, fees, other: b.tourism, running, balance: income - running - b.construction };
+  return { income, taxes, fees, other: b.tourism + b.trade, running, balance: income - running - b.construction };
 }
 
 /** How well the city looks after its residents. */
@@ -139,6 +182,8 @@ export interface Needs {
   wants: ServiceKind[];
   /** visitors to the landmarks per game hour */
   tourists: number;
+  /** share of residents living near a chemical plant, 0..1 */
+  polluted: number;
 }
 
 export interface TaxRates {
@@ -190,9 +235,36 @@ export interface SaveData extends NetSave {
   level?: number;
   /** v6: parks, schools, police, fire, hospitals and landmarks (id, kind, x, y, angle) */
   facilities?: [number, FacilityKind, number, number, number][];
+  /** v9: parts of the map opened (older saves have only Kaohsiung) */
+  regions?: RegionName[];
 }
 
 const RAIL_COST_EXTRA = { elevated: 1, tunnel: 2 };
+/** NT$ of goods each industrial job makes a month, times its zone's `goods`. */
+export const GOODS_PER_JOB = 900;
+/** Goods a cargo port can ship a month, NT$. */
+export const PORT_CAPACITY = 60_000_000;
+/** The city's share of the goods it ships abroad (customs, port dues, trade). */
+export const TRADE_SHARE = 0.25;
+/** Each landmark makes a cruise port's visitors this much more keen. */
+const CRUISE_LANDMARK_BOOST = 0.15;
+
+/** What industry makes and how much of it leaves through the cargo ports, per month. */
+export interface Trade {
+  /** cargo ports */
+  ports: number;
+  /** goods made by all industry, NT$ a month */
+  goods: number;
+  /** goods made by industry with a road to a cargo port */
+  reachable: number;
+  /** goods shipped: the reachable ones up to the capacity of the ports on their road network */
+  shipped: number;
+}
+
+/** 林業 needs forested hills this close, meters. */
+export const FOREST_REACH = 160;
+/** Homes this close to a chemical plant breathe its fumes, meters. */
+export const POLLUTION_REACH = 250;
 
 /** A zoned cell together with the road it sits on. */
 interface Placed {
@@ -227,6 +299,7 @@ export class City {
     transitFares: 0,
     airIncome: 0,
     tourism: 0,
+    trade: 0,
     roadUpkeep: 0,
     transitUpkeep: 0,
     airUpkeep: 0,
@@ -244,7 +317,7 @@ export class City {
   nextFacility = 1;
   /** bumped when facilities are built or removed */
   facilitiesVersion = 0;
-  needs: Needs = { happiness: 50, coverage: { park: 0, school: 0, police: 0, fire: 0, hospital: 0 }, wants: [], tourists: 0 };
+  needs: Needs = { happiness: 50, coverage: { park: 0, school: 0, police: 0, fire: 0, hospital: 0 }, wants: [], tourists: 0, polluted: 0 };
   /** services in reach of each home, from the last survey */
   private served = new Map<Lot, number>();
   /** yearly income of each resident of a home */
@@ -271,6 +344,15 @@ export class City {
   lotsVersion = 0;
   /** bumped when zones are painted or lots are blocked or freed, but not when buildings grow */
   zoningVersion = 0;
+  /** exports through the cargo ports, from the last survey */
+  trade: Trade = { ports: 0, goods: 0, reachable: 0, shipped: 0 };
+  private portCache: { key: string; ports: { f: Facility; at: RoadPoint; piece: number }[] } | null = null;
+  /** which road network piece each junction belongs to, for linking industry to ports */
+  private component = new Map<number, number>();
+  /** parts of the map the city may build in */
+  regions = new Set<RegionName>(['kaohsiung']);
+  /** bumped when a region is opened */
+  regionsVersion = 0;
   private stationCache: { key: string; spots: { kind: RailKind; pose: StationPose; side: 1 | -1 }[] } | null = null;
   private stationsSeen: number[] = [];
 
@@ -317,6 +399,22 @@ export class City {
       (adj.get(s.a) ?? adj.set(s.a, []).get(s.a)!).push(s.b);
       (adj.get(s.b) ?? adj.set(s.b, []).get(s.b)!).push(s.a);
     }
+    // Pieces of road network, so goods can tell whether a road leads to a port
+    this.component.clear();
+    let pieces = 0;
+    for (const start of adj.keys()) {
+      if (this.component.has(start)) continue;
+      const id = pieces++;
+      const todo = [start];
+      this.component.set(start, id);
+      while (todo.length) {
+        for (const m of adj.get(todo.pop()!) ?? []) {
+          if (this.component.has(m)) continue;
+          this.component.set(m, id);
+          todo.push(m);
+        }
+      }
+    }
     // Cities without an outside connection (old saves) treat every road as connected
     const roots = this.outside.size ? [...this.outside] : [...this.net.nodes.keys()];
     const stack = roots.filter((n) => this.net.nodes.has(n));
@@ -333,7 +431,7 @@ export class City {
 
   /** Water, hillside, track, a station or an airfield on this spot, so nothing can be built on it. */
   occupied(p: Vec2): boolean {
-    if (!buildable(this.terrain, p)) return true;
+    if (!this.open(p) || !buildable(this.terrain, p)) return true;
     for (const st of this.stationSpots()) if (stationCovers(st.kind, st.pose, st.side, p, CELL * 0.45)) return true;
     // Footbridges stand on the sidewalks and leave the lots beside them free
     for (const f of this.facilities.values()) if (f.kind !== 'footbridge' && footprintContains(f, p, 2)) return true;
@@ -347,6 +445,50 @@ export class City {
       }
     }
     return false;
+  }
+
+  /** Whether p lies in a part of the map the city has opened. */
+  open(p: Vec2): boolean {
+    const r = this.terrain.region(p.x, p.y);
+    return r !== null && this.regions.has(r);
+  }
+
+  /** Why nothing can be built at p for the region it is in, or null. */
+  regionProblem(p: Vec2): string | null {
+    const r = this.terrain.region(p.x, p.y);
+    if (r === null) return '超出地圖範圍';
+    if (this.regions.has(r)) return null;
+    return `${REGION_NAMES[r]}尚未開通（城市升級為${LEVELS[UNLOCK.region].name}後，可在等級面板花 NT$${REGION_COST / 10000}萬 開通）`;
+  }
+
+  /** Regions of this land not opened yet. */
+  lockedRegions(): RegionName[] {
+    return this.terrain.regions.filter((r) => !this.regions.has(r));
+  }
+
+  /** Why a region can't be opened now, or null. */
+  regionOpenProblem(r: RegionName): string | null {
+    if (!this.terrain.regions.includes(r)) return '這張地圖沒有這個區域';
+    if (this.regions.has(r)) return `${REGION_NAMES[r]}已經開通`;
+    if (!this.unlocked('region')) return `城市升級為「${LEVELS[UNLOCK.region].name}」後才能開通`;
+    if (this.money < REGION_COST) return `資金不足，需要 ${ntd(REGION_COST)}`;
+    return null;
+  }
+
+  /**
+   * Opens another part of the map for NT$1,000,000 (from 縣轄市 on). Its freeway is laid too unless one
+   * already runs there, giving the new region its own way in.
+   */
+  openRegion(r: RegionName): { ok: boolean; reason?: string } {
+    const problem = this.regionOpenProblem(r);
+    if (problem) return { ok: false, reason: problem };
+    this.spend(REGION_COST);
+    this.regions.add(r);
+    this.regionsVersion++;
+    const hasFreeway = [...this.net.segments.values()].some((s) => s.highway && this.terrain.region(s.samples[0].x, s.samples[0].y) === r);
+    if (!hasFreeway) this.buildFreeway(r);
+    else this.roadsChanged();
+    return { ok: true };
   }
 
   /** Train, high-speed and metro stations on lines, where they stand and which side their building is on. */
@@ -473,8 +615,12 @@ export class City {
 
   /** Why the land won't take a road or track at these heights, or null: streets need flat dry land, viaducts clear water and low ground. */
   terrainProblem(a: Vec2, c: Vec2 | null, b: Vec2, ha: number, hb: number): string | null {
-    if (this.terrain === FLAT) return null;
     const pts = sampleQuad({ a, c: c ?? lerp(a, b, 0.5), b }, Math.max(8, Math.ceil(dist(a, b) / 8)));
+    for (const p of pts) {
+      const locked = this.regionProblem(p);
+      if (locked) return locked;
+    }
+    if (this.terrain === FLAT || this.terrain === FLAT_CLASSIC) return null;
     for (const p of pts) {
       const h = ha + (hb - ha) * p.t;
       if (h < -1) continue;
@@ -526,22 +672,24 @@ export class City {
   }
 
   /**
-   * Lays out a new city's freeway, free: the main line on viaducts (two lanes each way) leaving the map at
+   * Lays out a region's freeway, free: the main line on viaducts (two lanes each way) leaving the map at
    * both ends, two ramps down to the interchange, and an access road into town.
    */
-  buildFreeway(): void {
+  buildFreeway(region: RegionName = 'kaohsiung'): void {
     const net = this.net;
-    const { x, north, south, ramp, exit, town } = FREEWAY;
+    const f = FREEWAYS[region];
+    const at = (a: number, c: number) => freewayPoint(f, a, c);
     const free = (p: Vec2): Snap => ({ kind: 'free', p });
-    const main = net.addRoad(free({ x, y: north }), null, free({ x, y: south }), ELEVATED_HEIGHT);
-    for (const s of main) Object.assign(s, { lanes: 2, highway: true, name: FREEWAY.name });
+    const main = net.addRoad(free(at(f.north, 0)), null, free(at(-f.south, 0)), ELEVATED_HEIGHT);
+    for (const s of main) Object.assign(s, { lanes: 2, highway: true, name: f.name });
     const ends = [main[0].a, main[main.length - 1].b];
-    const access = net.addRoad(free(exit), null, free(town), 0);
+    const exit = region === 'kaohsiung' ? at(0, f.exit) : cellCenter(at(0, f.exit));
+    const access = net.addRoad(free(exit), null, free(region === 'kaohsiung' ? at(0, f.town) : freewayTown(region)), 0);
     for (const s of access) applyStyle(net, s, { lanes: 2 });
     const g = net.node(access[0].a);
     for (const dir of [-1, 1]) {
-      const on = net.snap({ x, y: exit.y + dir * ramp }, 1, ELEVATED_HEIGHT);
-      const control = { x: x + 10, y: exit.y + dir * ramp * 0.3 };
+      const on = net.snap(at(-dir * f.ramp, 0), 1, ELEVATED_HEIGHT);
+      const control = at(-dir * f.ramp * 0.3, 10);
       for (const s of net.addRoad({ kind: 'node', node: g, p: g.p }, control, on, 0)) s.highway = true;
     }
     for (const n of ends) this.outside.add(n);
@@ -613,7 +761,10 @@ export class City {
     for (let i = 0; i <= 8; i++) for (let j = 0; j <= 8; j++) {
       const top = lerp(land[0], land[1], i / 8);
       const bottom = lerp(land[3], land[2], i / 8);
-      if (!buildable(this.terrain, lerp(top, bottom, j / 8))) return { ok: false, cost, reason: '機場要蓋在平坦的陸地上' };
+      const q = lerp(top, bottom, j / 8);
+      const locked = this.regionProblem(q);
+      if (locked) return { ok: false, cost, reason: locked };
+      if (!buildable(this.terrain, q)) return { ok: false, cost, reason: '機場要蓋在平坦的陸地上' };
     }
     if (blocked(this.net)) return { ok: false, cost, reason: '機場範圍內有道路，請換個空地' };
     if (RAIL_KINDS.some((k) => blocked(this.rails[k].net))) return { ok: false, cost, reason: '機場範圍內有軌道，請換個空地' };
@@ -666,7 +817,14 @@ export class City {
     if (kind === 'footbridge') return this.footbridgeProblem(p, angle);
     const plan = { kind, p, angle };
     if (isLandmark(kind) && [...this.facilities.values()].some((f) => f.kind === kind)) return `城市裡已經有${spec.label}了`;
-    if (footprintGrid(plan).some((q) => !buildable(this.terrain, q))) return `${spec.label}要蓋在平坦的陸地上`;
+    for (const q of footprintGrid(plan)) {
+      const locked = this.regionProblem(q);
+      if (locked) return locked;
+    }
+    if (isPort(kind)) {
+      const coast = this.portCoastProblem(plan);
+      if (coast) return coast;
+    } else if (footprintGrid(plan).some((q) => !buildable(this.terrain, q))) return `${spec.label}要蓋在平坦的陸地上`;
     const inside = (q: Vec2) => footprintContains(plan, q, 1);
     const hits = (net: RoadNetwork) => [...net.segments.values()].some((seg) => seg.samples.some((q) => inside(q) && net.heightAt(seg, q.t) >= 0));
     if (hits(this.net) || RAIL_KINDS.some((k) => hits(this.rails[k].net))) return '這裡有道路或軌道，請換個空地';
@@ -680,6 +838,55 @@ export class City {
     if (!this.net.segmentAt(p, reach, 0)) return `${spec.label}要蓋在道路旁邊`;
     if (spec.cost > this.money) return `資金不足，需要 ${ntd(spec.cost)}`;
     return null;
+  }
+
+  /**
+   * Ports go on the coastline: the side by the road on land, the far side (where ships berth) out in the
+   * sea, not on a river, and nothing on a hillside in between.
+   */
+  private portCoastProblem(plan: { kind: FacilityKind; p: Vec2; angle: number }): string | null {
+    const { w, d } = FACILITIES[plan.kind];
+    const t = this.terrain;
+    const n = 10;
+    for (let i = 0; i <= n; i++) {
+      for (let j = 0; j <= n; j++) {
+        const v = (j / n - 0.5) * d;
+        const q = toWorld(plan, (i / n - 0.5) * w, v);
+        const fromRoad = (v + d / 2) / d;
+        const sea = t.sea(q.x, q.y);
+        const land = buildable(t, q);
+        if (fromRoad <= PORT_LAND ? !land : fromRoad >= 1 - PORT_BERTH ? !sea : !land && !sea) {
+          return '港口要蓋在海岸線上（靠路的一側在陸地，碼頭伸進海裡）';
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Where a port's lorries and passengers reach it: the street in front of it. */
+  portRoad(f: Facility): RoadPoint | null {
+    const { d } = FACILITIES[f.kind];
+    const front = toWorld(f, 0, -d / 2);
+    const hit = this.net.segmentAt(front, ROAD_WIDTH * 2 + FACILITY_ROAD_GAP + 8, 0);
+    if (!hit || !this.net.isStreet(hit.seg)) return null;
+    const S = hit.seg.samples;
+    const i = Math.max(1, S.findIndex((q) => q.t >= hit.t));
+    return { seg: hit.seg.id, s: clamp(S[Math.min(i, S.length - 1)].s, 1, hit.seg.length - 1) };
+  }
+
+  /** Cargo ports with the street in front of each and the road network piece it is on, cached until roads or ports change. */
+  private cargoPorts(): { f: Facility; at: RoadPoint; piece: number }[] {
+    const key = `${this.roadsVersion}:${this.facilitiesVersion}`;
+    if (this.portCache?.key === key) return this.portCache.ports;
+    const ports: { f: Facility; at: RoadPoint; piece: number }[] = [];
+    for (const f of this.facilities.values()) {
+      if (f.kind !== 'cargoPort') continue;
+      const at = this.portRoad(f);
+      const seg = at && this.net.segments.get(at.seg);
+      if (at && seg) ports.push({ f, at, piece: this.component.get(seg.a) ?? -1 });
+    }
+    this.portCache = { key, ports };
+    return ports;
   }
 
   /** Widest street near p, so facilities set back from wide roads still count as beside one. */
@@ -860,9 +1067,10 @@ export class City {
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
     for (let i = 0; i < 24; i++) {
       const a = (i / 24) * Math.PI * 2;
-      if (!buildable(this.terrain, { x: center.x + Math.cos(a) * (r + 10), y: center.y + Math.sin(a) * (r + 10) })) {
-        return { ok: false, cost, reason: '圓環要蓋在平坦的陸地上' };
-      }
+      const q = { x: center.x + Math.cos(a) * (r + 10), y: center.y + Math.sin(a) * (r + 10) };
+      const locked = this.regionProblem(q);
+      if (locked) return { ok: false, cost, reason: locked };
+      if (!buildable(this.terrain, q)) return { ok: false, cost, reason: '圓環要蓋在平坦的陸地上' };
     }
     for (const seg of this.net.segments.values()) {
       const near = seg.samples.some((p) => dist(p, center) < r + 12);
@@ -1037,12 +1245,25 @@ export class City {
   }
 
   paint(center: Vec2, radius: number, zone: Zone, overwrite = false): number {
-    const n = paintZone(this.net, center, radius, zone, overwrite);
+    const n = paintZone(this.net, center, radius, zone, overwrite, zone === Zone.Forestry ? (l) => this.nearForest(l) : undefined);
     if (n) {
       this.lotsVersion++;
       this.zoningVersion++;
     }
     return n;
+  }
+
+  /** Forested hills or mountains (ground over 3 m) within FOREST_REACH of p: where 林業 may go. */
+  nearForest(p: Vec2): boolean {
+    const t = this.terrain;
+    for (let ring = 1; ring <= 3; ring++) {
+      const r = (FOREST_REACH * ring) / 3;
+      for (let k = 0; k < 12; k++) {
+        const a = (k / 12) * Math.PI * 2 + ring * 0.4;
+        if (t.height(p.x + Math.cos(a) * r, p.y + Math.sin(a) * r) > 3) return true;
+      }
+    }
+    return false;
   }
 
   /** Recounts population, jobs and demand from the current buildings. Returns the zoned, usable lots. */
@@ -1061,6 +1282,35 @@ export class City {
     this.served.clear();
     this.incomes.clear();
     const homes = emptyHouseholds();
+    // Chemical plants, bucketed so each home only looks at the ones around it
+    const fumes = new Map<string, Vec2[]>();
+    const bucket = (x: number, y: number) => `${Math.floor(x / POLLUTION_REACH)},${Math.floor(y / POLLUTION_REACH)}`;
+    for (const seg of this.net.segments.values()) {
+      for (const lot of seg.lots) {
+        if (lot.blocked || lot.zone !== Zone.Chemical || !lot.level) continue;
+        const k = bucket(lot.x, lot.y);
+        (fumes.get(k) ?? fumes.set(k, []).get(k)!).push(lot);
+      }
+    }
+    const polluted = (p: Vec2): boolean => {
+      if (!fumes.size) return false;
+      const gx = Math.floor(p.x / POLLUTION_REACH);
+      const gy = Math.floor(p.y / POLLUTION_REACH);
+      for (let i = -1; i <= 1; i++) {
+        for (let j = -1; j <= 1; j++) {
+          for (const q of fumes.get(`${gx + i},${gy + j}`) ?? []) if (dist(p, q) < POLLUTION_REACH) return true;
+        }
+      }
+      return false;
+    };
+    let smog = 0;
+    const ports = this.cargoPorts();
+    // Ports per road network, and the goods made on each: industry ships only through ports it can reach
+    const portPieces = new Map<number, number>();
+    for (const x of ports) portPieces.set(x.piece, (portPieces.get(x.piece) ?? 0) + 1);
+    const madeIn = new Map<number, number>();
+    let goods = 0;
+    let reachable = 0;
     let earned = 0;
     for (const seg of this.net.segments.values()) {
       const linked = this.isConnected(seg);
@@ -1076,15 +1326,30 @@ export class City {
           pop += people;
           const s = this.facilities.size ? this.servicesAt(lot) : { kinds: new Set<ServiceKind>(), landmark: 0 };
           for (const k of s.kinds) reach[k] += people;
-          this.served.set(lot, s.kinds.size + s.landmark);
-          satisfied += people * Math.min(1, (s.kinds.size + s.landmark) / SERVICE_KINDS.length);
-          const income = residentIncome(lot, s.kinds.size + s.landmark, this.level);
+          // Fumes from a chemical plant nearby cost a service's worth
+          const dirty = polluted(lot);
+          if (dirty) smog += people;
+          const served = Math.max(0, s.kinds.size + s.landmark - (dirty ? 1 : 0));
+          this.served.set(lot, served);
+          satisfied += people * Math.min(1, served / SERVICE_KINDS.length);
+          const income = residentIncome(lot, served, this.level);
           const bracket = bracketOf(income);
           this.incomes.set(lot, income);
           homes.people[bracket.key] += people;
           homes.fuelTaxYear += (people / PEOPLE_PER_HOUSEHOLD) * income * bracket.fuelTax;
           earned += people * income;
-        } else jobs[info.demand] += lot.level * info.perLevel;
+        } else {
+          jobs[info.demand] += lot.level * info.perLevel;
+          if (info.goods) {
+            const made = lot.level * info.perLevel * info.goods * GOODS_PER_JOB;
+            goods += made;
+            const piece = this.component.get(seg.a) ?? -2;
+            if (portPieces.has(piece)) {
+              reachable += made;
+              madeIn.set(piece, (madeIn.get(piece) ?? 0) + made);
+            }
+          }
+        }
       }
     }
     const totalJobs = jobs.C + jobs.O + jobs.I;
@@ -1093,7 +1358,7 @@ export class City {
     const hall = [...this.facilities.values()].some((f) => f.kind === 'cityHall') ? 8 : 0;
     const happiness = pop ? clamp(Math.round(30 + 65 * (satisfied / pop) + hall), 0, 100) : 50;
     const wants = SERVICE_KINDS.filter((k) => coverage[k] < 0.6).sort((a, b) => coverage[a] - coverage[b]);
-    this.needs = { happiness, coverage, wants, tourists: this.needs.tourists };
+    this.needs = { happiness, coverage, wants, tourists: this.needs.tourists, polluted: pop ? smog / pop : 0 };
     // Happy residents bring more; landmarks' visitors bring shops and offices
     const mood = pop > 60 ? (happiness - 45) * 0.3 : 0;
     const visitors = Math.min(15, this.needs.tourists / 6);
@@ -1108,10 +1373,14 @@ export class City {
       R: d(50 + gap(totalJobs * 1.1 + 40, pop, 80) - rTax + mood),
       C: d(45 + gap(pop * 0.25 + 15, jobs.C, 40) - bTax + visitors),
       O: d(35 + gap(pop * 0.2 + 10, jobs.O, 40) - bTax + visitors * 0.5),
-      I: d(45 + gap(pop * 0.3 + 15, jobs.I, 40) - bTax),
+      // A cargo port opens markets abroad for industry
+      I: d(45 + gap(pop * 0.3 + 15, jobs.I, 40) - bTax + Math.min(15, ports.length * 6)),
     };
     this.stats = { population: pop, jobs: totalJobs, buildings, disconnected, riders: this.stats.riders };
     homes.averageIncome = pop ? earned / pop : 0;
+    let shipped = 0;
+    for (const [piece, made] of madeIn) shipped += Math.min(made, portPieces.get(piece)! * PORT_CAPACITY);
+    this.trade = { ports: ports.length, goods, reachable, shipped };
     this.households = homes;
     return zoned;
   }
@@ -1124,6 +1393,8 @@ export class City {
     const info = ZONES[lot.zone as Exclude<Zone, Zone.None>];
     // A 直轄市's office districts keep growing into skyscrapers
     if (lot.zone === Zone.Office && this.unlocked('tallOffices')) return OFFICE_TOWER_LEVEL;
+    // Fabs need educated workers: a science park stays small without a school in reach
+    if (lot.zone === Zone.SciencePark) return this.servicesAt(lot).kinds.has('school') ? info.maxLevel : 1;
     if (info.demand !== 'R') return info.maxLevel;
     const served = this.served.get(lot) ?? 0;
     let cap = Math.min(info.maxLevel, 1 + Math.floor(served / SERVICES_PER_LEVEL));
@@ -1231,10 +1502,14 @@ export class City {
     // Each building's bill, paid every two weeks
     let bill = 0;
     let tourists = 0;
+    let landmarks = 0;
+    for (const f of this.facilities.values()) if (isLandmark(f.kind)) landmarks++;
     for (const f of this.facilities.values()) {
       const spec = FACILITIES[f.kind];
       bill += spec.upkeep * HOUR_STEPS;
-      if (spec.tourists) tourists += (spec.tourists * (20 + this.stats.population / 1000)) / DAY_STEPS;
+      // Ferries bring more visitors to a city with sights to see
+      const keen = f.kind === 'cruisePort' ? 1 + CRUISE_LANDMARK_BOOST * landmarks : 1;
+      if (spec.tourists) tourists += (spec.tourists * keen * (20 + this.stats.population / 1000)) / DAY_STEPS;
     }
     // Few visitors come in a storm, none in a typhoon
     tourists *= { clear: 1, cloudy: 1, fog: 0.9, rain: 0.75, storm: 0.5, typhoon: 0 }[this.weather.sky];
@@ -1254,6 +1529,7 @@ export class City {
       airUpkeep: air.airports.size * AIRPORT_UPKEEP + air.flights.size * FLIGHT_UPKEEP,
       servicesUpkeep: bill / (UPKEEP_DAYS * DAY_STEPS),
       tourism: tourists * TOURIST_SPEND,
+      trade: (this.trade.shipped * TRADE_SHARE) / MONTH_STEPS,
     };
     const perMonth = (v: number) => v * MONTH_STEPS;
     // Construction averages over about three days so one big build doesn't swing the month
@@ -1267,6 +1543,7 @@ export class City {
       transitFares: this.budget.transitFares * 0.9 + perMonth(fares) * 0.1,
       airIncome: this.budget.airIncome * 0.97 + perMonth(air.incomeToday) * 0.03,
       tourism: perMonth(step.tourism),
+      trade: perMonth(step.trade),
       roadUpkeep: perMonth(step.roadUpkeep),
       transitUpkeep: perMonth(step.transitUpkeep),
       airUpkeep: perMonth(step.airUpkeep),
@@ -1276,7 +1553,7 @@ export class City {
     };
     this.spentThisStep = 0;
     this.money +=
-      step.residentialTax + step.businessTax + step.fuelTax + step.subsidy + fares + air.incomeToday + step.tourism -
+      step.residentialTax + step.businessTax + step.fuelTax + step.subsidy + fares + air.incomeToday + step.tourism + step.trade -
       step.airUpkeep - step.admin;
     if (this.steps % (UPKEEP_DAYS * DAY_STEPS) === 0) {
       const due = (roadLength * ROAD_UPKEEP + upkeep) * HOUR_STEPS + bill;
@@ -1319,7 +1596,7 @@ export class City {
       if (!p.lot.level || !this.isConnected(p.seg)) continue;
       if (ZONES[p.lot.zone as Exclude<Zone, Zone.None>].demand === 'R') homes.push(p);
       else work.push(p);
-      if (p.lot.zone === Zone.Industrial) industry.push(p);
+      if (isIndustry(p.lot.zone)) industry.push(p);
     }
     const room = this.maxVehicles - this.traffic.vehicles.length;
     if (room <= 0) return;
@@ -1342,6 +1619,14 @@ export class City {
     }
     if (gate && industry.length && rng() < Math.min(0.9, this.stats.jobs / 300)) {
       this.traffic.spawn(gate, at(pick(industry)), 'truck', rng());
+    }
+    // Freight: lorries take goods from industry down to a cargo port on the same roads
+    const ports = this.cargoPorts();
+    if (ports.length && industry.length && rng() < Math.min(0.9, this.trade.shipped / 2e7)) {
+      const from = pick(industry);
+      const piece = this.component.get(from.seg.a);
+      const port = ports.find((x) => x.piece === piece);
+      if (port) this.traffic.spawn(at(from), port.at, 'truck', rng());
     }
     // Each police station keeps two patrol cars out on the streets, setting off from the blocks near it
     const stations = [...this.facilities.values()].filter((f) => f.kind === 'police');
@@ -1400,16 +1685,19 @@ export class City {
       name: this.name,
       level: this.level,
       facilities: [...this.facilities.values()].map((f) => [f.id, f.kind, round2(f.p.x), round2(f.p.y), round2(f.angle * 1000) / 1000]),
+      regions: [...this.regions],
     };
   }
 
   static deserialize(data: SaveData): City {
     if (data.v < 1 || data.v > SAVE_VERSION) throw new Error(`unsupported save version ${data.v}`);
-    const city = new City(TERRAINS[data.terrain ?? 'flat'] ?? FLAT);
+    const city = new City(TERRAINS[legacyTerrain(data) ?? data.terrain ?? 'flat'] ?? FLAT);
     city.money = data.money;
     city.steps = Math.round(data.day * DAY_STEPS);
     if (data.name) city.name = data.name;
     city.level = Math.min(LEVELS.length - 1, data.level ?? 0);
+    const regions = (data.regions ?? []).filter((r) => city.terrain.regions.includes(r));
+    if (regions.length) city.regions = new Set(regions);
     loadNet(city.net, data, true);
     for (const n of data.outside ?? []) city.outside.add(n);
     if (data.taxes) city.taxes = { ...data.taxes };
@@ -1431,11 +1719,44 @@ export class City {
     }
     for (const [id, x, y, r, name, color] of data.districts ?? []) city.addDistrict({ x, y }, r, { id, name, color });
     for (const [id, kind, x, y, angle] of data.facilities ?? []) if (FACILITIES[kind]) city.addFacility(kind, { x, y }, angle, id);
+    // Saves from before regions: open every region they already built in, so nothing they had gets locked
+    if (!data.regions) {
+      const points = [
+        ...[...city.net.nodes.values()].map((n) => n.p),
+        ...RAIL_KINDS.flatMap((k) => [...city.rails[k].net.nodes.values()].map((n) => n.p)),
+        ...[...city.facilities.values()].map((f) => f.p),
+        ...[...city.aviation.airports.values()].map((a) => a.p),
+      ];
+      for (const p of points) {
+        const r = city.terrain.region(p.x, p.y);
+        if (r) city.regions.add(r);
+      }
+    }
     city.restoreGate();
     city.roadsChanged();
     city.measure();
     return city;
   }
+}
+
+/**
+ * Saves from before regions that built across the Gaoping River or past the map's edge: they keep the
+ * ground they were built on, as the new Pingtung's rivers and coast or the edge would take some of it.
+ */
+function legacyTerrain(data: SaveData): TerrainName | null {
+  if (data.regions) return null;
+  const terrain = data.terrain ?? 'flat';
+  if (terrain !== 'flat' && terrain !== 'kaohsiung') return null;
+  const now = TERRAINS[terrain];
+  const points: [number, number][] = [
+    ...data.nodes.map(([, x, y]) => [x, y] as [number, number]),
+    ...RAIL_KINDS.flatMap((k) => (data.rails?.[k]?.nodes ?? []).map(([, x, y]) => [x, y] as [number, number])),
+    ...(data.facilities ?? []).map(([, , x, y]) => [x, y] as [number, number]),
+    ...(data.airports ?? []).map(([, x, y]) => [x, y] as [number, number]),
+  ];
+  // Anything now in Pingtung (new ground across the river) or off the map (past the new edge)
+  const changed = (x: number, y: number) => now.region(x, y) !== 'kaohsiung';
+  return points.some(([x, y]) => changed(x, y)) ? (`${terrain}-classic` as TerrainName) : null;
 }
 
 function saveNet(net: RoadNetwork): NetSave {
