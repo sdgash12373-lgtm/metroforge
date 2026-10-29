@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { type Airport, Aviation, GATE_Y, RUNWAY_LENGTH, RUNWAY_WIDTH, TAXI_Y, TERMINAL_DEPTH, TERMINAL_Y } from '../sim/airport';
+import { ACCESS_Y, type Airport, Aviation, GATE_Y, RANK_X, RUNWAY_LENGTH, RUNWAY_WIDTH, TAXI_CYCLE, TAXI_Y, TERMINAL_DEPTH, TERMINAL_Y } from '../sim/airport';
+import { AIRPORT_ROAD_LANES } from '../sim/city';
+import { asphaltWidth } from '../sim/roads';
 import { type Vec2, clamp } from '../sim/geometry';
 import { HEADLIGHT, TAILLIGHT } from './kit';
 import { Builder } from './roadMesh';
@@ -31,11 +33,10 @@ const KERB_Y1 = KERB_Y0 + 7;
 const RANK_Y0 = KERB_Y1 + 0.6;
 const RANK_Y1 = RANK_Y0 + 6;
 const RANK_Y = (RANK_Y0 + RANK_Y1) / 2;
-/** First cab of the rank waits here (airport-local x); the rest queue behind it. */
-const RANK_X = 14;
+/** Cabs queue this far apart behind the head of the rank. */
 const TAXI_GAP = 7;
-/** One cab leaves the rank, and one joins it, every cycle (seconds of game time). */
-const TAXI_CYCLE = 9;
+/** Half the width of the access road's asphalt, where it meets the landside road at x = 0. */
+const ACCESS_HALF = asphaltWidth({ lanes: AIRPORT_ROAD_LANES }) / 2;
 const MAX_TAXIS = 200;
 
 /** Half the length of the terminal and its apron. */
@@ -322,6 +323,8 @@ function landside(f: Field, a: Airport): void {
   f.rect(e.minX + 2, KERB_Y0, e.maxX - 2, KERB_Y1, 0.07, ASPHALT);
   f.rect(e.minX + 2, KERB_Y1, e.maxX - 2, RANK_Y0, 0.12, 0xc9c6bd);
   f.rect(e.minX + 2, RANK_Y0, e.maxX - 2, RANK_Y1, 0.07, ASPHALT);
+  // The access road comes in across the rank lane and the island to the kerb road
+  f.rect(-ACCESS_HALF, KERB_Y1 - 0.5, ACCESS_HALF, ACCESS_Y, 0.13, ASPHALT);
   f.glow = NONE;
   for (let x = e.minX + 6; x < e.maxX - 6; x += 12) f.rect(x, (KERB_Y0 + KERB_Y1) / 2 - 0.15, x + 6, (KERB_Y0 + KERB_Y1) / 2 + 0.15, 0.1, MARK);
   // The rank: a yellow-edged bay with a sign at its head
@@ -334,7 +337,7 @@ function landside(f: Field, a: Airport): void {
   f.glow = [1.6, 1.3, 0.2];
   f.box(bx0 - 1.2, KERB_Y1 + 0.15, bx0 + 1.2, KERB_Y1 + 0.45, 3, 4.2, 0xf6c700);
   // Street lamps along the outer edge of the landside road
-  for (let x = e.minX + 10; x < e.maxX - 6; x += 22) f.pole(x, RANK_Y1 + 0.8, 8, 0.6, [1.8, 1.5, 1.0]);
+  for (let x = e.minX + 10; x < e.maxX - 6; x += 22) if (Math.abs(x) > ACCESS_HALF + 1) f.pole(x, RANK_Y1 + 0.8, 8, 0.6, [1.8, 1.5, 1.0]);
   // Car parks past each end of the terminal: a parking garage and an open lot
   const py0 = FENCE_Y + 3;
   const py1 = KERB_Y0 - 1.5;
@@ -417,12 +420,12 @@ function withLamps(g: THREE.BufferGeometry): THREE.BufferGeometry {
 }
 
 /**
- * Yellow cabs queueing at each airport's rank. Every few seconds the cab at the head pulls away, the queue creeps
- * up one place and a new cab drives in to the back.
+ * Yellow cabs queueing at each airport's rank. Every few seconds the cab at the head pulls away and turns into the
+ * access road (where the simulation puts it on the streets into town), the queue creeps up one place and a new cab
+ * drives in to the back.
  */
 export class TaxiRank {
   readonly mesh: THREE.InstancedMesh;
-  private t = 0;
   private n = 0;
   private minX = 0;
   private maxX = 0;
@@ -439,9 +442,8 @@ export class TaxiRank {
     this.mesh.castShadow = shadows;
   }
 
-  update(aviation: Aviation, dt: number): void {
-    this.t = (this.t + dt) % TAXI_CYCLE;
-    const t = this.t;
+  update(aviation: Aviation): void {
+    const t = aviation.taxiTime;
     const creep = smooth(clamp((t / TAXI_CYCLE - 0.15) / 0.3, 0, 1));
     this.n = 0;
     for (const a of aviation.airports.values()) {
@@ -453,7 +455,8 @@ export class TaxiRank {
       // Cabs face -x, out towards the exit
       this.q.setFromAxisAngle(this.up, Math.PI - a.angle);
       // The head of the queue pulls away; those that left in the last cycles are still driving off
-      for (let k = 0; k < 3; k++) this.put(a, RANK_X - driven(t + k * TAXI_CYCLE));
+      const leaving = RANK_X - driven(t);
+      if (leaving > ACCESS_HALF / 2) this.put(a, leaving);
       for (let i = 1; i < size; i++) this.put(a, RANK_X + (i - creep) * TAXI_GAP);
       // New cabs slow down into the back of the queue, arriving three quarters of the way through a cycle
       for (let k = 0; k < 3; k++) this.put(a, back + driven(TAXI_CYCLE * (0.75 + k) - t));

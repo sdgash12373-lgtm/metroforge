@@ -668,7 +668,7 @@ export class World {
     for (const k of RAIL_KINDS) this.rails[k].trains.update(city.rails[k]);
     this.planes.update(city.aviation);
     this.ships.update(city, simDt);
-    this.taxiRanks.update(city.aviation, simDt);
+    this.taxiRanks.update(city.aviation);
     this.signals.update(city.traffic, city.net);
     this.peopleAge += dt;
     if (this.peopleAge > 0.5) {
