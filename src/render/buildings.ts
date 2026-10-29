@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { City } from '../sim/city';
 import { CELL, type Lot, ZONES, Zone, isIndustry } from '../sim/zoning';
+import { Skin, addSkins, facadeMaterial } from './facade';
 
 const MAX = 20000;
 /** facade details: arcades, balconies, window grilles, rooftop add-ons */
@@ -132,9 +133,11 @@ export class BuildingLayer {
   private up = new THREE.Vector3(0, 1, 0);
   private c = new THREE.Color();
   private n = { b: 0, r: 0, k: 0, g: 0 };
+  /** what each body box is clad in */
+  private skins: THREE.InstancedBufferAttribute;
   showEmptyCells = false;
 
-  /** walls, roofs and chimneys share it; lit windows are patched in at night */
+  /** walls, roofs and chimneys share it; facades and lit windows are drawn in by the shader */
   readonly material: THREE.MeshLambertMaterial;
   private readonly signMaterial = new THREE.MeshLambertMaterial({ flatShading: true });
 
@@ -145,9 +148,14 @@ export class BuildingLayer {
     const mat = new THREE.MeshLambertMaterial({ flatShading: true });
     this.material = mat;
     this.bodies = new THREE.InstancedMesh(box, mat, MAX_PARTS);
-    this.roofs = new THREE.InstancedMesh(gableGeometry(), mat, MAX);
-    this.stacks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.5, 0.6, 1, 6).translate(0, 0.5, 0), mat, MAX);
-    this.signs = new THREE.InstancedMesh(box, this.signMaterial, MAX);
+    this.skins = addSkins(box, MAX_PARTS);
+    const gable = gableGeometry();
+    addSkins(gable, MAX);
+    const stack = new THREE.CylinderGeometry(0.5, 0.6, 1, 6).translate(0, 0.5, 0);
+    addSkins(stack, MAX);
+    this.roofs = new THREE.InstancedMesh(gable, mat, MAX);
+    this.stacks = new THREE.InstancedMesh(stack, mat, MAX);
+    this.signs = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), this.signMaterial, MAX);
     for (const mesh of [this.tiles, this.bodies, this.roofs, this.stacks, this.signs]) {
       mesh.count = 0;
       mesh.frustumCulled = false;
@@ -160,8 +168,9 @@ export class BuildingLayer {
     this.tiles.renderOrder = 1;
   }
 
-  /** Let shop signs glow at night. */
-  lightSigns(night: { value: number }): void {
+  /** Draw the facades, and light windows, shop fronts and signs at night. */
+  light(night: { value: number }): void {
+    facadeMaterial(this.material, night);
     glowAtNight(this.signMaterial, night);
   }
 
@@ -178,10 +187,11 @@ export class BuildingLayer {
    * One box of a building, in the building's own frame: `along` runs with the road, `out` away from it
    * (negative is toward the street), sizes likewise.
    */
-  private part(kind: 'b' | 'r' | 'k' | 'g', lot: Lot, x: number, z: number, along: number, out: number, y: number, w: number, h: number, d: number, color: number): void {
+  private part(kind: 'b' | 'r' | 'k' | 'g', lot: Lot, x: number, z: number, along: number, out: number, y: number, w: number, h: number, d: number, color: number, skin = Skin.Plain): void {
     const mesh = kind === 'b' ? this.bodies : kind === 'r' ? this.roofs : kind === 'k' ? this.stacks : this.signs;
     const cap = kind === 'b' ? MAX_PARTS : MAX;
     if (this.n[kind] >= cap) return;
+    if (kind === 'b') this.skins.setX(this.n.b, skin);
     const nx = -lot.dir.y * lot.side;
     const ny = lot.dir.x * lot.side;
     this.place(mesh, this.n[kind]++, lot, x + lot.dir.x * along + nx * out, y, z + lot.dir.y * along + ny * out, w, h, d, color);
@@ -190,7 +200,7 @@ export class BuildingLayer {
   /** Ground-floor 騎樓: the shops sit back under the floor above, with pillars along the street. */
   private arcade(lot: Lot, x: number, z: number, w: number, d: number, wall: number): void {
     const deep = 2;
-    this.part('b', lot, x, z, 0, deep / 2, 0, w, FLOOR, d - deep, ARCADE);
+    this.part('b', lot, x, z, 0, deep / 2, 0, w, FLOOR, d - deep, ARCADE, Skin.Shopfront);
     for (const a of [-1, 1]) this.part('b', lot, x, z, a * (w / 2 - 0.25), -d / 2 + 0.25, 0, 0.5, FLOOR, 0.5, wall);
   }
 
@@ -201,7 +211,7 @@ export class BuildingLayer {
     for (let f = from; f < floors; f += step) {
       const y = f * FLOOR;
       this.part('b', lot, x, z, 0, -d / 2 - 0.3, y, w * 0.9, 0.25, 0.6, 0xcfcac2);
-      if (pick(lot.seed, f + 3) < 0.55) this.part('b', lot, x, z, 0, -d / 2 - 0.45, y + 0.25, w * 0.8, 1.6, 0.3, GRILLE);
+      if (pick(lot.seed, f + 3) < 0.55) this.part('b', lot, x, z, 0, -d / 2 - 0.45, y + 0.25, w * 0.8, 1.6, 0.3, GRILLE, Skin.Grille);
     }
   }
 
@@ -209,7 +219,7 @@ export class BuildingLayer {
   private rooftop(lot: Lot, x: number, z: number, w: number, d: number, h: number, addOn: boolean): void {
     const tank = choose(TANKS, lot.seed, 5);
     this.part('k', lot, x, z, w * 0.28, d * 0.25, h, 1.4, 1.5, 1.4, tank);
-    if (addOn && pick(lot.seed, 6) < 0.55) this.part('b', lot, x, z, -w * 0.12, d * 0.18, h, w * 0.7, 2.4, d * 0.55, choose(TIN, lot.seed, 7));
+    if (addOn && pick(lot.seed, 6) < 0.55) this.part('b', lot, x, z, -w * 0.12, d * 0.18, h, w * 0.7, 2.4, d * 0.55, choose(TIN, lot.seed, 7), Skin.Tin);
     else this.part('b', lot, x, z, -w * 0.25, d * 0.2, h, Math.min(2.4, w * 0.3), 2.3, Math.min(2.4, d * 0.3), 0xbdb8b0);
   }
 
@@ -226,7 +236,7 @@ export class BuildingLayer {
   /** 商辦大樓: glass tower on a stone podium, white floor bands, a company sign on the crown. */
   private office(lot: Lot, x: number, z: number, w: number, d: number, h: number, glass: number): void {
     const stone = choose(STONE, lot.seed, 12);
-    this.part('b', lot, x, z, 0, 0, 0, w + 0.5, FLOOR * 2, d + 0.5, stone);
+    this.part('b', lot, x, z, 0, 0, 0, w + 0.5, FLOOR * 2, d + 0.5, stone, Skin.Stone);
     // a glass canopy over the entrance
     this.part('b', lot, x, z, 0, -d / 2 - 1, FLOOR - 0.3, w * 0.5, 0.3, 2, 0xdfe5ea);
     const floors = Math.round(h / FLOOR);
@@ -235,7 +245,7 @@ export class BuildingLayer {
     this.part('g', lot, x, z, 0, -d / 2 - 0.1, h - 2.4, w * 0.6, 1.6, 0.2, choose(SIGNS, lot.seed, 13));
     if (lot.level > 5) {
       // Setback crown and a mast on top of a skyscraper
-      this.part('b', lot, x, z, 0, 0, h, w * 0.7, h * 0.08, d * 0.7, glass);
+      this.part('b', lot, x, z, 0, 0, h, w * 0.7, h * 0.08, d * 0.7, glass, Skin.Curtain);
       this.part('k', lot, x, z, 0, 0, h * 1.08, 0.6, 8 + lot.seed * 14, 0.6, 0xdfe5ea);
     } else this.part('b', lot, x, z, w * 0.15, d * 0.1, h, w * 0.4, 1.8, d * 0.4, 0xbdb8b0);
   }
@@ -243,16 +253,16 @@ export class BuildingLayer {
   /** 鐵皮工廠: steel shed with a coloured band and roof, roller shutters, a small office in front, sometimes a stack. */
   private factory(lot: Lot, x: number, z: number, w: number, d: number, h: number): void {
     const tin = choose(TIN, lot.seed, 2);
-    this.part('b', lot, x, z, 0, 0, h - 1, w + 0.1, 1, d + 0.1, tin);
+    this.part('b', lot, x, z, 0, 0, h - 1, w + 0.1, 1, d + 0.1, tin, Skin.Tin);
     this.part('r', lot, x, z, 0, 0, h, w + 0.4, 1.2, d + 0.4, tin);
     // 鐵捲門 on the street side
     const doors = w > 6 ? 2 : 1;
     for (let i = 0; i < doors; i++) {
       const along = doors === 1 ? w * 0.15 : (i ? w * 0.3 : -w * 0.05);
-      this.part('b', lot, x, z, along, -d / 2 - 0.05, 0, 2.8, Math.min(3.6, h - 1.2), 0.15, 0x7c8287);
+      this.part('b', lot, x, z, along, -d / 2 - 0.05, 0, 2.8, Math.min(3.6, h - 1.2), 0.15, 0x7c8287, Skin.Shutter);
     }
     // two-storey tiled office at the front corner
-    this.part('b', lot, x, z, -w * 0.32, -d * 0.3 - 0.3, 0, w * 0.36, FLOOR * 2, d * 0.4, choose(WALLS[Zone.ResidentialLow], lot.seed, 14));
+    this.part('b', lot, x, z, -w * 0.32, -d * 0.3 - 0.3, 0, w * 0.36, FLOOR * 2, d * 0.4, choose(WALLS[Zone.ResidentialLow], lot.seed, 14), Skin.Tiled);
     if (pick(lot.seed, 15) < 0.2) this.part('k', lot, x, z, w * 0.3, d * 0.2, h, 1, 3 + lot.level * 1.5, 1, 0x8d8a85);
     else this.part('k', lot, x, z, w * 0.2, d * 0.15, h + 0.6, 0.9, 1, 0.9, 0xb9bcbf);
   }
@@ -260,7 +270,7 @@ export class BuildingLayer {
   /** 加工工業區: a long white hall under a sawtooth roof with north lights, a blue band and loading bays. */
   private processing(lot: Lot, x: number, z: number, w: number, d: number, h: number, wall: number): void {
     const eave = h - 1.4;
-    this.part('b', lot, x, z, 0, 0, 0, w, eave, d, wall);
+    this.part('b', lot, x, z, 0, 0, 0, w, eave, d, wall, Skin.Tin);
     this.part('b', lot, x, z, 0, 0, eave - 1.1, w + 0.08, 0.7, d + 0.08, 0x2f6fb0);
     // Sawtooth: three gables side by side across the depth, glazing on one face
     const teeth = 3;
@@ -273,7 +283,7 @@ export class BuildingLayer {
     const bays = lot.level + 1;
     for (let i = 0; i < bays; i++) {
       const along = -w / 2 + (w / bays) * (i + 0.5);
-      this.part('b', lot, x, z, along, -d / 2 - 0.05, 0, Math.min(2.6, (w / bays) * 0.7), 3, 0.15, 0x6d747a);
+      this.part('b', lot, x, z, along, -d / 2 - 0.05, 0, Math.min(2.6, (w / bays) * 0.7), 3, 0.15, 0x6d747a, Skin.Shutter);
     }
     this.part('b', lot, x, z, 0, -d / 2 - 0.6, 0, w * 0.9, 1.1, 1.2, 0x9aa0a4);
     this.part('g', lot, x, z, -w * 0.25, -d / 2 - 0.1, eave - 2.6, w * 0.35, 1.1, 0.2, 0x2f6fb0);
@@ -353,7 +363,7 @@ export class BuildingLayer {
     this.part('b', lot, x, z, w * 0.36, d * 0.3, 0, w * 0.22, h + 2, d * 0.3, 0xcfc4ae);
     this.part('b', lot, x, z, 0, 0, h, w + 0.1, 0.6, d + 0.1, 0xb9b0a0);
     this.part('g', lot, x, z, -w * 0.12, -d / 2 - 0.1, h - 1.6, w * 0.55, 1.1, 0.2, choose(SIGNS, lot.seed, 22));
-    this.part('b', lot, x, z, -w * 0.2, -d / 2 - 0.05, 0, 2.6, 3, 0.15, 0x7c8287);
+    this.part('b', lot, x, z, -w * 0.2, -d / 2 - 0.05, 0, 2.6, 3, 0.15, 0x7c8287, Skin.Shutter);
     for (const a of [-0.42, 0.42]) this.part('k', lot, x, z, a * w, -d / 2 - 0.6, 0, 0.9, 1.2, 0.9, 0x4f8f45);
   }
 
@@ -398,10 +408,11 @@ export class BuildingLayer {
         const arcaded = (zone === Zone.ResidentialLow && !village) || zone === Zone.Commercial || (zone === Zone.ResidentialHigh && lot.level <= 3);
         // The newer industries draw their own bodies: open sheds, tanks, halls
         const special = isIndustry(zone) && zone !== Zone.Industrial;
+        const skin = zone === Zone.Office ? Skin.Curtain : zone === Zone.Industrial ? Skin.Tin : Skin.Tiled;
         if (arcaded) {
           this.arcade(lot, x, z, w, d, wall);
-          this.part('b', lot, x, z, 0, 0, FLOOR, w, h - FLOOR, d, wall);
-        } else if (!special) this.part('b', lot, x, z, 0, 0, 0, w, h, d, wall);
+          this.part('b', lot, x, z, 0, 0, FLOOR, w, h - FLOOR, d, wall, skin);
+        } else if (!special) this.part('b', lot, x, z, 0, 0, 0, w, h, d, wall, skin);
         if (village) {
           this.part('r', lot, x, z, 0, 0, h, w + 0.6, 2.2, d + 0.6, choose(ROOFS, lot.seed, 1));
         } else if (zone === Zone.ResidentialLow || zone === Zone.ResidentialHigh || zone === Zone.Commercial) {
@@ -435,5 +446,6 @@ export class BuildingLayer {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
+    this.skins.needsUpdate = true;
   }
 }

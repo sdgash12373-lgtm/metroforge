@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { type Traffic, type Vehicle, isTaxi } from '../sim/traffic';
-import { GLASS, HEADLIGHT, TAILLIGHT, painted, tint, wheel } from './kit';
+import { GLASS, HEADLIGHT, TAILLIGHT, painted, shade, tint, wheel } from './kit';
 import { PORTAL_DEPTH } from './roadMesh';
 
 const MAX = 1200;
@@ -68,7 +68,7 @@ function taxiSign(): THREE.BufferGeometry {
 /** A whole yellow taxi in one vertex-coloured geometry, for the cabs waiting at an airport rank. */
 export function taxiGeometry(): THREE.BufferGeometry {
   const car = sedan();
-  return merge([tint(car.paint, TAXI_YELLOW), car.trim, taxiSign()]);
+  return shade(merge([tint(car.paint, TAXI_YELLOW), car.trim, taxiSign()]));
 }
 
 /** A Gogoro-style scooter and its rider: the body and helmet take the instance colour. */
@@ -144,12 +144,12 @@ export class VehicleLayer {
   private c = new THREE.Color();
 
   constructor(shadows: boolean) {
-    const mat = new THREE.MeshLambertMaterial({ flatShading: true });
+    const mat = new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true });
     const fixed = new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true });
     const sizes = [MAX, MAX, MAX, MAX, MAX / 4, MAX / 8];
     [sedan(), suv(), hatchback(), scooter(), truck(), bus()].forEach((model, k) => {
-      this.paint.push(new THREE.InstancedMesh(model.paint, mat, sizes[k]));
-      this.trim.push(new THREE.InstancedMesh(model.trim, fixed, sizes[k]));
+      this.paint.push(new THREE.InstancedMesh(shade(model.paint), mat, sizes[k]));
+      this.trim.push(new THREE.InstancedMesh(shade(model.trim), fixed, sizes[k]));
     });
     this.taxiSigns = new THREE.InstancedMesh(taxiSign(), fixed, MAX / 4);
     this.lightBars = new THREE.InstancedMesh(new THREE.BoxGeometry(0.45, 0.18, 1.3).translate(-0.2, 1.57, 0), new THREE.MeshBasicMaterial(), MAX / 8);
