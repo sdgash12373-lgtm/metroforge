@@ -15,6 +15,7 @@ const KMRT_ORANGE = 0xf28c28;
 const KMRT_GLASS = 0x86bfd6;
 const STEEL_WHITE = 0xf1f2ef;
 const GRANITE = 0x8d8f8c;
+const GRANITE_LIGHT = 0xc9c6bd;
 /** Taiwan Railway: red brick and pale stone, green-tiled roofs, TR blue on the signs */
 const BRICK = 0xa9533c;
 const STONE = 0xe8e0cc;
@@ -38,7 +39,23 @@ class Frame {
     private z: number,
     private dx: number,
     private dz: number,
+    private mask: Builder | null = null,
   ) {}
+
+  /** A slanted beam `w` thick from (u0, v0, y0) to (u1, v1, y1), as two crossed strips. */
+  beam(u0: number, v0: number, y0: number, u1: number, v1: number, y1: number, w: number, color: number): void {
+    this.b.color = new THREE.Color(color);
+    const len = Math.hypot(u1 - u0, v1 - v0) || 1;
+    const su = (-(v1 - v0) / len) * (w / 2);
+    const sv = ((u1 - u0) / len) * (w / 2);
+    this.b.quad(this.at(u0 - su, v0 - sv, y0), this.at(u0 + su, v0 + sv, y0), this.at(u1 - su, v1 - sv, y1), this.at(u1 + su, v1 + sv, y1));
+    this.b.quad(this.at(u0, v0, y0 - w / 2), this.at(u0, v0, y0 + w / 2), this.at(u1, v1, y1 - w / 2), this.at(u1, v1, y1 + w / 2));
+  }
+
+  /** Cut the ground away over u0..u1, v0..v1, so what is built below street level there shows from above. */
+  opening(u0: number, u1: number, v0: number, v1: number): void {
+    this.mask?.quad(this.at(u0, v0, 0), this.at(u1, v0, 0), this.at(u0, v1, 0), this.at(u1, v1, 0));
+  }
 
   /** A point at (u, v) and height y. */
   private at(u: number, v: number, y: number): number[] {
@@ -142,18 +159,32 @@ class Frame {
  * a glass concourse.
  */
 export class StationLayer {
-  readonly mesh: THREE.Mesh;
+  readonly mesh = new THREE.Group();
+  private body: THREE.Mesh;
+  /**
+   * Openings in the ground over sunken plazas: drawn after the stations and before the ground, writing depth only,
+   * so the ground is hidden there and the plaza below shows.
+   */
+  private mask: THREE.Mesh;
 
   constructor(shadows: boolean) {
-    this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
-    this.mesh.castShadow = shadows;
-    this.mesh.receiveShadow = true;
+    this.body = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
+    this.body.castShadow = shadows;
+    this.body.receiveShadow = true;
+    this.body.renderOrder = -2;
+    this.mask = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
+    );
+    this.mask.renderOrder = -1;
+    this.mesh.add(this.body, this.mask);
   }
 
   /** `streets` is the road network above, which underground metro entrances must stand beside, not on. */
   /** `region` says which region a point is in, for the train stations each region builds in its own style. */
   rebuild(sys: RailSystem, streets: RoadNetwork, region: (x: number, y: number) => RegionName | null = () => null): void {
     const b = new Builder(0);
+    const m = new Builder(0);
     const colorOf = new Map<number, number>();
     for (const l of sys.transit.lines.values()) for (const id of l.stops) if (!colorOf.has(id)) colorOf.set(id, l.color);
     for (const stop of sys.transit.stops.values()) {
@@ -177,7 +208,7 @@ export class StationLayer {
         // The station building stands on the side of the tracks facing the town, off the roads: turn the frame
         // round if that is the other side
         const side = stationSide(streets, sys.kind, pose);
-        const g = side > 0 ? f : new Frame(b, p.x, p.y, -d.x, -d.y);
+        const g = side > 0 ? new Frame(b, p.x, p.y, d.x, d.y, m) : new Frame(b, p.x, p.y, -d.x, -d.y, m);
         if (sys.kind === 'train') {
           const r = region(p.x, p.y);
           if (r === 'kaohsiung') kaohsiungStation(g, h, color);
@@ -186,8 +217,10 @@ export class StationLayer {
         } else hsrStation(g, h, color);
       }
     }
-    this.mesh.geometry.dispose();
-    this.mesh.geometry = b.geometry();
+    this.body.geometry.dispose();
+    this.body.geometry = b.geometry();
+    this.mask.geometry.dispose();
+    this.mask.geometry = m.geometry();
   }
 }
 
@@ -368,11 +401,20 @@ function trench(f: Frame, h: number): void {
 }
 
 /**
- * Kaohsiung station in the style of the real one: a great white roof that rolls in waves over the tracks and the
+ * Kaohsiung station. The real one is underground: with the tracks below the street it gets the whole of it, the
+ * great roof over a sunken plaza that leads down to the trains; on track at street level, a smaller version.
+ */
+function kaohsiungStation(f: Frame, h: number, color: number): void {
+  if (h < 0) kaohsiungUnderground(f, h, color);
+  else kaohsiungAtGrade(f, h, color);
+}
+
+/**
+ * Kaohsiung station on track at street level, in the style of the real one: a great white roof that rolls in waves over the tracks and the
  * hall, with gardens and round skylights on it, held up on slim white columns; in front of it the old 帝冠式
  * station of 1941, cream walls under dark-tiled hipped roofs, its tall middle block crowned with a roof of its own.
  */
-function kaohsiungStation(f: Frame, h: number, color: number): void {
+function kaohsiungAtGrade(f: Frame, h: number, color: number): void {
   platforms(f, h, 84);
   const base = Math.max(0, Math.min(h, 0));
   const top = Math.max(h, 0) + 10;
@@ -392,7 +434,13 @@ function kaohsiungStation(f: Frame, h: number, color: number): void {
   // Glass hall under the roof behind the old station
   f.box(0, 13.6, 33, 7, base, base + 6.5, GLASS);
   f.box(0, 13.6, 33.4, 7.4, base + 6.5, base + 7, STEEL_WHITE);
-  // The old station: a long cream hall with wings, a taller block in the middle under a two-tier roof
+  oldKaohsiungStation(f, base);
+  footbridge(f, h, STEEL_WHITE);
+  trench(f, h);
+}
+
+/** The old 帝冠式 Kaohsiung station of 1941: a long cream hall with wings, a taller block in the middle under a two-tier roof. */
+function oldKaohsiungStation(f: Frame, base: number): void {
   const v = 21.1;
   const front = v + 3.5;
   for (const side of [-1, 1]) {
@@ -414,16 +462,141 @@ function kaohsiungStation(f: Frame, h: number, color: number): void {
   f.box(0, front + 0.6, 7, 1.2, base + 3.7, base + 4.0, STONE);
   f.box(0, front + 0.1, 6, 0.2, base + 4.8, base + 6, 0xf7f7f4);
   f.box(0, front + 0.22, 6, 0.05, base + 4.8, base + 5.1, TR_BLUE);
-  footbridge(f, h, STEEL_WHITE);
-  trench(f, h);
 }
 
 /**
- * Pingtung station in the style of the real one: a long white roof arched over the tracks on slim columns, and
+ * Kaohsiung station on track underground, like the real one since 2018. Over the tracks and the plaza beside them,
+ * the 城市之心: a white roof rolling in waves, open in round skylights and planted in drifts, held up on white
+ * columns that branch at the top like trees. Under it a sunken plaza steps down in terraces with trees, past
+ * escalators in the middle, to a glass wall into the concourse beside the platforms. The old station stands in front.
+ */
+function kaohsiungUnderground(f: Frame, h: number, color: number): void {
+  platforms(f, h, 84);
+  trench(f, h);
+  const floor = Math.max(h + 2.4, -5.6);
+  const pit = { u: 30, v0: 8.2, v1: 16.4 };
+  // Street-level plaza over the tracks
+  f.box(0, 0.2, 84, 16, -0.05, 0.03, GRANITE_LIGHT);
+  // The sunken plaza: floor, end walls, glass into the concourse on the track side
+  f.opening(-pit.u, pit.u, pit.v0, pit.v1);
+  f.box(0, (pit.v0 + pit.v1) / 2, pit.u * 2, pit.v1 - pit.v0, floor - 0.3, floor, GRANITE_LIGHT);
+  for (const e of [-1, 1]) f.box(e * (pit.u + 0.3), (pit.v0 + pit.v1) / 2, 0.6, pit.v1 - pit.v0, floor, 0.1, GRANITE);
+  f.box(0, pit.v0 - 0.3, pit.u * 2, 0.6, floor, 0.1, GRANITE);
+  f.box(0, pit.v0 + 0.05, pit.u * 2 - 2, 0.1, floor, -0.4, GLASS);
+  for (let u = -27; u <= 27; u += 3) f.box(u, pit.v0 + 0.15, 0.15, 0.2, floor, -0.4, STEEL_WHITE);
+  // Terraces down from the street on the town side, planted with trees, either side of the escalators
+  const steps = 6;
+  const tread = 1.15;
+  for (const e of [-1, 1]) {
+    const u0 = e * 7;
+    const u1 = e * pit.u;
+    const um = (u0 + u1) / 2;
+    const ul = Math.abs(u1 - u0);
+    for (let k = 0; k < steps; k++) {
+      const v = pit.v1 - tread * (k + 0.5);
+      const top = -((k + 1) / steps) * -floor;
+      f.box(um, v, ul, tread, floor, top, k % 2 ? GRANITE : GRANITE_LIGHT);
+    }
+    for (const tu of [10, 17, 24]) {
+      const k = tu % 3;
+      const v = pit.v1 - tread * (k + 1.5);
+      const y = -((k + 2) / steps) * -floor;
+      f.box(e * tu, v, 1.6, 1.6, y, y + 0.5, ROOF_GREEN);
+      f.box(e * tu, v, 0.25, 0.25, y + 0.5, y + 2.6, TRUNK);
+      f.box(e * tu, v, 2.2, 2.2, y + 2.4, y + 3.6, PALM);
+      f.box(e * tu, v, 1.4, 1.4, y + 3.6, y + 4.3, PALM);
+    }
+  }
+  // Escalators and a stair in the middle, running down from the street to the plaza floor
+  const run = pit.v1 - pit.v0 - 2;
+  for (const eu of [-4.5, -2.8, 2.8, 4.5]) {
+    f.panel(eu, 1.2, pit.v1, 0.05, pit.v1 - run, floor + 0.05, 0x3a3f45);
+    for (const s of [-0.7, 0.7]) f.panel(eu + s, 0.12, pit.v1, 1.0, pit.v1 - run, floor + 1.0, GLASS);
+  }
+  for (let k = 0; k < 8; k++) f.box(0, pit.v1 - (run * (k + 0.5)) / 8, 4, run / 8, floor, -((k + 1) / 8) * -floor, GRANITE_LIGHT);
+  // The roof
+  const top = 11;
+  const wave = (u: number, v: number) => top + 1.8 * Math.sin(u / 10 + 0.4) + 0.9 * Math.sin(v / 5 + 1);
+  const skylights = [[-31, -1, 3], [-15, 3, 2.6], [1, -3, 2.4], [17, 2, 3], [33, -2, 2.4], [-20, 12.5, 4.5], [0, 12, 3.2], [20, 12.5, 4.5]];
+  const cell = (u: number, v: number) => {
+    if (skylights.some(([su, sv, r]) => Math.hypot(u - su, v - sv) < r)) return null;
+    if (skylights.some(([su, sv, r]) => Math.hypot(u - su, v - sv) < r + 0.8)) return STEEL_WHITE;
+    return Math.sin(u / 6.5 + 1) * Math.cos(v / 3.4 - 0.6) + 0.35 * Math.sin(u / 2.3 + v) > 0.55 ? ROOF_GREEN : STEEL_WHITE;
+  };
+  const nu = 84;
+  const nv = 24;
+  f.sheet(-42, 42, -7.8, 17, nu, nv, wave, (i, j) => cell(-42 + i + 0.5, -7.8 + ((j + 0.5) * 24.8) / nv));
+  // Underside in a warm grey so the roof reads as a shell from the street, and a band in the line's colour round it
+  f.sheet(-42, 42, -7.8, 17, nu / 2, nv / 2, (u, v) => wave(u, v) - 0.6, (i, j) => (cell(-42 + 2 * i + 1, -7.8 + ((j + 0.5) * 24.8) / (nv / 2)) === null ? null : 0xdcdad3));
+  f.sheet(-42, 42, 16.8, 17, nu, 1, (u, v) => wave(u, v) - 0.3, () => color);
+  // Tree columns: a trunk splitting into four branches under the roof
+  const tree = (u: number, v: number, y0: number) => {
+    const fork = wave(u, v) - 4;
+    f.box(u, v, 0.6, 0.6, y0, fork, STEEL_WHITE);
+    for (const [bu, bv] of [[-2.6, -2], [2.6, -2], [-2.6, 2], [2.6, 2]]) f.beam(u, v, fork, u + bu, v + bv, wave(u + bu, v + bv) - 0.6, 0.35, STEEL_WHITE);
+  };
+  for (const u of [-34, -22, -8, 8, 22, 34]) tree(u, -1, 0);
+  for (const u of [-24, -12, 12, 24]) tree(u, 12.4, floor);
+  oldKaohsiungStation(f, 0);
+}
+
+/**
+ * Pingtung station on raised track, like the real one: the platforms on the upper floor under a long white roof
+ * arched over the tracks, a glass hall on the ground floor beneath them, and a front of glass and white fins two
+ * storeys high facing a plaza with palms and a canopy over the way in.
+ */
+function pingtungElevated(f: Frame, h: number, color: number): void {
+  platforms(f, h, 84);
+  // Upper floor: the arched roof over the platforms on slim columns
+  for (let u = -36; u <= 36; u += 12) for (const side of [-1, 1]) f.box(u, side * 7.3, 0.45, 0.45, h + 1.1, h + 6.4, STEEL_WHITE);
+  f.vault(0, 0, 84, 16, h + 6.4, 4, STEEL_WHITE, 12);
+  for (const e of [-1, 1]) f.box(e * 42, 0, 0.3, 16, h + 6, h + 6.6, color);
+  f.box(0, -7.4, 80, 0.1, h + 1.1, h + 6.2, GLASS);
+  // Ground floor: the hall under the platforms, glass between white piers
+  f.box(0, 0, 66, 14, 0, 0.2, GRANITE_LIGHT);
+  f.box(0, 0, 64, 12, 0.2, h - 1.4, GLASS);
+  for (let u = -30; u <= 30; u += 6) for (const side of [-1, 1]) f.box(u, side * 6.2, 0.8, 0.8, 0, h - 1.2, STEEL_WHITE);
+  f.box(0, 0, 66, 14, h - 1.4, h - 0.6, STEEL_WHITE);
+  // The front: glass two storeys high behind white fins, from the plaza up to the roof's edge
+  const front = 8.4;
+  f.box(0, front, 40, 0.15, 0.2, h + 7, GLASS);
+  for (let u = -19.5; u <= 19.5; u += 1.5) f.box(u, front + 0.4, 0.22, 0.7, 0, h + 7.4, STEEL_WHITE);
+  f.box(0, front + 0.2, 41, 1.2, h + 7.2, h + 8, STEEL_WHITE);
+  f.box(0, front + 0.85, 12, 0.15, h + 3, h + 4.6, TR_BLUE);
+  f.box(0, front + 0.95, 10.5, 0.05, h + 3.4, h + 4.2, 0xf7f7f4);
+  // Plaza in front: paving, a canopy over the way in, palms in rows and a band of lawn
+  f.box(0, 17.2, 34.6, 15, 0, 0.06, GRANITE_LIGHT);
+  f.box(0, 12.4, 16, 4.6, 3.8, 4.1, STEEL_WHITE);
+  for (const cu of [-7.6, 7.6]) f.box(cu, 14.4, 0.3, 0.3, 0, 3.8, STEEL_WHITE);
+  for (const lu of [-12, 12]) f.box(lu, 20, 9, 6, 0.06, 0.2, ROOF_GREEN);
+  for (const pu of [-15, -11, -7, 7, 11, 15]) {
+    for (const pv of [17.5, 22.5]) {
+      if (Math.abs(pu) < 8 && pv > 20) continue;
+      f.box(pu, pv, 0.35, 0.35, 0, 6.5, TRUNK);
+      f.box(pu, pv, 3.2, 0.7, 6.3, 6.8, PALM);
+      f.box(pu, pv, 0.7, 3.2, 6.3, 6.8, PALM);
+      f.box(pu, pv, 1.4, 1.4, 6.6, 7.3, PALM);
+    }
+  }
+  // Stair and lift up to the platforms at one end
+  f.box(20, 10.5, 4, 3, 0, h + 1.1, STEEL_WHITE);
+}
+
+/**
+ * Pingtung station. The real one is elevated, a plaza and hall on the ground floor and the platforms above: on
+ * raised track it gets all of that; on track at street level or below, a smaller version.
+ */
+function pingtungStation(f: Frame, h: number, color: number): void {
+  if (h > 2) pingtungElevated(f, h, color);
+  else pingtungAtGrade(f, h, color);
+}
+
+/**
+ * Pingtung station on track at street level, in the style of the real one: a long white roof arched over the tracks on slim columns, and
  * beside it a white hall with a glass front behind thin white fins, under a roof that swells up in the middle, a
  * canopy over the entrance and palm trees in front.
  */
-function pingtungStation(f: Frame, h: number, color: number): void {
+function pingtungAtGrade(f: Frame, h: number, color: number): void {
   platforms(f, h, 84);
   const base = Math.max(0, Math.min(h, 0));
   // The arched roof over the tracks, glass along its sides and a band in the line's colour
@@ -453,9 +626,7 @@ function pingtungStation(f: Frame, h: number, color: number): void {
     f.box(pu, 24, 0.7, 3.2, base + 5.8, base + 6.3, PALM);
     f.box(pu, 24, 1.4, 1.4, base + 6.1, base + 6.8, PALM);
   }
-  // Elevated tracks get a stair tower down to the hall; otherwise a footbridge over the tracks
-  if (h > 2) f.box(20, 12, 4, 6, base, h + 1.1, STEEL_WHITE);
-  else footbridge(f, h, STEEL_WHITE);
+  footbridge(f, h, STEEL_WHITE);
   trench(f, h);
 }
 

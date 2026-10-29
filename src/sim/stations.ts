@@ -37,21 +37,25 @@ const BUILDING: Record<RailKind, Rect[]> = {
   metro: [[-3.7, 4.5, 8.2, 13.5]],
 };
 
-/** The parts of a station that stand on the ground: at street level, or raised over it. */
-export function stationRects(kind: RailKind, h: number): Rect[] {
+/**
+ * The parts of a station that stand on the ground: at street level, or raised over it. A `wide` station (Kaohsiung's,
+ * underground) spreads its roof and sunken plaza over the tracks as well as beside them.
+ */
+export function stationRects(kind: RailKind, h: number, wide = false): Rect[] {
   // Underground, only a train station's building is at street level; metro entrances find their own spots
+  if (h < 0 && wide && kind === 'train') return [[PLATFORMS.train[0], PLATFORMS.train[1], PLATFORMS.train[2], BUILDING.train[0][3]]];
   if (h < 0) return kind === 'metro' ? [] : [BUILDING[kind][0]];
   return [PLATFORMS[kind], ...BUILDING[kind]];
 }
 
 /** Whether `pt` is within `margin` of the ground a station covers, with its building on side `side` (±1). */
-export function stationCovers(kind: RailKind, pose: StationPose, side: number, pt: Vec2, margin: number): boolean {
+export function stationCovers(kind: RailKind, pose: StationPose, side: number, pt: Vec2, margin: number, wide = false): boolean {
   const dx = pt.x - pose.p.x;
   const dy = pt.y - pose.p.y;
   // A building on the -1 side is the station turned round, so u flips with v
   const u = (dx * pose.d.x + dy * pose.d.y) * side;
   const v = (-dx * pose.d.y + dy * pose.d.x) * side;
-  return stationRects(kind, pose.h).some(([u0, u1, v0, v1]) => u >= u0 - margin && u <= u1 + margin && v >= v0 - margin && v <= v1 + margin);
+  return stationRects(kind, pose.h, wide).some(([u0, u1, v0, v1]) => u >= u0 - margin && u <= u1 + margin && v >= v0 - margin && v <= v1 + margin);
 }
 
 /**
