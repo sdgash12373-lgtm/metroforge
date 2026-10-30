@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { type Facility, dims, toWorld } from '../sim/facilities';
 import { hash01 } from '../sim/geometry';
 import { Builder } from './roadMesh';
+import { arena, cityHall, dragonTiger, ferrisWheel, tower85 } from './landmarks';
 import { SIGNS, SIGN_LABELS, type SignLabel, fire, hospital, park, parking, police, school } from './civic';
 
 type P3 = [number, number, number];
@@ -63,116 +64,6 @@ export class Kit {
   tree(u: number, v: number, s = 1): void {
     this.prism(u, v, 0.3 * s, 0.3 * s, 0, 2 * s, 0x7a5a3c, 5);
     this.prism(u, v, 2.2 * s, 0, 1.6 * s, 6.5 * s, 0x4f8f45, 6);
-  }
-}
-
-/** 85 Sky Tower: two legs joined high up into one tower, then a stepped top and a mast. */
-function tower85(k: Kit, w: number, d: number): void {
-  const glass = 0x6f8ea6;
-  const band = 0xa9c2d4;
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0xc9c4ba);
-  for (const s of [-1, 1]) {
-    k.box(s * 6, -9, s * 18, 9, 0, 132, glass);
-    for (let z = 20; z < 130; z += 22) k.box(s * 5.9, -9.1, s * 18.1, 9.1, z, z + 1.2, band);
-  }
-  // The open arch between the legs, then the shared tower above it
-  k.box(-18, -9, 18, 9, 132, 150, glass);
-  k.box(-18.2, -9.2, 18.2, 9.2, 150, 151.5, band);
-  k.box(-10, -8, 10, 8, 151.5, 205, glass);
-  k.box(-10.2, -8.2, 10.2, 8.2, 178, 179.2, band);
-  k.box(-7.5, -6, 7.5, 6, 205, 232, glass);
-  k.box(-5, -4, 5, 4, 232, 252, band);
-  k.prism(0, 0, 0.9, 0.2, 252, 285, 0xdfe5ea, 6);
-}
-
-function cityHall(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0xcfc8b8);
-  k.box(-33, -6, 33, 16, 0, 18, 0xe8e0cc);
-  for (let z = 4; z < 17; z += 4.5) k.box(-33.1, -6.1, 33.1, 16.1, z, z + 1.4, 0x8aa5b5);
-  k.box(-11, -12, 11, 16, 0, 34, 0xf2ecdc);
-  k.box(-11.1, -12.1, 11.1, 16.1, 8, 30, 0x7f9fb3);
-  k.box(-12, -13, 12, 17, 34, 36, 0xd8cfb8);
-  for (const u of [-20, -16, 16, 20]) {
-    k.prism(u, -19, 0.15, 0.15, 0, 12, 0xdddddd, 4);
-  }
-  k.box(-20, -19.1, -17, -19, 10, 12, 0xd9343a);
-}
-
-/** Two seven-storey pagodas on a lotus pond, reached by a zigzag bridge. */
-function dragonTiger(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0xbfb7a6);
-  k.rect(-w / 2 + 2, -d / 2 + 6, w / 2 - 2, d / 2 - 2, 0.16, 0x4f97bf);
-  for (const [s, wall] of [
-    [-1, 0xf2c94c],
-    [1, 0xf2a93c],
-  ] as const) {
-    const cu = s * 10;
-    const cv = 8;
-    k.prism(cu, cv, 7, 7, 0, 2, 0xc0533a, 8, Math.PI / 8);
-    let z = 2;
-    for (let i = 0; i < 7; i++) {
-      const r = 5.2 - i * 0.5;
-      k.prism(cu, cv, r, r, z, z + 3.2, wall, 8, Math.PI / 8);
-      k.prism(cu, cv, r + 1.8, r * 0.75, z + 3.2, z + 4.2, 0xc0533a, 8, Math.PI / 8);
-      z += 4.2;
-    }
-    k.prism(cu, cv, 0.6, 0, z, z + 4, 0xf2c94c, 6);
-  }
-  // Zigzag bridge from the shore, and the dragon and tiger at the doors
-  k.box(-2, -22, 2, -12, 0.2, 1, 0xd9343a);
-  k.box(-2, -12, 8, -9, 0.2, 1, 0xd9343a);
-  k.box(-10, -9, 2, -6, 0.2, 1, 0xd9343a);
-  k.box(-10, -6, -7, 2, 0.2, 1, 0xd9343a);
-  k.box(7, -9, 10, 2, 0.2, 1, 0xd9343a);
-  k.box(-13, 1, -7, 3, 0.2, 4, 0x3f9a4a);
-  k.box(7, 1, 13, 3, 0.2, 4, 0xe08a2a);
-}
-
-/** A shopping mall with a big wheel on its roof. */
-function ferrisWheel(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0xbfb9ad);
-  k.box(-26, -18, 26, 20, 0, 22, 0xe9e1d3);
-  k.box(-26.1, -18.1, 26.1, 20.1, 5, 12, 0x8fb8cc);
-  const hz = 22 + 34;
-  const R = 30;
-  const n = 32;
-  const rim = (a: number, r: number, v: number): P3 => [Math.cos(a) * r, v, hz + Math.sin(a) * r];
-  k.color(0xe4572e);
-  for (let i = 0; i < n; i++) {
-    const a0 = (i / n) * Math.PI * 2;
-    const a1 = ((i + 1) / n) * Math.PI * 2;
-    for (const v of [-1.2, 1.2]) k.quad(rim(a0, R, v), rim(a0, R - 1.2, v), rim(a1, R, v), rim(a1, R - 1.2, v));
-    k.quad(rim(a0, R, -1.2), rim(a0, R, 1.2), rim(a1, R, -1.2), rim(a1, R, 1.2));
-  }
-  // Spokes and the A-frame legs to the hub
-  k.color(0xf2f2f2);
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2;
-    k.quad(rim(a, 0, -0.3), rim(a, 0, 0.3), rim(a, R - 1, -0.3), rim(a, R - 1, 0.3));
-  }
-  k.color(0xd9d9d9);
-  for (const v of [-6, 6]) {
-    for (const u of [-14, 14]) k.quad([u - 0.8, v, 22], [u + 0.8, v, 22], [-0.5, v * 0.25, hz], [0.5, v * 0.25, hz]);
-  }
-  k.prism(0, 0, 2, 2, hz - 2, hz + 2, 0xd9d9d9, 8);
-  const colors = [0xf4d35e, 0x2e86ab, 0x6a994e, 0xa23b72];
-  for (let i = 0; i < 16; i++) {
-    const a = (i / 16) * Math.PI * 2;
-    const [u, , z] = rim(a, R, 0);
-    k.box(u - 1.3, -1.3, u + 1.3, 1.3, z - 3.2, z - 0.6, colors[i % colors.length]);
-  }
-}
-
-/** A white dome on a ring of stands. */
-function arena(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0xc9c6bf);
-  k.prism(0, 0, 40, 40, 0, 12, 0x9aa5b1, 24);
-  k.prism(0, 0, 40.5, 40.5, 12, 13, 0xe4e7ea, 24);
-  const steps = 6;
-  for (let i = 0; i < steps; i++) {
-    const a0 = (i / steps) * (Math.PI / 2);
-    const a1 = ((i + 1) / steps) * (Math.PI / 2);
-    k.prism(0, 0, 40 * Math.cos(a0), 40 * Math.cos(a1), 13 + 24 * Math.sin(a0), 13 + 24 * Math.sin(a1), i % 2 ? 0xeef1f3 : 0xdfe4e8, 24);
   }
 }
 
