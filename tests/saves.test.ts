@@ -50,11 +50,14 @@ describe('save slots', () => {
     const slots = new SaveSlots(new MemoryStore(), clock());
     await slots.save('slot1', town('前鎮'));
     const file = (await slots.exportSlot('slot1'))!;
-    expect(file.filename).toBe('前鎮.skyline.json');
+    expect(file.filename).toBe('前鎮.metroforge.json');
     const other = new SaveSlots(new MemoryStore(), clock());
     await other.importText(file.text, 'slot3');
     expect((await other.load('slot3')).name).toBe('前鎮');
     await expect(other.importText('{"nope":1}', 'slot4')).rejects.toThrow();
+    // Files exported before the rename still load
+    const legacy = JSON.stringify({ ...JSON.parse(file.text), format: 'skyline-city' });
+    expect((await other.importText(legacy, 'slot2')).name).toBe(JSON.parse(file.text).name);
     expect(await other.info('slot4')).toBeNull();
   });
 

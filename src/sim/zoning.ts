@@ -1,7 +1,7 @@
 import { type Vec2, bboxNear, closestOnSamples, hash01, quadPoint, quadTangent, tAtLength } from './geometry';
 import { ROAD_WIDTH, type RoadNetwork, type RoadSegment, roadWidth } from './roads';
 
-/** Zoning cell size, as in Cities: Skylines (8 m × 8 m). */
+/** Zoning cell size (8 m × 8 m). */
 export const CELL = 8;
 
 /** Middle of the drawing-grid square a point is in: free road ends go there, never onto a grid line. */

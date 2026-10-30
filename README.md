@@ -2,7 +2,7 @@
 
 <img src="public/logo.png" alt="Metroforge 商標" width="120">
 
-一個可以在手機與電腦瀏覽器上玩的城市建造遊戲，靈感來自《Cities: Skylines》。
+一個可以在手機與電腦瀏覽器上玩的城市建造遊戲。
 使用 TypeScript + Three.js，簡約低多邊形風格。
 
 ## v2.7.0 操作介面優化

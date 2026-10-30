@@ -12,7 +12,9 @@ export const SLOTS = ['slot1', 'slot2', 'slot3', 'slot4', 'slot5', 'slot6'];
 const ALL_SLOTS = [AUTO_SLOT, ...SLOTS];
 /** where saves lived before save slots */
 export const LEGACY_KEY = 'skyline-city:save';
-const EXPORT_FORMAT = 'skyline-city';
+const EXPORT_FORMAT = 'metroforge';
+/** What exported files said before the rename; still read. */
+const OLD_FORMATS = ['skyline-city'];
 
 export interface SlotInfo {
   id: string;
@@ -113,13 +115,13 @@ export class SaveSlots {
     const meta = await this.info(id);
     if (!raw || !meta) return null;
     const text = JSON.stringify({ format: EXPORT_FORMAT, name: meta.name, data: JSON.parse(raw) as SaveData });
-    return { filename: `${meta.name.replace(/[\\/:*?"<>|]/g, '_')}.skyline.json`, text };
+    return { filename: `${meta.name.replace(/[\\/:*?"<>|]/g, '_')}.metroforge.json`, text };
   }
 
   /** Reads an exported file (or a bare save) into a slot. Throws if it is not a city. */
   async importText(text: string, id: string): Promise<SlotInfo> {
     const parsed = JSON.parse(text) as { format?: string; data?: SaveData } & Partial<SaveData>;
-    const data = (parsed.format === EXPORT_FORMAT ? parsed.data : parsed) as SaveData;
+    const data = (parsed.format === EXPORT_FORMAT || OLD_FORMATS.includes(parsed.format ?? '') ? parsed.data : parsed) as SaveData;
     const city = City.deserialize(data);
     return this.save(id, city);
   }
