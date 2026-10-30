@@ -126,6 +126,23 @@ describe('bus lines', () => {
     expect(city.budget.transitUpkeep).toBeGreaterThan(0);
   });
 
+  it('still carry commuters when the roads are full of cars', () => {
+    const city = block();
+    city.addOutsideConnection([...city.net.nodes.values()].find((n) => n.p.x === 0 && n.p.y === 0)!.id);
+    city.paint({ x: 60, y: 15 }, 40, Zone.ResidentialHigh);
+    city.paint({ x: 240, y: 285 }, 40, Zone.Office);
+    for (const s of city.net.segments.values()) for (const lot of s.lots) if (lot.zone) lot.level = 3;
+    line(city, [[60, 0], [240, 300]]);
+    // No room left on the roads for another car
+    city.maxVehicles = 0;
+    const r = rng();
+    let waiting = 0;
+    for (let i = 0; i < 200; i++) city.tick(r);
+    for (const s of city.transit.stops.values()) for (const m of s.waiting.values()) for (const n of m.values()) waiting += n;
+    expect(waiting + [...city.transit.lines.values()][0].riders).toBeGreaterThan(0);
+    expect(city.traffic.vehicles.every((v) => v.kind === 'bus')).toBe(true);
+  });
+
   it('follow their stops when a road is split, and close when a stop loses its street', () => {
     const city = block();
     line(city, [[150, 0], [150, 300]]);
