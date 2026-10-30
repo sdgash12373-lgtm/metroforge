@@ -1,5 +1,5 @@
 import type { City } from '../sim/city';
-import { EVENT_KINDS, type EventOffer, FANS_PER_CAR, clashes, eventNet, expectedAttendance, keenLabel } from '../sim/events';
+import { EVENT_KINDS, type EventOffer, FANS_PER_CAR, clashes, eventNet, matchup, expectedAttendance, keenLabel } from '../sim/events';
 import { gameDate } from '../sim/format';
 import { ntdShort } from '../sim/levels';
 
@@ -100,6 +100,10 @@ export class EventsPanel {
     head.append(el('b', '', `${spec.icon} ${o.name}`), el('small', '', spec.label));
     card.append(head);
     card.append(el('div', 'ev-when', `${gameDate(o.start)} 起 ${o.hours} 小時`));
+    if (o.kind === 'sports') {
+      const [[home], [away]] = matchup(o);
+      card.append(el('div', 'ev-when', `對戰：${home} vs ${away}`));
+    }
     card.append(meter(`熱衷程度：${keenLabel(o.keen)}`, o.keen, 'keen'));
     const crowd = expectedAttendance(o.capacity, o.keen);
     const net = eventNet(o, crowd);

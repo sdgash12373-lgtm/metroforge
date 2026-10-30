@@ -1,3 +1,4 @@
+import { ArenaDecor } from './arenaDecor';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Conditions } from '../sim/weather';
@@ -128,6 +129,8 @@ export class World {
   private readonly facilities: THREE.Mesh;
   /** the services' lettered signs, lit from within so they read at night too */
   private readonly facilitySigns: THREE.Mesh;
+  /** banners, flags and stalls round the arena while an event is on */
+  private readonly arenaDecor = new ArenaDecor();
   private facilitiesVersion = -1;
   /** street and district names over the map */
   private readonly nameLayer: HTMLElement;
@@ -283,6 +286,7 @@ export class World {
     this.facilitySigns = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ map: signAtlas() }));
     this.facilities.add(this.facilitySigns);
     this.scene.add(this.facilities);
+    this.scene.add(this.arenaDecor.group);
     this.scene.add(this.airports, this.planes.group, this.taxiRanks.mesh, this.signals.group);
 
     this.preview = new THREE.Mesh(new THREE.BufferGeometry(), this.materials.preview);
@@ -679,6 +683,7 @@ export class World {
     this.planes.update(city.aviation);
     this.ships.update(city, simDt);
     this.taxiRanks.update(city.aviation);
+    this.arenaDecor.update(city);
     this.signals.update(city.traffic, city.net);
     this.peopleAge += dt;
     this.waterTime.value = (this.waterTime.value + dt) % 1000;
