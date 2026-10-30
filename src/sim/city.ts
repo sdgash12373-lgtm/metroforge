@@ -2166,8 +2166,14 @@ export class City {
       const to = job ? at(job) : gate;
       if (to) this.traffic.spawn(at(home), to, commute, rng());
     }
-    if (gate && industry.length && rng() < Math.min(0.9, this.stats.jobs / 300)) {
-      this.traffic.spawn(gate, at(pick(industry)), 'truck', rng());
+    // Lorries: supplies in from the highway, goods out to the highway, and deliveries from industry to the
+    // shops in town, so a lorry at a junction may go any way, not all one way to the factories
+    const shops = work.filter((p) => ZONES[p.lot.zone as Exclude<Zone, Zone.None>].demand === 'C');
+    if (industry.length && rng() < Math.min(0.9, this.stats.jobs / 300)) {
+      const r = rng();
+      if (shops.length && r < 0.4) this.traffic.spawn(at(pick(industry)), at(pick(shops)), 'truck', rng());
+      else if (gate && r < 0.7) this.traffic.spawn(at(pick(industry)), gate, 'truck', rng());
+      else if (gate) this.traffic.spawn(gate, at(pick(industry)), 'truck', rng());
     }
     // Freight: lorries take goods from industry down to a cargo port on the same roads
     const ports = this.cargoPorts();
