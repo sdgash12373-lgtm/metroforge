@@ -5,7 +5,7 @@ import { Builder } from './roadMesh';
 import { arena, cityHall, dragonTiger, ferrisWheel, tower85 } from './landmarks';
 import type { SignSpec } from './civic';
 import { MARKET_LABELS, MARKET_SIGNS, nightMarket, youbike } from './market';
-import { SIGNS as CIVIC_SIGNS, SIGN_LABELS as CIVIC_LABELS, fire, hospital, park, parking, police, school } from './civic';
+import { SIGNS as CIVIC_SIGNS, SIGN_LABELS as CIVIC_LABELS, fire, hospital, park, parking, police, school, university } from './civic';
 
 type P3 = [number, number, number];
 
@@ -217,6 +217,7 @@ const MODELS: Record<Facility['kind'], (k: Kit, w: number, d: number) => void> =
   parking,
   youbike,
   nightMarket,
+  university,
   cargoPort,
   cruisePort,
 };

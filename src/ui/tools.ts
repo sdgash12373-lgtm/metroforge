@@ -36,11 +36,12 @@ export type Tool =
   | 'footbridge'
   | 'parking'
   | 'youbike'
-  | 'nightMarket';
+  | 'nightMarket'
+  | 'university';
 
 /** Tools that place a public service, landmark, green space or footbridge. */
-export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' | 'port' | 'parking' | 'youbike' | 'nightMarket' =>
-  t === 'landmark' || t === 'greenery' || t === 'footbridge' || t === 'port' || t === 'parking' || t === 'youbike' || t === 'nightMarket' || (SERVICE_KINDS as string[]).includes(t);
+export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' | 'port' | 'parking' | 'youbike' | 'nightMarket' | 'university' =>
+  t === 'landmark' || t === 'greenery' || t === 'footbridge' || t === 'port' || t === 'parking' || t === 'youbike' || t === 'nightMarket' || t === 'university' || (SERVICE_KINDS as string[]).includes(t);
 
 /** Train tools either lay track or plan lines through stations. */
 export type RailAction = 'station' | 'track' | 'line';
@@ -586,6 +587,7 @@ export class ToolController {
       case 'parking':
       case 'youbike':
       case 'nightMarket':
+      case 'university':
       case 'port':
         return this.facilityHint();
       case 'streetName': {

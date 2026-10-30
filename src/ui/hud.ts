@@ -6,6 +6,7 @@ import { LEVELS, ntdShort } from '../sim/levels';
 import { FACILITIES, GREEN_KINDS, LANDMARK_KINDS, MAX_PARKING_FEE, PARKING_SPACES, PORT_KINDS, SERVICE_KINDS } from '../sim/facilities';
 import { RAIL_KINDS } from '../sim/rail';
 import { INCOME_BRACKETS } from '../sim/income';
+import { POLICIES, POLICY_KEYS, POLICY_RANK, REVIEW, REVIEW_KEYS } from '../sim/policy';
 import type { Conditions } from '../sim/weather';
 import { INDUSTRY_ZONES, ZONES, Zone } from '../sim/zoning';
 import { REGION_NAMES } from '../sim/terrain';
@@ -41,6 +42,7 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
     { id: 'footbridge', label: '天橋' },
     { id: 'parking', label: '停車場' },
     { id: 'nightMarket', label: '夜市' },
+    { id: 'university', label: '大學' },
   ],
   names: [
     { id: 'streetName', label: '路名' },
@@ -51,8 +53,8 @@ const groupOf = (t: Tool): Group | null => (Object.keys(GROUPS) as Group[]).find
 
 type DockItem = Tool | Group;
 type BudgetRow =
-  | 'res' | 'biz' | 'fuel' | 'subsidy' | 'fares' | 'air' | 'parking' | 'bikes' | 'tourism' | 'trade' | 'income'
-  | 'roads' | 'transit' | 'airUpkeep' | 'services' | 'admin' | 'running' | 'construction' | 'net';
+  | 'res' | 'biz' | 'fuel' | 'cluster' | 'subsidy' | 'fares' | 'air' | 'parking' | 'bikes' | 'tourism' | 'trade' | 'income'
+  | 'roads' | 'transit' | 'airUpkeep' | 'services' | 'admin' | 'policy' | 'running' | 'construction' | 'net';
 const TOOLS: { id: DockItem; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
   { id: 'roads', label: '道路', key: '2' },
@@ -257,6 +259,7 @@ export class Hud {
       res: row('住宅稅'),
       biz: row('商業稅'),
       fuel: row('汽燃稅（開車居民）'),
+      cluster: row('產業聚落稅收'),
       subsidy: row('中央補助'),
       fares: row('運輸票價（規費）'),
       air: row('機場規費'),
@@ -274,6 +277,7 @@ export class Hud {
       airUpkeep: row('機場營運'),
       services: row('公共服務（每兩週繳）'),
       admin: row('行政人事'),
+      policy: row('市政政策'),
       running: row('營運支出', 'sub'),
       construction: row('建設支出（近 3 日平均）'),
       net: row('每月結餘', 'total'),
@@ -845,10 +849,81 @@ export class Hud {
   /** rank the "ready to move up" notice was last shown for */
   private readyTold = -1;
 
+  /** 市政政策 switches and the 升格審查 bars, from 縣轄市 up. */
+  private policyRows(city: City): HTMLElement[] {
+    const out: HTMLElement[] = [];
+    const ranked = city.level >= POLICY_RANK;
+    out.push(el('h3', 'bgroup', '市政政策'));
+    if (!ranked) {
+      out.push(el('p', 'note', `升級為「${LEVELS[POLICY_RANK].name}」後可以推動「捷運聯合開發」和「產業創新計畫」，並開始升格審查。`));
+      return out;
+    }
+    for (const k of POLICY_KEYS) {
+      const spec = POLICIES[k];
+      const on = city.policies.has(k);
+      const wrap = el('label', 'mail-toggle policy');
+      const box = el('input');
+      box.type = 'checkbox';
+      box.checked = on;
+      box.onchange = () => {
+        const r = city.setPolicy(k, box.checked);
+        if (!r.ok) {
+          box.checked = false;
+          this.toast(r.reason ?? '不能推動');
+          return;
+        }
+        this.ticker(box.checked ? `📜 ${city.name}開始推動「${spec.label}」` : `📜 「${spec.label}」已停止`);
+        this.levelShown = '';
+        this.render();
+      };
+      const text = el('span');
+      text.append(el('b', '', `${spec.label} · 每月 NT$${ntdShort(spec.cost)}`), el('br'), el('small', '', spec.blurb));
+      wrap.append(box, text);
+      out.push(wrap);
+    }
+    const ps = city.policyStats;
+    if (city.policies.has('tod')) {
+      out.push(el('p', 'note', `聯合開發範圍內：${ps.todPeople.toLocaleString()} 位居民、${ps.todJobs.toLocaleString()} 個工作。在捷運、火車、高鐵站旁劃高密住宅、商業、辦公區，效果最好。`));
+    }
+    if (city.clusters.length) {
+      for (const c of city.clusters) {
+        const why = c.active
+          ? `✓ 產業聚落運作中：園區 ${Math.round(c.jobs).toLocaleString()} 個工作`
+          : !city.policies.has('industry')
+            ? '○ 要推動「產業創新計畫」'
+            : c.jobs < 150
+              ? `○ 大學 1200 公尺內的科學園區工作不足（${Math.round(c.jobs)} / 150）`
+              : '○ 大學 2 公里內要有交流道（匝道）';
+        out.push(el('p', `note${c.active ? ' ok' : ''}`, `🎓 大學：${why}`));
+      }
+    } else if (city.policies.has('industry')) {
+      out.push(el('p', 'note', '在「建設 → 大學」蓋一所大學，旁邊劃科學園區、附近有交流道，就會形成產業聚落。'));
+    }
+    out.push(el('h3', 'bgroup', city.level + 1 < LEVELS.length ? `升格審查（${LEVELS[city.level + 1].name}）` : '市政評鑑'));
+    for (const k of REVIEW_KEYS) {
+      const spec = REVIEW[k];
+      const item = city.review[k];
+      const have = spec.unit === 'share' ? `${Math.round(item.have * 100)}% / ${Math.round(item.need * 100)}%` : k === 'finance' ? (item.ok ? '健全' : '赤字') : `${item.have} / ${item.need}`;
+      const row = el('div', `brow check${item.ok ? ' ok' : ''}`);
+      row.append(el('span', '', `${item.ok ? '✓' : '○'} ${spec.label}`), el('b', '', have));
+      out.push(row, el('p', 'note review', `${spec.goal}；達成：${spec.bonus}`));
+    }
+    return out;
+  }
+
   /** 城市等級: this rank, the bars for the next one and a button to move up. */
   private renderLevel(city: City): void {
     const next = city.nextLevel();
-    const key = JSON.stringify([city.level, next?.checks.map((c) => [c.ok, Math.round(c.have / 1000)]), [...city.regions], city.money >= REGION_COST]);
+    const key = JSON.stringify([
+      city.level,
+      next?.checks.map((c) => [c.ok, Math.round(c.have / 1000)]),
+      [...city.regions],
+      city.money >= REGION_COST,
+      [...city.policies],
+      REVIEW_KEYS.map((k) => [city.review[k].ok, Math.round(city.review[k].have * 100)]),
+      city.clusters.map((c) => [c.active, c.ramp, Math.round(c.jobs / 10)]),
+      Math.round(city.policyStats.todPeople / 100),
+    ]);
     if (key === this.levelShown) return;
     this.levelShown = key;
     const body: HTMLElement[] = [el('h2', '', `城市等級：${LEVELS[city.level].name}`)];
@@ -873,6 +948,7 @@ export class Hud {
       body.push(up);
       if (next.level.unlocks.length) body.push(el('p', 'note', `升級後開放：${next.level.unlocks.join('、')}`));
     } else body.push(el('p', 'note', '已經是最高等級「直轄市」！'));
+    body.push(...this.policyRows(city));
     // Other parts of the map: opened from 縣轄市 for NT$100萬 each
     const regions = city.terrain.regions;
     if (regions.length > 1) {
@@ -1049,6 +1125,7 @@ export class Hud {
         res: b.residentialTax,
         biz: b.businessTax,
         fuel: b.fuelTax,
+        cluster: b.cluster,
         subsidy: b.subsidy,
         fares: b.transitFares,
         air: b.airIncome,
@@ -1062,6 +1139,7 @@ export class Hud {
         airUpkeep: -b.airUpkeep,
         services: -b.servicesUpkeep,
         admin: -b.admin,
+        policy: -b.policy,
         running: -t.running,
         construction: -b.construction,
         net: t.balance,
