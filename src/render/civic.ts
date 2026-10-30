@@ -21,7 +21,7 @@ const STEEL = 0xd5d8da;
 const TYRE = 0x2a2a2e;
 
 /** Roof with its ridge along the longer side, sloping down on all four sides. */
-function hip(k: Kit, u0: number, v0: number, u1: number, v1: number, z: number, h: number, c: number): void {
+export function hip(k: Kit, u0: number, v0: number, u1: number, v1: number, z: number, h: number, c: number): void {
   k.color(c);
   if (u1 - u0 >= v1 - v0) {
     const vm = (v0 + v1) / 2;
@@ -43,7 +43,7 @@ function hip(k: Kit, u0: number, v0: number, u1: number, v1: number, z: number, 
 }
 
 /** A band round the top of a block, leaving its roof showing: a parapet, or a stripe round the walls. */
-function band(k: Kit, u0: number, v0: number, u1: number, v1: number, z0: number, z1: number, c: number, t = 0.3): void {
+export function band(k: Kit, u0: number, v0: number, u1: number, v1: number, z0: number, z1: number, c: number, t = 0.3): void {
   k.box(u0, v0, u1, v0 + t, z0, z1, c);
   k.box(u0, v1 - t, u1, v1, z0, z1, c);
   k.box(u0, v0, u0 + t, v1, z0, z1, c);
@@ -53,7 +53,7 @@ function band(k: Kit, u0: number, v0: number, u1: number, v1: number, z0: number
 const ROOF_SLAB = 0xa9aba7;
 
 /** 榕樹: a short thick trunk under a wide, flat, layered canopy. */
-function banyan(k: Kit, u: number, v: number, s = 1): void {
+export function banyan(k: Kit, u: number, v: number, s = 1): void {
   k.prism(u, v, 0.55 * s, 0.4 * s, 0, 2.6 * s, 0x6b5440, 6);
   k.prism(u, v, 3.2 * s, 4.4 * s, 2.2 * s, 3.6 * s, 0x3f7f3c, 8);
   k.prism(u, v, 4.4 * s, 3.4 * s, 3.6 * s, 5.2 * s, 0x4a8f45, 8, 0.3);
@@ -61,7 +61,7 @@ function banyan(k: Kit, u: number, v: number, s = 1): void {
 }
 
 /** 大王椰子: a tall pale trunk and a burst of fronds. */
-function palm(k: Kit, u: number, v: number, s = 1): void {
+export function palm(k: Kit, u: number, v: number, s = 1): void {
   k.prism(u, v, 0.32 * s, 0.24 * s, 0, 9 * s, 0xc9c2b2, 6);
   k.prism(u, v, 0.42 * s, 0.42 * s, 8.4 * s, 9.6 * s, 0x6f9a4a, 6);
   // Fronds hang down and out from the crown
@@ -69,7 +69,7 @@ function palm(k: Kit, u: number, v: number, s = 1): void {
   k.prism(u, v, 1.6 * s, 0, 10.2 * s, 11.4 * s, 0x5a9e4c, 5, 0.6);
 }
 
-function shrub(k: Kit, u: number, v: number, r = 1): void {
+export function shrub(k: Kit, u: number, v: number, r = 1): void {
   k.prism(u, v, r, r * 0.6, 0, r * 1.2, 0x4f8f45, 6);
 }
 
@@ -556,7 +556,7 @@ export interface SignSpec {
   v: number;
 }
 
-export type SignLabel = 'school' | 'park' | 'police' | 'fire' | 'fireTower' | 'hospital' | 'er' | 'parking' | 'parkingP';
+export type SignLabel = 'school' | 'park' | 'police' | 'fire' | 'fireTower' | 'hospital' | 'er' | 'parking' | 'parkingP' | 'cityHall';
 
 /** Text and colours of each sign; `vertical` signs read top to bottom, Taiwanese style. */
 export const SIGN_LABELS: Record<SignLabel, { text: string; bg: string; fg: string; vertical?: boolean }> = {
@@ -569,6 +569,7 @@ export const SIGN_LABELS: Record<SignLabel, { text: string; bg: string; fg: stri
   er: { text: '急診', bg: '#d0242b', fg: '#ffffff' },
   parking: { text: '公有停車場', bg: '#1f5fae', fg: '#ffffff' },
   parkingP: { text: 'P', bg: '#1f5fae', fg: '#ffffff' },
+  cityHall: { text: '高雄市政府', bg: '#d2c6ab', fg: '#5a3a1a' },
 };
 
 /** Where each service's signs hang, matching the models above. */
@@ -584,6 +585,7 @@ export const SIGNS: Partial<Record<string, SignSpec[]>> = {
     { label: 'hospital', u0: -21.5, u1: -4.5, z0: 38.6, z1: 42.6, v: -1.2 },
     { label: 'er', u0: 13, u1: 19, z0: 5.05, z1: 7.35, v: -14.45 },
   ],
+  cityHall: [{ label: 'cityHall', u0: -7, u1: 7, z0: 9.1, z1: 10.5, v: -13.8 }],
   parking: [
     { label: 'parking', u0: -8, u1: 4, z0: 10.5, z1: 12.7, v: -10.35 },
     { label: 'parkingP', u0: 14.25, u1: 16.75, z0: 6.15, z1: 8.65, v: -14.3 },
