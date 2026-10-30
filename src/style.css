@@ -1305,3 +1305,76 @@ body.road-drawing .mail-pop {
 .budget .note.ok {
   color: #7cc576;
 }
+/* 巨蛋活動 panel */
+.events.panel {
+  width: min(340px, calc(100vw - 16px));
+}
+.ev-meter {
+  display: grid;
+  grid-template-columns: auto 1fr 28px;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin: 4px 0;
+}
+.ev-meter b {
+  text-align: right;
+}
+.ev-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.ev-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+}
+.ev-bar i.good {
+  background: #7cc576;
+}
+.ev-bar i.mid {
+  background: var(--accent);
+}
+.ev-bar i.bad {
+  background: var(--danger);
+}
+.ev-card {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid var(--panel-line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.ev-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.ev-head small,
+.ev-when,
+.ev-expire {
+  color: var(--muted);
+  font-size: 12px;
+}
+.ev-when {
+  margin: 2px 0 4px;
+}
+.ev-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.ev-buttons .menu-btn {
+  flex: 1;
+  min-height: 40px;
+}
+.budget .note.warn,
+.budget .brow.warn span {
+  color: var(--danger);
+}
+.budget b.neg {
+  color: var(--danger);
+}

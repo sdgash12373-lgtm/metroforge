@@ -23,6 +23,7 @@ import {
   parkedCars,
   PORT_BERTH,
   PORT_LAND,
+  dims,
   toWorld,
 } from './facilities';
 import { ntd } from './format';
@@ -32,6 +33,7 @@ import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
 import { type StationPose, stationCovers, stationFront, stationPose, stationSide } from './stations';
 import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, type RoadNode, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
+import { type ArenaAccess, EventBook, type EventSave, type EventStep, FAVOR_START } from './events';
 import {
   CLUSTER_JOBS,
   CLUSTER_MIN_JOBS,
@@ -332,6 +334,8 @@ export interface Budget {
   trade: number;
   /** 產業聚落: the extra business tax science parks in a cluster pay, and the higher pay of the people round them */
   cluster: number;
+  /** 巨蛋活動: what the events of the last month made or lost */
+  events: number;
   /** 營運支出 */
   roadUpkeep: number;
   /** buses, trains and track */
@@ -350,9 +354,9 @@ export interface Budget {
 export function budgetTotals(b: Budget): { income: number; taxes: number; fees: number; other: number; running: number; balance: number } {
   const taxes = b.residentialTax + b.businessTax + b.fuelTax + b.cluster;
   const fees = b.transitFares + b.airIncome + b.parking + b.bikes;
-  const income = taxes + b.subsidy + fees + b.tourism + b.trade;
+  const income = taxes + b.subsidy + fees + b.tourism + b.trade + b.events;
   const running = b.roadUpkeep + b.transitUpkeep + b.airUpkeep + b.servicesUpkeep + b.admin + b.policy;
-  return { income, taxes, fees, other: b.tourism + b.trade, running, balance: income - running - b.construction };
+  return { income, taxes, fees, other: b.tourism + b.trade + b.events, running, balance: income - running - b.construction };
 }
 
 /** How well the city looks after its residents. */
@@ -415,6 +419,8 @@ export interface SaveData extends NetSave {
   /** 市政政策 in force, and yesterday's bus and train boardings (for the review) */
   policies?: PolicyKey[];
   ridersDay?: number;
+  /** 巨蛋活動 */
+  events?: EventSave;
   /** v4: street names (segment id, name) and districts (id, x, y, radius, name, colour) */
   roadNames?: [number, string][];
   districts?: [number, number, number, number, string, number][];
@@ -501,6 +507,7 @@ export class City {
     tourism: 0,
     trade: 0,
     cluster: 0,
+    events: 0,
     roadUpkeep: 0,
     transitUpkeep: 0,
     airUpkeep: 0,
@@ -524,6 +531,12 @@ export class City {
   private ridersSoFar = 0;
   /** what the clusters pay on top of the usual taxes, per step */
   private clusterStep = 0;
+  /** 巨蛋活動: offers, bookings, results and goodwill */
+  events = new EventBook();
+  /** offers made and events started or ended since the HUD last looked */
+  eventNews: Omit<EventStep, 'money' | 'cars'>[] = [];
+  /** fans' cars still to set off for the arena */
+  private fansDue = 0;
   /** rank: index into LEVELS */
   level = 0;
   /** bumped when the rank changes */
@@ -2057,7 +2070,9 @@ export class City {
     for (const k of SERVICE_KINDS) coverage[k] = pop ? reach[k] / pop : 0;
     const hall = [...this.facilities.values()].some((f) => f.kind === 'cityHall') ? 8 : 0;
     const safe = bonus('safety') ? 5 : 0;
-    const happiness = pop ? clamp(Math.round(30 + 65 * (satisfied / pop) + hall + safe), 0, 100) : 50;
+    // 民眾好感度 from the arena's events: a well-run diary pleases, clashes and jams annoy
+    const goodwill = clamp((this.events.publicFavor - FAVOR_START) / 6, -12, 5);
+    const happiness = pop ? clamp(Math.round(30 + 65 * (satisfied / pop) + hall + safe + goodwill), 0, 100) : 50;
     const wants = SERVICE_KINDS.filter((k) => coverage[k] < 0.6).sort((a, b) => coverage[a] - coverage[b]);
     this.needs = { happiness, coverage, wants, tourists: this.needs.tourists, polluted: pop ? smog / pop : 0 };
     // Happy residents bring more; landmarks' visitors bring shops and offices
@@ -2220,6 +2235,18 @@ export class City {
 
     for (const t of this.transits) t.maintain();
     this.spawnTrips(zoned, rng);
+    // 巨蛋活動: offers come in, booked events open their doors, and fans who can't come by train or bus drive in
+    const arena = this.arenaAccess();
+    const ev = this.events.step(
+      { day: this.day, arena: !!arena, happiness: this.needs.happiness, population: this.stats.population, transit: arena?.transit ?? 0 },
+      1 / DAY_STEPS,
+      rng,
+    );
+    if (ev.offered || ev.started || ev.ended) this.eventNews.push({ offered: ev.offered, started: ev.started, ended: ev.ended });
+    if (ev.money) this.money += ev.money;
+    this.fansDue += ev.cars;
+    if (arena && this.fansDue >= 1) this.spawnFans(arena, zoned, rng);
+    else if (!arena) this.fansDue = 0;
     // Trains and high-speed rail also carry people from out of town
     for (const k of RAIL_KINDS) {
       const sys = this.rails[k];
@@ -2299,6 +2326,7 @@ export class City {
       tourism: perMonth(step.tourism),
       trade: perMonth(step.trade),
       cluster: perMonth(step.cluster),
+      events: this.events.recentNet(this.day, MONTH_DAYS),
       roadUpkeep: perMonth(step.roadUpkeep),
       transitUpkeep: perMonth(step.transitUpkeep),
       airUpkeep: perMonth(step.airUpkeep),
@@ -2426,6 +2454,76 @@ export class City {
     }
   }
 
+  /**
+   * The arena events are held at (the first one built), where its fans arrive on the road, and the share
+   * of them who can come without a car: metro, train and high-speed rail stations within 500 m, bus stops
+   * within 300 m and YouBike docks nearby.
+   */
+  arenaAccess(): (ArenaAccess & { at: RoadPoint | null }) | null {
+    let arena: Facility | null = null;
+    for (const f of this.facilities.values()) if (f.kind === 'arena') arena = arena ?? f;
+    if (!arena) return null;
+    const p = arena.p;
+    const modes: string[] = [];
+    let transit = 0;
+    const stopsNear = (t: Transit, reach: number) => {
+      let n = 0;
+      const seen = new Set<number>();
+      for (const line of t.lines.values()) {
+        if (!line.ok) continue;
+        for (const id of line.stops) {
+          const stop = t.stops.get(id);
+          if (stop && !seen.has(id) && dist(stop.p, p) < reach) {
+            seen.add(id);
+            n++;
+          }
+        }
+      }
+      return n;
+    };
+    for (const [k, share] of [
+      ['metro', 0.35],
+      ['train', 0.25],
+      ['hsr', 0.15],
+    ] as const) {
+      if (stopsNear(this.rails[k].transit, 500)) {
+        transit += share;
+        modes.push(this.rails[k].transit.mode.label);
+      }
+    }
+    const buses = stopsNear(this.transit, 300);
+    if (buses) {
+      transit += Math.min(0.24, buses * 0.08);
+      modes.push(`公車 ${buses} 站`);
+    }
+    if ([...this.facilities.values()].some((f) => f.kind === 'youbike' && dist(f.p, p) < 300)) {
+      transit += 0.05;
+      modes.push('YouBike');
+    }
+    const { d } = dims(arena);
+    const front = this.net.segmentAt(toWorld(arena, 0, -d / 2 - FACILITY_ROAD_GAP / 2), FACILITY_ROAD_REACH * 2, 0);
+    const at = front && this.isConnected(front.seg) ? { seg: front.seg.id, s: front.t * front.seg.length } : null;
+    return { p, transit: Math.min(0.85, transit), modes, at };
+  }
+
+  /** Fans' cars heading for the arena from homes round town and from the highway, as room on the roads allows. */
+  private spawnFans(arena: { at: RoadPoint | null }, zoned: Placed[], rng: Rng): void {
+    if (!arena.at) {
+      this.fansDue = 0;
+      return;
+    }
+    const homes = zoned.filter((p) => p.lot.level && ZONES[p.lot.zone as Exclude<Zone, Zone.None>].demand === 'R' && this.isConnected(p.seg));
+    const gate = this.gatePoint(rng);
+    for (let n = Math.min(12, Math.floor(this.fansDue)); n > 0 && this.traffic.vehicles.length < this.maxVehicles; n--) {
+      this.fansDue--;
+      // Half the crowd comes from out of town
+      const from = rng() < 0.5 || !homes.length ? gate : ((h) => ({ seg: h.seg.id, s: h.lot.s }))(homes[Math.floor(rng() * homes.length) % homes.length]);
+      if (from) this.traffic.spawn(from, arena.at, 'car', rng());
+    }
+    // Whoever can't find room on the roads gives up rather than piling up for later
+    this.fansDue = Math.min(this.fansDue, 40);
+  }
+
   /** Where the highway enters the map, as a road point. */
   private gatePoint(rng: Rng): RoadPoint | null {
     const gates = [...this.outside];
@@ -2463,6 +2561,7 @@ export class City {
       parkingFee: this.parkingFee,
       policies: [...this.policies],
       ridersDay: Math.round(this.ridersDay),
+      events: this.events.save(),
       roadNames: [...this.net.segments.values()].filter((s) => s.name).map((s) => [s.id, s.name!]),
       districts: [...this.districts.values()].map((d) => [d.id, round2(d.p.x), round2(d.p.y), Math.round(d.r), d.name, d.color]),
       terrain: this.terrain.name,
@@ -2534,6 +2633,7 @@ export class City {
     if (data.parkingFee !== undefined) city.parkingFee = data.parkingFee;
     for (const k of data.policies ?? []) if (POLICIES[k]) city.policies.add(k);
     city.ridersDay = data.ridersDay ?? 0;
+    if (data.events) city.events.load(data.events);
     for (const [id, name] of data.roadNames ?? []) {
       const seg = city.net.segments.get(id);
       if (seg) seg.name = name;
