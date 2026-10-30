@@ -6,7 +6,9 @@ import { type Vec2, clamp } from './geometry';
  * A keen crowd fills the arena and the city earns venue fees, entertainment tax and visitors' spending;
  * a cold one leaves the city paying more for staging and security than it takes. Fans who cannot reach
  * the arena by train or bus drive, jamming the streets round it. Two bookings that overlap split the
- * crowd and cost the goodwill of residents (民眾好感度) and promoters (廠商好感度).
+ * crowd and cost the goodwill of residents (民眾好感度) and promoters (廠商好感度). Two on the same day one
+ * after the other (同日接檔) both play to a full house, but the first may run late or its crowd may clear out
+ * slowly, holding up the second.
  */
 export type EventKind = 'concert' | 'sports' | 'festival';
 
@@ -17,8 +19,10 @@ export interface EventKindSpec {
   capacity: number;
   /** hours the doors are open */
   hours: number;
-  /** hour of day it starts */
+  /** hour of day it usually starts */
   startHour: number;
+  /** other hours it may start at: afternoon shows let two events share a day */
+  startHours: number[];
   /** staging, security and cleaning the city pays, NT$, from–to */
   cost: [number, number];
   /** what the city takes per head in venue fees and entertainment tax, NT$ */
@@ -35,6 +39,7 @@ export const EVENT_KINDS: Record<EventKind, EventKindSpec> = {
     capacity: 15000,
     hours: 4,
     startHour: 19,
+    startHours: [14, 19, 19.5],
     cost: [1_800_000, 3_400_000],
     take: 260,
     keen: [35, 98],
@@ -46,6 +51,7 @@ export const EVENT_KINDS: Record<EventKind, EventKindSpec> = {
     capacity: 12000,
     hours: 3,
     startHour: 18,
+    startHours: [13, 15, 18, 19.5],
     cost: [800_000, 1_600_000],
     take: 160,
     keen: [25, 90],
@@ -57,6 +63,7 @@ export const EVENT_KINDS: Record<EventKind, EventKindSpec> = {
     capacity: 20000,
     hours: 10,
     startHour: 12,
+    startHours: [11, 12],
     cost: [1_400_000, 2_800_000],
     take: 190,
     keen: [20, 92],
@@ -72,8 +79,10 @@ export const EVENT_VISITORS = 0.5;
 export const FANS_PER_CAR = 2.5;
 /** Goodwill both start at, out of 100. */
 export const FAVOR_START = 70;
-/** Two bookings closer than this many hours count as a clash (set-up and clearing out). */
-export const CLASH_GAP_HOURS = 6;
+/** Two bookings closer than this many hours clash: there is no time to clear the hall and set up again. */
+export const CLASH_GAP_HOURS = 1;
+/** A second booking starting within this many hours of one ending is 同日接檔: both fill up, but the first can hold up the second. */
+export const BACK_TO_BACK_HOURS = 6;
 
 export interface EventOffer {
   id: number;
@@ -97,6 +106,10 @@ export interface Booking extends EventOffer {
   drove?: number;
   /** it overlapped another booking */
   clash?: boolean;
+  /** minutes it started late because the event before it ran over or its crowd was slow to clear */
+  delayed?: number;
+  /** why it was late: the show before ran over, its crowd cleared slowly, or both */
+  delayCause?: 'overrun' | 'crowd' | 'both';
 }
 
 export interface EventResult {
@@ -111,6 +124,8 @@ export interface EventResult {
   /** share of fans who drove, 0..1 */
   drove: number;
   clash: boolean;
+  /** minutes it started late */
+  delayed?: number;
 }
 
 export interface EventSave {
@@ -146,6 +161,33 @@ export function clashes(a: Pick<EventOffer, 'start' | 'hours'>, b: Pick<EventOff
   return a.start < eventEnd(b) + gap && b.start < eventEnd(a) + gap;
 }
 
+type Slot = Pick<EventOffer, 'start' | 'hours'>;
+
+/** Hours between the earlier booking ending and the later one starting, if they are 同日接檔 (back to back), else null. */
+export function backToBack(a: Slot, b: Slot): number | null {
+  if (clashes(a, b)) return null;
+  const [first, second] = a.start <= b.start ? [a, b] : [b, a];
+  const gap = (second.start - eventEnd(first)) * 24;
+  return gap < BACK_TO_BACK_HOURS ? gap : null;
+}
+
+/**
+ * Chances the first of two back-to-back bookings holds up the second: it runs over (an encore, overtime), or its
+ * crowd clears out too slowly. Both grow as the gap shrinks; a slow clear-out grows with a full house that mostly
+ * drove, so good transit at the arena keeps it low.
+ */
+export function delayRisk(gapHours: number, drove: number, full: number): { overrun: number; crowd: number; any: number } {
+  const tight = clamp(1 - (gapHours - CLASH_GAP_HOURS) / (BACK_TO_BACK_HOURS - CLASH_GAP_HOURS), 0, 1);
+  const overrun = 0.08 + 0.32 * tight;
+  const crowd = (0.05 + 0.55 * drove * full) * (0.3 + 0.7 * tight);
+  return { overrun, crowd, any: 1 - (1 - overrun) * (1 - crowd) };
+}
+
+/** A late start loses part of the crowd (refunds, people giving up) and costs overtime for staff and security. */
+export const DELAY_LOSS_PER_MIN = 0.003;
+export const DELAY_COST = 300_000;
+export const DELAY_COST_PER_MIN = 8_000;
+
 /** What the city tells the book each step. */
 export interface EventContext {
   day: number;
@@ -167,6 +209,8 @@ export interface EventStep {
   offered?: EventOffer;
   started?: Booking;
   ended?: EventResult;
+  /** a booking pushed back by the one before it */
+  delayed?: Booking;
 }
 
 /** The arena's diary: offers waiting for an answer, bookings, what past events made, and goodwill. */
@@ -204,11 +248,20 @@ export class EventBook {
         // Doors open: a clash splits the crowd and costs goodwill on both sides
         const clash = this.booked.some((o) => o !== b && clashes(o, b));
         b.clash = clash;
-        b.attendance = Math.round(expectedAttendance(b.capacity, b.keen) * (clash ? 0.55 : 1) * (ctx.arena ? 1 : 0));
+        // Held up by the show before it: some of the crowd gives up or wants its money back
+        const late = b.delayed ?? 0;
+        const kept = late ? 1 - Math.min(0.3, late * DELAY_LOSS_PER_MIN) : 1;
+        b.attendance = Math.round(expectedAttendance(b.capacity, b.keen) * (clash ? 0.55 : 1) * kept * (ctx.arena ? 1 : 0));
         b.drove = 1 - ctx.transit;
         if (clash) {
           this.publicFavor = clamp(this.publicFavor - 8, 0, 100);
           this.vendorFavor = clamp(this.vendorFavor - 10, 0, 100);
+        }
+        if (late) {
+          // Fans kept waiting blame the city; a promoter whose show starts late blames the venue more
+          this.publicFavor = clamp(this.publicFavor - (b.delayCause === 'overrun' ? 3 : 5) - late / 30, 0, 100);
+          this.vendorFavor = clamp(this.vendorFavor - 4 - late / 20, 0, 100);
+          b.cost += DELAY_COST + Math.round(late * DELAY_COST_PER_MIN);
         }
         out.started = b;
         this.version++;
@@ -219,6 +272,22 @@ export class EventBook {
     const done = this.booked.find((b) => b.attendance !== undefined && day >= eventEnd(b));
     if (done) {
       this.booked = this.booked.filter((b) => b !== done);
+      // 同日接檔: the show may have run over, or its crowd be slow to clear, holding up the next one
+      const next = this.booked.find((b) => b.attendance === undefined && backToBack(done, b) !== null);
+      if (next) {
+        const gap = backToBack(done, next)!;
+        const risk = delayRisk(gap, done.drove ?? 1, done.attendance! / done.capacity);
+        const over = rng() < risk.overrun ? 15 + Math.round(rng() * 35) : 0;
+        const slow = rng() < risk.crowd ? 10 + Math.round(rng() * 30 * (0.5 + (done.drove ?? 1))) : 0;
+        const late = over + slow;
+        if (late > 0) {
+          next.delayed = late;
+          next.delayCause = over && slow ? 'both' : over ? 'overrun' : 'crowd';
+          next.start += late / 60 / 24;
+          out.delayed = next;
+          this.version++;
+        }
+      }
       const result: EventResult = {
         id: done.id,
         kind: done.kind,
@@ -228,6 +297,7 @@ export class EventBook {
         net: eventNet(done, done.attendance!),
         drove: done.drove ?? 1,
         clash: !!done.clash,
+        ...(done.delayed ? { delayed: done.delayed } : {}),
       };
       out.money += result.net;
       // A full, smooth night pleases everyone; an empty hall puts promoters off; jams anger residents
@@ -253,9 +323,23 @@ export class EventBook {
     const fresh = spec.names.filter((n) => !taken.has(n));
     const names = fresh.length ? fresh : spec.names;
     const name = names[Math.floor(rng() * names.length) % names.length];
-    // Two to five days out, at the kind's usual hour
-    const date = Math.floor(ctx.day) + 2 + Math.floor(rng() * 4);
-    const start = date + spec.startHour / 24;
+    // Two to five days out, at one of the kind's hours; now and then a promoter asks for a day the arena is
+    // already booked, at an hour that leaves room for both (同日接檔)
+    let date = Math.floor(ctx.day) + 2 + Math.floor(rng() * 4);
+    let hour = spec.startHours[Math.floor(rng() * spec.startHours.length) % spec.startHours.length];
+    const ahead = this.booked.filter((b) => b.start > ctx.day + 1.5);
+    if (ahead.length && rng() < 0.35) {
+      const b = ahead[Math.floor(rng() * ahead.length) % ahead.length];
+      const fits = spec.startHours.filter((h) => {
+        const slot = { start: Math.floor(b.start) + h / 24, hours: spec.hours };
+        return !this.booked.some((o) => clashes(o, slot));
+      });
+      if (fits.length) {
+        date = Math.floor(b.start);
+        hour = fits[Math.floor(rng() * fits.length) % fits.length];
+      }
+    }
+    const start = date + hour / 24;
     // Happy residents and a big city turn out more; promoters who trust the city bring better acts
     const [lo, hi] = spec.keen;
     const keen = clamp(
@@ -281,6 +365,17 @@ export class EventBook {
   clashesWith(id: number): Booking[] {
     const o = this.offers.find((x) => x.id === id);
     return o ? this.booked.filter((b) => clashes(b, o)) : [];
+  }
+
+  /** Bookings an offer or booking would share a day with, back to back, and the hours between them. */
+  backToBackWith(e: Slot & { id: number }): { other: Booking; gap: number; first: boolean }[] {
+    const out: { other: Booking; gap: number; first: boolean }[] = [];
+    for (const b of this.booked) {
+      if (b.id === e.id) continue;
+      const gap = backToBack(b, e);
+      if (gap !== null) out.push({ other: b, gap, first: e.start < b.start });
+    }
+    return out;
   }
 
   /** Takes an offer; it is booked even if it clashes (the player was warned). */

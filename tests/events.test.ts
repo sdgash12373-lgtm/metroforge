@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { City, DAY_STEPS } from '../src/sim/city';
-import { EVENT_KINDS, EventBook, type EventContext, FAVOR_START, eventNet, expectedAttendance } from '../src/sim/events';
+import { EVENT_KINDS, EventBook, type EventContext, FAVOR_START, backToBack, clashes, delayRisk, eventNet, expectedAttendance } from '../src/sim/events';
 import { Zone } from '../src/sim/zoning';
 
 const free = (x: number, y: number) => ({ kind: 'free' as const, p: { x, y } });
@@ -12,8 +12,7 @@ function rng(seed = 3) {
 const ctx = (day: number, extra: Partial<EventContext> = {}): EventContext => ({ day, arena: true, happiness: 60, population: 50000, transit: 0, ...extra });
 
 /** Runs the book from `from` to `to` game days, returning the money it made and the cars it sent. */
-function run(book: EventBook, from: number, to: number, extra: Partial<EventContext> = {}) {
-  const r = rng();
+function run(book: EventBook, from: number, to: number, extra: Partial<EventContext> = {}, r = rng()) {
   let money = 0;
   let cars = 0;
   for (let d = from; d < to; d += 1 / DAY_STEPS) {
@@ -75,6 +74,38 @@ describe('巨蛋活動', () => {
     expect(book.history.find((r) => r.name === 'A')!.attendance).toBeLessThan(expectedAttendance(15000, 85));
     expect(book.publicFavor).toBeLessThan(FAVOR_START);
     expect(book.vendorFavor).toBeLessThan(FAVOR_START);
+  });
+
+  it('同日接檔: two shows on one day both fill up, but the first can hold up the second', () => {
+    const afternoon = { start: 1 + 13 / 24, hours: 3 };
+    const evening = { start: 1 + 19 / 24, hours: 4 };
+    expect(clashes(afternoon, evening)).toBe(false);
+    expect(backToBack(afternoon, evening)).toBeCloseTo(3);
+    expect(backToBack(afternoon, { start: 3, hours: 4 })).toBeNull();
+    // Riskier with a short gap and a crowd that drove
+    expect(delayRisk(1.5, 1, 1).any).toBeGreaterThan(delayRisk(5, 1, 1).any);
+    expect(delayRisk(3, 0.1, 1).any).toBeLessThan(delayRisk(3, 1, 1).any);
+    const play = (roll: number) => {
+      const book = new EventBook();
+      book.offers.push({ id: 1, kind: 'sports', name: 'A', ...afternoon, cost: 1_000_000, capacity: 12000, keen: 85, expires: 1 });
+      book.offers.push({ id: 2, kind: 'concert', name: 'B', ...evening, cost: 2_000_000, capacity: 15000, keen: 85, expires: 1 });
+      book.accept(1);
+      book.accept(2);
+      expect(book.clashesWith(2)).toHaveLength(0);
+      expect(book.backToBackWith(book.booked[1]).map((x) => x.other.name)).toEqual(['A']);
+      run(book, 1, 2.2, {}, () => roll);
+      return book;
+    };
+    const smooth = play(0.99);
+    expect(smooth.history.every((r) => !r.clash && !r.delayed)).toBe(true);
+    expect(smooth.history.find((r) => r.name === 'B')!.attendance).toBe(expectedAttendance(15000, 85));
+    const late = play(0);
+    const b = late.history.find((r) => r.name === 'B')!;
+    expect(b.delayed).toBeGreaterThan(0);
+    expect(b.attendance).toBeLessThan(expectedAttendance(15000, 85));
+    expect(b.net).toBeLessThan(smooth.history.find((r) => r.name === 'B')!.net);
+    expect(late.vendorFavor).toBeLessThan(smooth.vendorFavor);
+    expect(late.publicFavor).toBeLessThan(smooth.publicFavor);
   });
 
   it('declined and lapsed offers go away', () => {

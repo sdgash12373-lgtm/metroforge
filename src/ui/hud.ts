@@ -887,7 +887,12 @@ export class Hud {
           action: { label: '查看', run: () => this.showEvents(true) },
         });
       }
-      if (n.started) this.ticker(`${EVENT_KINDS[n.started.kind].icon} 「${n.started.name}」開始了！${n.started.attendance!.toLocaleString()} 位觀眾湧進巨蛋${n.started.clash ? '（撞期，觀眾分散）' : ''}`);
+      if (n.delayed) {
+        const d = n.delayed;
+        const why = { overrun: '前一場活動延遲結束', crowd: '前一場散場人潮疏散太慢', both: '前一場延遲結束、散場人潮又疏散太慢' }[d.delayCause ?? 'overrun'];
+        this.ticker(`⏰ ${why}，「${d.name}」延後 ${d.delayed} 分鐘開始`);
+      }
+      if (n.started) this.ticker(`${EVENT_KINDS[n.started.kind].icon} 「${n.started.name}」開始了！${n.started.attendance!.toLocaleString()} 位觀眾湧進巨蛋${n.started.clash ? '（撞期，觀眾分散）' : n.started.delayed ? `（延後 ${n.started.delayed} 分鐘，部分觀眾退票離場）` : ''}`);
       if (n.ended) {
         const r = n.ended;
         this.ticker(`${EVENT_KINDS[r.kind].icon} 「${r.name}」落幕：${r.attendance.toLocaleString()} 人入場，市庫${r.net >= 0 ? '進帳' : '虧損'} NT$${ntdShort(Math.abs(r.net))}`);
