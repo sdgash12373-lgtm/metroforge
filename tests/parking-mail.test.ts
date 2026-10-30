@@ -86,3 +86,15 @@ describe('YouBike', () => {
     expect(city.budget.bikes).toBeGreaterThan(0);
   });
 });
+
+describe('港口 on a slanting coast', () => {
+  it('can be built where the Pingtung shore runs at an angle to the street', async () => {
+    const { TERRAINS } = await import('../src/sim/terrain');
+    const city = new City(TERRAINS.kaohsiung);
+    city.regions = new Set(['kaohsiung', 'pingtung']);
+    city.money = 1e9;
+    city.buildRoad(free(474, 2020), null, free(474, 2620), true);
+    const spot = city.facilitySpot('cargoPort', { x: 449, y: 2420 });
+    expect(city.facilityProblem('cargoPort', spot.p, spot.angle)).toBeNull();
+  });
+});
