@@ -547,128 +547,303 @@ export function parking(k: Kit, w: number, d: number): void {
 
 /** One lettered sign: its label and where it hangs on the -v face (or a ±u face) of a facility. */
 /**
- * 大學: a gate between red-brick pillars opening onto a 椰林大道 of royal palms that runs up to the
- * library, red-brick lecture halls with arched windows and tiled roofs on the left, a track and field on
- * the right with dorms behind it.
+ * 大學, gathering what Taiwan's campuses are loved for: a low name wall and gate opening onto a
+ * 椰林大道 of royal palms over beds of pink azaleas, a 傅鐘-style bell pavilion, tan-tiled
+ * 帝大-era halls with long arched arcades and dark tiled hip roofs, a library closing the avenue with
+ * a colonnaded front and a central tower, a lake with an island pavilion and a red bridge under
+ * willows, a 榕園 lawn round a great banyan, a track, a glass research block and bicycles everywhere.
  */
+/** A tall slim royal palm for the 椰林大道: a pale ringed trunk, a green crown shaft and a tight head of fronds. */
+function royalPalm(k: Kit, u: number, v: number, h: number): void {
+  k.prism(u, v, 0.38, 0.26, 0, h, 0xd7d0c0, 7);
+  k.prism(u, v, 0.42, 0.42, h * 0.45, h * 0.47, 0xb9b2a2, 7);
+  k.prism(u, v, 0.3, 0.3, h, h + 1.6, 0x6f9a4a, 6);
+  k.prism(u, v, 2.6, 0.4, h + 0.6, h + 2.4, 0x4f8f45, 7, u + v);
+  k.prism(u, v, 1.3, 0, h + 2.2, h + 3.4, 0x5aa04c, 6, u - v);
+}
+
 export function university(k: Kit, w: number, d: number): void {
-  const RED = 0xa8442f;
-  const RED_DARK = 0x8a3524;
-  const ARCH = 0xe8dcc2;
-  const TILE_ROOF = 0x7c4a3a;
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.08, 0x8fbf6a);
-  // 椰林大道: paved avenue from the gate to the library, a royal palm every 8 m each side
-  k.rect(-5, -45, 5, 18, 0.12, 0xd9cfbf);
-  k.rect(-5, -45, -4.4, 18, 0.14, 0xb5523b);
-  k.rect(4.4, -45, 5, 18, 0.14, 0xb5523b);
-  for (let v = -38; v <= 12; v += 8) {
-    palm(k, -7.5, v, 1.15);
-    palm(k, 7.5, v, 1.15);
+  const TAN = 0xd4b27e;
+  const TAN_DARK = 0xa98552;
+  const IVORY = 0xefe6d2;
+  const SHADE = 0x4a3f36;
+  const SLATE = 0x56524c;
+  const RED_TILE = 0x8f4535;
+  const LAWN = 0x8cc068;
+  const PATH = 0xddd2bf;
+  const AZALEA = 0xf08cb4;
+  const WATER = 0x4d8fae;
+  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.08, LAWN);
+
+  /** An arcade on a face at u = uf, facing `dir` (±1 along u), from v0 to v1: piers, arches stepped round, shade behind. */
+  const arcadeU = (uf: number, dir: number, v0: number, v1: number, z0: number, h: number, bay: number, c: number) => {
+    const t = 0.5;
+    const back = uf - dir * 2.4;
+    k.box(Math.min(uf, back), v0, Math.max(uf, back), v1, z0, z0 + 0.1, PATH);
+    k.box(Math.min(back, back - dir * 0.1), v0, Math.max(back, back - dir * 0.1), v1, z0, z0 + h, SHADE);
+    const a = Math.min(uf, uf - dir * t);
+    const b = Math.max(uf, uf - dir * t);
+    for (let v = v0; v <= v1 + 0.01; v += bay) k.box(a, v - 0.35, b, v + 0.35, z0, z0 + h, c);
+    for (let v = v0; v + bay <= v1 + 0.01; v += bay) {
+      const w2 = bay - 0.7;
+      // Arch: spandrels stepping in towards the crown
+      k.box(a, v + 0.35, b, v + bay - 0.35, z0 + h * 0.82, z0 + h, c);
+      k.box(a, v + 0.35, b, v + 0.35 + w2 * 0.18, z0 + h * 0.66, z0 + h * 0.82, c);
+      k.box(a, v + bay - 0.35 - w2 * 0.18, b, v + bay - 0.35, z0 + h * 0.66, z0 + h * 0.82, c);
+      k.box(a, v + 0.35, b, v + 0.35 + w2 * 0.06, z0 + h * 0.56, z0 + h * 0.66, c);
+      k.box(a, v + bay - 0.35 - w2 * 0.06, b, v + bay - 0.35, z0 + h * 0.56, z0 + h * 0.66, c);
+    }
+    k.box(a - 0.1, v0 - 0.4, b + 0.1, v1 + 0.4, z0 + h, z0 + h + 0.35, IVORY);
+  };
+  /** Tall arched windows on a face at u = uf (dir ±1 outwards). */
+  const archWinU = (uf: number, dir: number, v0: number, v1: number, z: number, h: number, bay: number) => {
+    const a = dir > 0 ? uf : uf - 0.12;
+    for (let v = v0; v + bay * 0.6 <= v1; v += bay) {
+      k.box(a, v, a + 0.12, v + bay * 0.5, z, z + h, GLASS);
+      k.box(a - 0.02, v - 0.15, a + 0.14, v + bay * 0.5 + 0.15, z + h, z + h + 0.4, IVORY);
+    }
+  };
+  const archWinV = (vf: number, u0: number, u1: number, z: number, h: number, bay: number) => {
+    for (let u = u0; u + bay * 0.6 <= u1; u += bay) {
+      k.box(u, vf - 0.12, u + bay * 0.5, vf, z, z + h, GLASS);
+      k.box(u - 0.15, vf - 0.14, u + bay * 0.5 + 0.15, vf + 0.02, z + h, z + h + 0.4, IVORY);
+    }
+  };
+
+  // Gate: a low tan wall with the name, square gate piers with lamps, and the guard booth
+  k.rect(-7, -45, 7, -38, 0.1, PATH);
+  for (const u of [-9, 7]) {
+    k.box(u, -45, u + 2, -43, 0, 3.6, TAN_DARK);
+    k.box(u - 0.25, -45.25, u + 2.25, -42.75, 3.6, 4, IVORY);
+    k.prism(u + 1, -44, 0.45, 0.3, 4, 4.9, 0xf6e9b8, 8);
   }
-  // Paths across the lawns
-  k.rect(-56, -2, -5, 1, 0.12, 0xd9cfbf);
-  k.rect(5, 10, 56, 13, 0.12, 0xd9cfbf);
-  // Gate: two red-brick pillars with lamps, a lintel, and a low brick name wall to the left
-  for (const u of [-8, 6]) {
-    k.box(u, -45, u + 2, -43, 0, 5.2, RED);
-    k.box(u - 0.2, -45.2, u + 2.2, -42.8, 5.2, 5.6, ARCH);
-    k.prism(u + 1, -44, 0.35, 0.35, 5.6, 6.4, 0xf4e7b0, 6);
-  }
-  k.box(-8, -44.8, 8, -43.2, 5.6, 6.3, RED_DARK);
-  k.box(-30, -44.6, -11, -43.4, 0, 2.6, RED);
-  k.box(-30.2, -44.8, -10.8, -43.2, 2.6, 2.9, ARCH);
-  // Fence along the street either side of the gate
+  k.box(-30, -44.8, -11, -43.2, 0, 2.7, TAN);
+  k.box(-30.2, -45, -10.8, -43, 2.7, 3, IVORY);
+  k.box(11, -44.8, 26, -43.2, 0, 1.2, TAN);
+  for (let u = 11; u <= 26; u += 1.5) k.box(u, -44.1, u + 0.1, -43.9, 1.2, 2.4, 0x2f2f2f);
+  k.box(-30, -44.8, -60, -44.4, 0, 0.8, TAN);
+  k.box(26, -44.8, 60, -44.4, 0, 0.8, TAN);
   for (const [u0, u1] of [
     [-60, -30],
-    [8, 60],
+    [26, 60],
   ] as const) {
-    k.box(u0, -45, u1, -44.6, 0, 0.7, RED);
-    for (let u = u0; u <= u1; u += 2.5) k.box(u, -44.9, u + 0.12, -44.7, 0.7, 1.8, 0x3a3a3a);
-    k.box(u0, -44.9, u1, -44.7, 1.7, 1.8, 0x3a3a3a);
+    for (let u = u0; u <= u1; u += 2) k.box(u, -44.7, u + 0.1, -44.5, 0.8, 1.9, 0x2f2f2f);
+    k.box(u0, -44.7, u1, -44.5, 1.8, 1.9, 0x2f2f2f);
   }
-  // Library at the head of the avenue: four floors of red brick, a pale arcade along the front and a tiled hip roof
-  const fh = 4;
-  k.box(-24, 20, 24, 40, 0, fh * 4, RED);
-  k.box(-24.1, 19.9, 24.1, 40.1, 0, 1, 0x8d8a85);
-  for (let u = -22; u <= 20; u += 4) {
-    k.box(u, 18.6, u + 1, 20, 0, fh * 1.5, ARCH);
-    k.box(u + 1, 19.4, u + 4, 20, fh * 1.2, fh * 1.5, ARCH);
-  }
-  k.box(-24, 18.6, 24, 20, fh * 1.5, fh * 1.5 + 0.6, ARCH);
-  for (let f = 1; f < 4; f++) {
-    for (let u = -22; u < 22; u += 4) {
-      k.box(u + 0.8, 19.88, u + 3.2, 20, f * fh + 0.8, f * fh + 2.8, GLASS);
-      k.prism(u + 2, 19.95, 1.2, 1.2, f * fh + 2.8, f * fh + 3.3, ARCH, 6);
+
+  // 椰林大道: a wide avenue to the library, palms in pairs either side over azalea beds, bicycles along the kerb
+  k.rect(-6, -43, 6, 18, 0.12, PATH);
+  k.rect(-0.25, -43, 0.25, 18, 0.13, 0xc9bda6);
+  for (const s of [-1, 1]) {
+    k.rect(s * 6, -42, s * 11, 14, 0.11, 0x7cb35a);
+    for (let v = -40; v <= 12; v += 5) {
+      royalPalm(k, s * 7.4, v, 13);
+      royalPalm(k, s * 10, v + 2.5, 11.5);
     }
-  }
-  // Entrance block stands proud with a pediment
-  k.box(-7, 16, 7, 20, 0, fh * 4 + 2, ARCH);
-  for (const u of [-6, -2.5, 1.5, 5]) k.prism(u + 0.5, 15.6, 0.5, 0.5, 0, fh * 2.5, 0xf2ece0, 8);
-  k.box(-3, 15.9, 3, 16, 0, 5, 0x5a4636);
-  k.box(-7.4, 15.4, 7.4, 20, fh * 2.5, fh * 2.5 + 0.8, ARCH);
-  hip(k, -25, 19, 25, 41, fh * 4, 4.5, TILE_ROOF);
-  hip(k, -7.6, 15.2, 7.6, 20.5, fh * 4 + 2, 3, TILE_ROOF);
-  // Lecture halls on the left: two long brick blocks with arched windows and tiled roofs
-  const hall = (v0: number, v1: number) => {
-    const floors = 3;
-    k.box(-56, v0, -16, v1, 0, fh * floors, RED);
-    band(k, -56, v0, -16, v1, 0, 1, 0x8d8a85, 0.12);
-    for (let f = 0; f < floors; f++) {
-      for (let u = -54; u < -18; u += 4) {
-        for (const [vf, dv] of [
-          [v0, -0.12],
-          [v1, 0.12],
-        ] as const) {
-          const a = Math.min(vf, vf + dv);
-          k.box(u + 0.9, a, u + 3.1, a + 0.12, f * fh + 1, f * fh + 2.9, GLASS);
-          k.box(u + 0.7, a - (dv < 0 ? 0.1 : -0.1), u + 3.3, a + 0.12 + (dv < 0 ? 0 : 0.1), f * fh + 2.9, f * fh + 3.3, ARCH);
-        }
+    for (let v = -41; v < 14; v += 2.2) {
+      k.prism(s * 8.8, v, 0.9, 0.6, 0.1, 0.9, AZALEA, 6, v);
+      k.prism(s * 8.8 + 0.5, v + 1, 0.5, 0.3, 0.6, 1.1, 0xf6b6d0, 5);
+    }
+    // Bicycles parked in short rows outside the halls
+    for (const v0 of [-28, -6, 4]) {
+      for (let i = 0; i < 7; i++) {
+        const v = v0 + i * 0.8;
+        k.box(s * 5.6 - 0.8, v, s * 5.6 + 0.8, v + 0.08, 0.35, 0.95, [0x2f2f2f, 0x3f6fae, 0x2f2f2f, 0xc8c8c8][i % 4]);
+        k.prism(s * 5.6 - 0.55, v + 0.04, 0.35, 0.35, 0.05, 0.4, 0x222222, 6);
+        k.prism(s * 5.6 + 0.55, v + 0.04, 0.35, 0.35, 0.05, 0.4, 0x222222, 6);
       }
-      k.box(-56.1, v0, -15.9, v1, f * fh + fh - 0.3, f * fh + fh, ARCH);
     }
-    // Arched porch in the middle of the avenue side
-    k.box(-16, (v0 + v1) / 2 - 3, -14.5, (v0 + v1) / 2 + 3, 0, fh * 1.2, ARCH);
-    hip(k, -57, v0 - 1, -15, v1 + 1, fh * floors, 3.4, TILE_ROOF);
-  };
-  hall(-34, -22);
-  hall(-14, -4);
-  hall(5, 14);
-  // Track and field on the right, with stands along the avenue side
-  const pu = 0xc8664a;
-  const cv = -16;
-  k.prism(22, cv, 12, 12, 0.1, 0.16, pu, 18);
-  k.prism(44, cv, 12, 12, 0.1, 0.16, pu, 18);
-  k.rect(22, cv - 12, 44, cv + 12, 0.16, pu);
-  k.prism(22, cv, 8.6, 8.6, 0.1, 0.2, 0x6fb556, 18);
-  k.prism(44, cv, 8.6, 8.6, 0.1, 0.2, 0x6fb556, 18);
-  k.rect(22, cv - 8.6, 44, cv + 8.6, 0.2, 0x6fb556);
-  k.rect(32.9, cv - 8.6, 33.1, cv + 8.6, 0.22, 0xf2f2f2);
-  for (const u of [14.4, 51.6]) k.box(u - 0.1, cv - 3, u + 0.1, cv + 3, 0.2, 2.4, 0xf2f2f2);
-  for (let i = 0; i < 4; i++) k.box(26 + 0, cv - 16 - i * 0.9, 40, cv - 15 - i * 0.9, 0, 0.6 + i * 0.6, 0xc9c6bf);
-  k.box(26, cv - 19.6, 40, cv - 19.2, 2.4, 5, 0xc9c6bf);
-  k.box(25.5, cv - 19.8, 40.5, cv - 15, 5, 5.3, 0x2f6fb8);
-  // Dorms behind the field: cream tiled blocks with balconies
-  for (const u0 of [18, 38]) {
-    k.box(u0, 18, u0 + 16, 40, 0, 3.2 * 7, CREAM);
-    for (let f = 1; f < 7; f++) k.box(u0, 17, u0 + 16, 18, f * 3.2, f * 3.2 + 1.1, WHITE);
-    windows(k, u0 + 1, u0 + 15, 18, 0, 7, 3.2, 2.5);
-    band(k, u0, 18, u0 + 16, 40, 3.2 * 7, 3.2 * 7 + 1, WHITE);
-    k.rect(u0, 18, u0 + 16, 40, 3.2 * 7 + 0.05, ROOF_SLAB);
-    k.prism(u0 + 4, 30, 1.2, 1.2, 3.2 * 7, 3.2 * 7 + 2, 0xd5d8da, 8);
   }
-  // Bicycles parked by the halls, banyans and shrubs on the lawns
-  for (let v = -40; v < -36; v += 0.8) k.box(-14, v, -12, v + 0.15, 0, 0.9, 0x3a3a3a);
+
+  // 傅鐘-style bell pavilion on a stepped base beside the avenue
+  const bu = -15;
+  const bv = -36;
+  k.box(bu - 3, bv - 3, bu + 3, bv + 3, 0, 0.4, 0xb9b0a0);
+  k.box(bu - 2.4, bv - 2.4, bu + 2.4, bv + 2.4, 0.4, 0.8, 0xc9c0b0);
+  for (const [du, dv] of [
+    [-1.8, -1.8],
+    [1.8, -1.8],
+    [-1.8, 1.8],
+    [1.8, 1.8],
+  ] as const) {
+    k.box(bu + du - 0.3, bv + dv - 0.3, bu + du + 0.3, bv + dv + 0.3, 0.8, 5.2, IVORY);
+  }
+  k.box(bu - 2.4, bv - 2.4, bu + 2.4, bv + 2.4, 5.2, 5.8, IVORY);
+  k.prism(bu, bv, 0.9, 0.6, 3.2, 4.6, 0x3d5a4a, 10);
+  k.prism(bu, bv, 0.15, 0.15, 4.6, 5.2, 0x3d5a4a, 4);
+  hip(k, bu - 2.9, bv - 2.9, bu + 2.9, bv + 2.9, 5.8, 1.6, SLATE);
+
+  // 帝大-era halls along the avenue: tan tile, two floors over a ground-floor arcade, a stepped entrance bay and dark hip roofs
+  const hall = (side: number, v0: number, v1: number) => {
+    const inner = side * 14;
+    const outer = side * 42;
+    const ua = Math.min(inner, outer);
+    const ub = Math.max(inner, outer);
+    const fh = 4.2;
+    const top = fh * 3;
+    k.box(ua, v0, ub, v1, 0, top, TAN);
+    k.box(ua - 0.05, v0 - 0.05, ub + 0.05, v1 + 0.05, 0, 0.8, TAN_DARK);
+    for (let f = 1; f <= 3; f++) k.box(ua - 0.08, v0 - 0.08, ub + 0.08, v1 + 0.08, f * fh - 0.25, f * fh, IVORY);
+    // The avenue face: an arcade on the ground floor, arched windows above
+    arcadeU(inner, -side, v0 + 1, v1 - 1, 0, fh, 3, TAN);
+    archWinU(inner - side * 2.5, -side, v0 + 1.6, v1 - 1, fh + 0.7, 2.6, 3);
+    archWinU(inner - side * 2.5, -side, v0 + 1.6, v1 - 1, fh * 2 + 0.7, 2.6, 3);
+    for (const vf of [v0, v1]) {
+      const sgn = vf === v0 ? -1 : 1;
+      for (let f = 0; f < 3; f++) {
+        for (let u = ua + 1.5; u < ub - 2; u += 3) k.box(u, sgn < 0 ? vf - 0.12 : vf, u + 1.5, sgn < 0 ? vf : vf + 0.12, f * fh + 1.2, f * fh + 3.2, GLASS);
+      }
+    }
+    // Entrance bay standing proud with a gable-like crown
+    const vm = (v0 + v1) / 2;
+    const ea = side < 0 ? inner - 0.5 : inner - 1.5;
+    k.box(ea, vm - 3.5, ea + 2, vm + 3.5, 0, top + 2.2, IVORY);
+    k.box(ea - 0.1, vm - 1.4, ea + 2.1, vm + 1.4, 0, 3.4, SHADE);
+    k.box(ea - 0.15, vm - 3.7, ea + 2.15, vm + 3.7, top + 2.2, top + 2.6, TAN_DARK);
+    hip(k, ea - 0.4, vm - 4, ea + 2.4, vm + 4, top + 2.6, 2, SLATE);
+    hip(k, ua - 0.8, v0 - 0.8, ub + 0.8, v1 + 0.8, top, 3.6, SLATE);
+  };
+  hall(-1, -34, -15);
+  hall(-1, -8, 12);
+  hall(1, -34, -15);
+
+  // Library closing the avenue: tan with ivory columns, a central tower and red tiled roofs
+  {
+    const fh = 4.5;
+    const v0 = 22;
+    const v1 = 42;
+    k.rect(-26, 17, 26, 22, 0.12, PATH);
+    k.box(-26, v0, 26, v1, 0, fh * 3, TAN);
+    k.box(-26.05, v0 - 0.05, 26.05, v1 + 0.05, 0, 0.9, TAN_DARK);
+    for (let f = 1; f <= 3; f++) k.box(-26.1, v0 - 0.1, 26.1, v1 + 0.1, f * fh - 0.25, f * fh, IVORY);
+    archWinV(v0, -24, -9, 1.2, 2.8, 2.6);
+    archWinV(v0, 9.5, 25, 1.2, 2.8, 2.6);
+    archWinV(v0, -24, -9, fh + 1, 2.8, 2.6);
+    archWinV(v0, 9.5, 25, fh + 1, 2.8, 2.6);
+    archWinV(v0, -24, -9, fh * 2 + 1, 2.8, 2.6);
+    archWinV(v0, 9.5, 25, fh * 2 + 1, 2.8, 2.6);
+    // Colonnaded front: six ivory columns before a recessed glass hall, steps and a pediment
+    k.box(-9, 18.5, 9, v0, 0, 0.6, 0xc9c0b0);
+    k.box(-8, 17.6, 8, 18.5, 0, 0.3, 0xc9c0b0);
+    k.box(-8, v0 - 0.2, 8, v0, 0.6, fh * 2, 0x6f8fa3);
+    for (let i = 0; i < 6; i++) k.prism(-7.5 + i * 3, 19.4, 0.55, 0.5, 0.6, fh * 2, IVORY, 10);
+    k.box(-9, 18.4, 9, v0, fh * 2, fh * 2 + 1, IVORY);
+    k.quad([-9, 18.4, fh * 2 + 1], [9, 18.4, fh * 2 + 1], [0, 18.4, fh * 2 + 3.2], [0, 18.4, fh * 2 + 3.2]);
+    k.box(-9, 18.4, 9, v0, fh * 2 + 1, fh * 3, TAN);
+    // Central tower with a clock and a pyramid roof
+    k.box(-4.5, 24, 4.5, 33, 0, fh * 3 + 9, TAN);
+    for (let z = fh * 3; z < fh * 3 + 8; z += 2.6) k.box(-2, 23.88, 2, 24, z + 0.4, z + 2, GLASS);
+    k.prism(0, 23.9, 1.6, 1.6, fh * 3 + 6, fh * 3 + 6.1, IVORY, 16);
+    k.box(-4.8, 23.7, 4.8, 33.3, fh * 3 + 9, fh * 3 + 9.6, IVORY);
+    k.prism(0, 28.5, 6.4, 0, fh * 3 + 9.6, fh * 3 + 13.6, RED_TILE, 4, Math.PI / 4);
+    hip(k, -27, v0 - 1, 27, v1 + 1, fh * 3, 4, RED_TILE);
+  }
+
+  // Lake with an island pavilion, a red arched bridge and willows on the right
+  {
+    const lu = 34;
+    const lv = 2;
+    for (const [du, dv, r] of [
+      [0, 0, 10],
+      [9, 3, 8],
+      [-7, 5, 6.5],
+      [6, -6, 6.5],
+      [15, -2, 5],
+    ] as const) {
+      k.prism(lu + du, lv + dv, r + 0.9, r + 0.9, 0.08, 0.13, 0xb9b0a0, 16);
+      k.prism(lu + du, lv + dv, r, r, 0.08, 0.16, WATER, 16);
+    }
+    // Island pavilion (湖心亭): hexagonal, red columns, curved dark roof
+    k.prism(lu + 2, lv, 2.8, 2.8, 0.16, 0.6, 0xb9b0a0, 6);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      k.prism(lu + 2 + Math.cos(a) * 2, lv + Math.sin(a) * 2, 0.15, 0.15, 0.6, 3.4, 0xb8312a, 5);
+    }
+    k.prism(lu + 2, lv, 3.4, 2.4, 3.4, 3.8, SLATE, 6);
+    k.prism(lu + 2, lv, 2.4, 0, 3.8, 5.4, SLATE, 6);
+    k.prism(lu + 2, lv, 0.2, 0, 5.4, 6.2, 0xd4a93a, 6);
+    // Red bridge from the near shore to the pavilion, humped in the middle
+    const bv0 = lv - 2.6;
+    for (let i = 0; i < 6; i++) {
+      const z = 0.3 + Math.sin(((i + 0.5) / 6) * Math.PI) * 0.9;
+      const u0 = lu + 2 - 0.9;
+      const v = bv0 - 9 + i * 1.5;
+      k.box(u0, v, u0 + 1.8, v + 1.5, z, z + 0.2, 0xb8312a);
+      k.box(u0, v, u0 + 0.12, v + 1.5, z + 0.2, z + 0.9, 0xb8312a);
+      k.box(u0 + 1.68, v, u0 + 1.8, v + 1.5, z + 0.2, z + 0.9, 0xb8312a);
+    }
+    // Willows round the shore
+    for (const [du, dv] of [
+      [-14, -4],
+      [-10, 10],
+      [4, 12],
+      [18, 8],
+      [22, -6],
+      [-6, -10],
+    ] as const) {
+      k.prism(lu + du, lv + dv, 0.3, 0.25, 0, 3.6, 0x6b5440, 5);
+      k.prism(lu + du, lv + dv, 1.2, 2.8, 2, 5.6, 0x8fbf5a, 7);
+      k.prism(lu + du, lv + dv, 2.8, 1.2, 5.6, 6.6, 0x9ccb64, 7);
+    }
+  }
+
+  // 榕園: a round lawn with one great banyan, ringed by a path and benches
+  k.prism(-52, -32, 9, 9, 0.08, 0.11, PATH, 20);
+  k.prism(-52, -32, 7.8, 7.8, 0.08, 0.14, 0x7fb860, 20);
+  banyan(k, -52, -32, 1.9);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    k.box(-52 + Math.cos(a) * 8.3 - 0.6, -32 + Math.sin(a) * 8.3 - 0.2, -52 + Math.cos(a) * 8.3 + 0.6, -32 + Math.sin(a) * 8.3 + 0.2, 0, 0.45, 0x8a6a4a);
+  }
+
+  // Track and field at the back left, with a small stand
+  {
+    const pu = 0xc8664a;
+    const cu = -44;
+    const cv = 30;
+    k.prism(cu - 6, cv, 9, 9, 0.1, 0.16, pu, 16);
+    k.prism(cu + 6, cv, 9, 9, 0.1, 0.16, pu, 16);
+    k.rect(cu - 6, cv - 9, cu + 6, cv + 9, 0.16, pu);
+    k.prism(cu - 6, cv, 6.4, 6.4, 0.1, 0.2, 0x6fb556, 16);
+    k.prism(cu + 6, cv, 6.4, 6.4, 0.1, 0.2, 0x6fb556, 16);
+    k.rect(cu - 6, cv - 6.4, cu + 6, cv + 6.4, 0.2, 0x6fb556);
+    k.rect(cu - 0.1, cv - 6.4, cu + 0.1, cv + 6.4, 0.22, 0xf2f2f2);
+    for (let i = 0; i < 3; i++) k.box(cu - 8, cv - 10 - i * 0.8, cu + 8, cv - 9.2 - i * 0.8, 0, 0.5 + i * 0.5, 0xc9c6bf);
+    k.box(cu - 8.4, cv - 12.6, cu + 8.4, cv - 9, 3, 3.25, 0x2f6fb8);
+    for (const u of [cu - 8, cu + 8]) k.box(u - 0.1, cv - 12.4, u + 0.1, cv - 12.2, 0, 3, STEEL);
+  }
+
+  // Glass research block on a tan base at the back right
+  {
+    const u0 = 34;
+    const u1 = 58;
+    const v0 = 20;
+    const v1 = 42;
+    k.box(u0, v0, u1, v1, 0, 4.4, TAN);
+    k.box(u0 + 1, v0 + 1, u1 - 1, v1 - 1, 4.4, 26, 0x6f98b3);
+    for (let z = 4.4; z < 26; z += 3.6) k.box(u0 + 0.9, v0 + 0.9, u1 - 0.9, v1 - 0.9, z, z + 0.35, 0xdfe6ea);
+    for (let u = u0 + 1; u <= u1 - 1; u += 3) k.box(u - 0.12, v0 + 0.85, u + 0.12, v0 + 1, 4.4, 26, 0xdfe6ea);
+    band(k, u0 + 1, v0 + 1, u1 - 1, v1 - 1, 26, 27, 0xdfe6ea, 0.3);
+    k.rect(u0 + 1, v0 + 1, u1 - 1, v1 - 1, 26.05, ROOF_SLAB);
+    k.rect(u0 + 3, v0 + 3, u0 + 12, v0 + 10, 26.1, 0x7cb35a);
+  }
+
+  // Paths, more trees and bicycle racks between the buildings
+  k.rect(-56, -12, -14, -10, 0.12, PATH);
+  k.rect(11, -12, 24, -10, 0.12, PATH);
+  k.rect(-30, 14, -11, 17, 0.12, PATH);
   for (const [u, v, s] of [
-    [-50, -40, 1],
-    [-36, -40, 0.85],
-    [-50, 22, 0.9],
-    [-36, 32, 1],
-    [56, -40, 0.8],
-    [14, 30, 0.7],
+    [-50, -4, 0.8],
+    [-52, 8, 0.9],
+    [-28, -41, 0.6],
+    [50, -36, 0.9],
+    [54, -22, 0.7],
+    [-14, 18, 0.6],
+    [14, 16, 0.6],
   ] as const) {
     banyan(k, u, v, s);
   }
-  for (let u = -28; u < -12; u += 2.5) shrub(k, u, -42, 0.7);
+  for (let v = -40; v < -36; v += 0.7) k.box(46, v, 48.2, v + 0.12, 0, 0.9, 0x2f2f2f);
 }
 
 export interface SignSpec {
@@ -711,7 +886,7 @@ export const SIGNS: Partial<Record<string, SignSpec[]>> = {
     { label: 'hospital', u0: -21.5, u1: -4.5, z0: 38.6, z1: 42.6, v: -1.2 },
     { label: 'er', u0: 13, u1: 19, z0: 5.05, z1: 7.35, v: -14.45 },
   ],
-  university: [{ label: 'university', u0: -26, u1: -15, z0: 0.5, z1: 2.4, v: -44.65 }],
+  university: [{ label: 'university', u0: -27, u1: -14, z0: 0.6, z1: 2.4, v: -44.85 }],
   cityHall: [{ label: 'cityHall', u0: -4.5, u1: 4.5, z0: 9.1, z1: 10.5, v: -13.8 }],
   parking: [
     { label: 'parking', u0: -8, u1: 4, z0: 10.5, z1: 12.7, v: -10.35 },

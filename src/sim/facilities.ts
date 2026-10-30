@@ -102,7 +102,7 @@ export const FACILITIES: Record<FacilityKind, FacilitySpec> = {
     serves: 'school',
     unlock: 'university',
     color: 0x9c2f2f,
-    blurb: '紅磚校舍、椰林大道和操場的大學，附近算有學校；開啟「產業創新計畫」後，旁邊有科學園區與交流道就會形成產業聚落',
+    blurb: '椰林大道、拱廊老館、總圖書館和湖心亭的大學，附近算有學校；開啟「產業創新計畫」後，旁邊有科學園區與交流道就會形成產業聚落',
   },
   parking: { label: '停車場', cost: 600_000, upkeep: 400, w: 40, d: 30, radius: PARKING_REACH, color: 0x2f6fb8, blurb: '公有立體停車場，收停車費增加市庫收入；附近商業、辦公和觀光客越多越常停滿' },
   footbridge: { label: '天橋', cost: 8000, upkeep: 20, w: 5, d: 30, radius: 160, unlock: 'footbridge', color: 0xd9d4c7, blurb: '跨過大馬路的行人天橋，讓附近更好走' },
