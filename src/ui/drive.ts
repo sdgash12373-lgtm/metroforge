@@ -3,6 +3,7 @@ import type { City } from '../sim/city';
 import type { RoadSegment } from '../sim/roads';
 import type { Dir, LaneRef, Vehicle } from '../sim/traffic';
 import type { World } from '../render/world';
+import { ClipRecorder, saveClip } from './recorder';
 
 /** Which way to go at the next junction. */
 type Turn = 'left' | 'straight' | 'right';
@@ -38,6 +39,8 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
  * 空拍機 (F) leaves the car parked and flies a free camera anywhere, through buildings and the ground: W/S or
  * the stick fly forward and back where it looks, A/D sideways, E/Q or ▲▼ up and down, Shift faster, and a drag
  * (or the arrow keys) turns it.
+ *
+ * 錄影 (R) records the view, without the buttons, from either the car or the drone.
  */
 export class DriveMode {
   active = false;
@@ -66,6 +69,12 @@ export class DriveMode {
   private readonly uturnBtn = el('button', 'chip', '↩ 迴轉');
   private readonly hintEl = el('p', 'drive-hint');
   private readonly liftPad = el('div', 'drone-lift');
+  private readonly recorder: ClipRecorder;
+  private readonly recBtn = el('button', 'chip rec', '⏺ 錄影');
+  /** on phones a finished clip waits for a tap on this, which the share sheet needs */
+  private readonly saveBtn = el('button', 'chip', '💾 儲存影片');
+  private pendingClip: { blob: Blob; name: string } | null = null;
+  private recShown = -1;
   private readonly root = el('div', 'drive');
   private readonly speedEl = el('b', 'drive-speed', '0');
   private readonly streetEl = el('span', 'drive-street');
@@ -87,13 +96,24 @@ export class DriveMode {
     viewBtn.onclick = () => this.switchView();
     this.droneBtn.type = 'button';
     this.droneBtn.onclick = () => this.toggleDrone();
+    this.recorder = new ClipRecorder(world.renderer.domElement);
+    this.recBtn.type = 'button';
+    this.recBtn.onclick = () => this.toggleRecording();
+    this.saveBtn.type = 'button';
+    this.saveBtn.hidden = true;
+    this.saveBtn.onclick = () => {
+      const clip = this.pendingClip;
+      this.pendingClip = null;
+      this.saveBtn.hidden = true;
+      if (clip) void saveClip(clip);
+    };
     const uturn = this.uturnBtn;
     uturn.type = 'button';
     uturn.onclick = () => this.uTurn();
     const exit = el('button', 'chip danger', '離開巡查');
     exit.type = 'button';
     exit.onclick = () => this.stop();
-    panel.append(speed, info, uturn, viewBtn, this.droneBtn, exit);
+    panel.append(speed, info, uturn, viewBtn, this.droneBtn, this.recBtn, this.saveBtn, exit);
 
     // Virtual joystick for touch screens
     const pad = el('div', 'joystick');
@@ -164,6 +184,7 @@ export class DriveMode {
       }
       if (k === 'v') this.switchView();
       if (k === 'f' && !e.repeat) this.toggleDrone();
+      if (k === 'r' && !e.repeat) this.toggleRecording();
       if (k === 'q' && !e.repeat && this.view !== 'drone') this.uTurn();
       // Space would press the focused button; Shift-less arrows would scroll
       if (this.view === 'drone' && (k === ' ' || k.startsWith('arrow'))) e.preventDefault();
@@ -207,6 +228,7 @@ export class DriveMode {
 
   stop(): void {
     if (!this.active) return;
+    if (this.recorder.recording) void this.finishRecording(true);
     const pose = this.car && this.city?.traffic.pose(this.car);
     if (this.car && this.city) this.city.traffic.removeVehicle(this.car);
     this.car = null;
@@ -276,6 +298,13 @@ export class DriveMode {
   /** Per frame: controls, next lane, the camera and the dashboard. */
   update(dt: number): void {
     if (!this.active || !this.city || !this.car) return;
+    if (this.recorder.recording) {
+      const t = Math.floor(this.recorder.seconds);
+      if (t !== this.recShown) {
+        this.recShown = t;
+        this.recBtn.textContent = `⏹ ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+      }
+    }
     const traffic = this.city.traffic;
     const car = this.car;
     if (!traffic.vehicles.includes(car)) {
@@ -328,6 +357,44 @@ export class DriveMode {
     this.turnEl.textContent = `${TURN_ICON[this.turn]} ${exits.length ? TURN_LABEL[this.turn] : '死路，按油門或迴轉鍵掉頭'} ${lightIcon}`;
   }
 
+  /** 錄影: starts recording the view, or stops and saves the clip. */
+  private toggleRecording(): void {
+    if (this.recorder.recording) {
+      void this.finishRecording(false);
+      return;
+    }
+    if (!ClipRecorder.supported() || !this.recorder.start()) {
+      this.events.toast('這個瀏覽器不支援錄影，請更新瀏覽器或改用 Chrome／Safari');
+      return;
+    }
+    this.pendingClip = null;
+    this.saveBtn.hidden = true;
+    this.recShown = -1;
+    this.recBtn.setAttribute('aria-pressed', 'true');
+    this.recBtn.textContent = '⏹ 0:00';
+    this.events.toast('開始錄影：只錄遊戲畫面，不含按鈕；再按一次停止');
+  }
+
+  /** Stops recording; on leaving patrol the clip is saved straight away, otherwise phones get a 儲存影片 button. */
+  private async finishRecording(leaving: boolean): Promise<void> {
+    this.recBtn.removeAttribute('aria-pressed');
+    this.recBtn.textContent = '⏺ 錄影';
+    const clip = await this.recorder.stop();
+    if (!clip) {
+      this.events.toast('錄影太短，沒有錄到畫面');
+      return;
+    }
+    const touch = matchMedia('(pointer: coarse)').matches;
+    if (touch && !leaving) {
+      this.pendingClip = clip;
+      this.saveBtn.hidden = false;
+      this.events.toast('錄好了！按「💾 儲存影片」存到手機或分享');
+      return;
+    }
+    const how = await saveClip(clip);
+    if (how === 'downloaded') this.events.toast(`影片已下載：${clip.name}`);
+  }
+
   /** 切換視角: chase ↔ driver's seat; from the drone, back down to the car. */
   private switchView(): void {
     if (this.view === 'drone') return this.toggleDrone();
@@ -368,10 +435,10 @@ export class DriveMode {
     this.hintEl.textContent = this.view === 'drone'
       ? touch
         ? '空拍機：搖桿前後左右飛，▲▼ 升降，在畫面上拖曳轉頭；可以穿過建築和地面'
-        : '空拍機：W／S 前後　A／D 左右　E／Q 升降　Shift 加速　拖曳或方向鍵轉頭　F 回到車上　Esc 離開'
+        : '空拍機：W／S 前後　A／D 左右　E／Q 升降　Shift 加速　拖曳或方向鍵轉頭　F 回到車上　R 錄影　Esc 離開'
       : touch
         ? '搖桿往上加速、往下煞車，左右換車道，靠近路口時左右選轉向'
-        : 'W 油門　S 煞車　A／D 換車道（近路口選轉向）　Q 迴轉　V 切換視角　F 空拍機　Esc 離開';
+        : 'W 油門　S 煞車　A／D 換車道（近路口選轉向）　Q 迴轉　V 切換視角　F 空拍機　R 錄影　Esc 離開';
   }
 
   /** While the drone flies, a drag on the map turns it instead of moving the map. */

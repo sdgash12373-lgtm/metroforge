@@ -1404,3 +1404,11 @@ body.road-drawing .mail-pop {
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* 錄影: red while recording, the running time in it */
+.chip.rec[aria-pressed='true'] {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
