@@ -371,6 +371,7 @@ export class DriveMode {
     this.saveBtn.hidden = true;
     this.recShown = -1;
     this.recBtn.setAttribute('aria-pressed', 'true');
+    document.body.classList.add('recording');
     this.recBtn.textContent = '⏹ 0:00';
     this.events.toast('開始錄影：只錄遊戲畫面，不含按鈕；再按一次停止');
   }
@@ -378,6 +379,7 @@ export class DriveMode {
   /** Stops recording; on leaving patrol the clip is saved straight away, otherwise phones get a 儲存影片 button. */
   private async finishRecording(leaving: boolean): Promise<void> {
     this.recBtn.removeAttribute('aria-pressed');
+    document.body.classList.remove('recording');
     this.recBtn.textContent = '⏺ 錄影';
     const clip = await this.recorder.stop();
     if (!clip) {

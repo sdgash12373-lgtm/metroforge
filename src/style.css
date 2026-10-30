@@ -1412,3 +1412,8 @@ body.road-drawing .mail-pop {
   color: #fff;
   font-variant-numeric: tabular-nums;
 }
+
+/* While recording, street and district names step aside so the view is clear */
+body.recording .angle-labels {
+  display: none;
+}
