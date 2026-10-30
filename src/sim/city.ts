@@ -7,6 +7,10 @@ import {
   PARKING_DRIVERS,
   PARKING_HOURS,
   PARKING_REACH,
+  YOUBIKE_FARE,
+  YOUBIKE_REACH,
+  YOUBIKE_RIDES,
+  YOUBIKE_STATION_RIDES,
   SERVICE_KINDS,
   type ServiceKind,
   TOURIST_SPEND,
@@ -298,6 +302,8 @@ export interface Budget {
   airIncome: number;
   /** 停車費: the city's parking garages */
   parking: number;
+  /** YouBike rentals */
+  bikes: number;
   /** 其他收入: what visitors to the landmarks spend */
   tourism: number;
   /** 外貿收入: industry's goods shipped abroad through cargo ports */
@@ -317,7 +323,7 @@ export interface Budget {
 
 export function budgetTotals(b: Budget): { income: number; taxes: number; fees: number; other: number; running: number; balance: number } {
   const taxes = b.residentialTax + b.businessTax + b.fuelTax;
-  const fees = b.transitFares + b.airIncome + b.parking;
+  const fees = b.transitFares + b.airIncome + b.parking + b.bikes;
   const income = taxes + b.subsidy + fees + b.tourism + b.trade;
   const running = b.roadUpkeep + b.transitUpkeep + b.airUpkeep + b.servicesUpkeep + b.admin;
   return { income, taxes, fees, other: b.tourism + b.trade, running, balance: income - running - b.construction };
@@ -451,6 +457,8 @@ export class City {
   parkingWanted = new Map<number, number>();
   /** cars parked across all garages right now */
   parked = 0;
+  /** YouBike rides a day across all stations */
+  bikeRides = 0;
   /** income and expenses per game month, at the current rate */
   budget: Budget = {
     residentialTax: 0,
@@ -460,6 +468,7 @@ export class City {
     transitFares: 0,
     airIncome: 0,
     parking: 0,
+    bikes: 0,
     tourism: 0,
     trade: 0,
     roadUpkeep: 0,
@@ -1518,7 +1527,8 @@ export class City {
       if (f.kind === 'parking' || !covers(f, p)) continue;
       const spec = FACILITIES[f.kind];
       if (isLandmark(f.kind)) landmark += 0.5;
-      else if (f.kind === 'footbridge') landmark += 0.1;
+      else if (f.kind === 'footbridge' || f.kind === 'youbike') landmark += 0.1;
+      else if (f.kind === 'nightMarket') landmark += 0.3;
       else if (spec.serves) kinds.add(spec.serves);
       else kinds.add(f.kind as ServiceKind);
     }
@@ -1872,6 +1882,9 @@ export class City {
     // Drivers coming to the shops and offices around each parking garage
     const garages = [...this.facilities.values()].filter((f) => f.kind === 'parking');
     const wanted = new Map<number, number>(garages.map((g) => [g.id, 0]));
+    // Residents within walking distance of a YouBike station, per station
+    const docks = [...this.facilities.values()].filter((f) => f.kind === 'youbike');
+    const bikers = new Map<number, number>(docks.map((f) => [f.id, 0]));
     const ports = this.cargoPorts();
     // Ports per road network, and the goods made on each: industry ships only through ports it can reach
     const portPieces = new Map<number, number>();
@@ -1895,6 +1908,10 @@ export class City {
           const s = this.facilities.size ? this.servicesAt(lot) : { kinds: new Set<ServiceKind>(), landmark: 0 };
           for (const k of s.kinds) reach[k] += people;
           // Fumes from a chemical plant nearby cost a service's worth
+          if (docks.length) {
+            const near = docks.find((f) => dist(f.p, lot) < YOUBIKE_REACH);
+            if (near) bikers.set(near.id, bikers.get(near.id)! + people);
+          }
           const dirty = polluted(lot);
           if (dirty) smog += people;
           const served = Math.max(0, s.kinds.size + s.landmark - (dirty ? 1 : 0));
@@ -1954,6 +1971,9 @@ export class City {
     this.trade = { ports: ports.length, goods, reachable, shipped };
     this.households = homes;
     this.parkingWanted = wanted;
+    let rides = 0;
+    for (const n of bikers.values()) rides += Math.min(YOUBIKE_STATION_RIDES, n * YOUBIKE_RIDES);
+    this.bikeRides = rides;
     return zoned;
   }
 
@@ -2095,6 +2115,7 @@ export class City {
     const pop = this.stats.population;
     const step = {
       parking: (parked * this.parkingFee * PARKING_HOURS) / DAY_STEPS,
+      bikes: (this.bikeRides * YOUBIKE_FARE) / DAY_STEPS,
       subsidy: (pop * rank.subsidy) / MONTH_STEPS,
       admin: (pop * rank.admin) / MONTH_STEPS,
       residentialTax: this.stats.population * this.taxes.residential * 0.0025,
@@ -2121,6 +2142,7 @@ export class City {
       transitFares: this.budget.transitFares * 0.9 + perMonth(fares) * 0.1,
       airIncome: this.budget.airIncome * 0.97 + perMonth(air.incomeToday) * 0.03,
       parking: perMonth(step.parking),
+      bikes: perMonth(step.bikes),
       tourism: perMonth(step.tourism),
       trade: perMonth(step.trade),
       roadUpkeep: perMonth(step.roadUpkeep),
@@ -2132,7 +2154,7 @@ export class City {
     };
     this.spentThisStep = 0;
     this.money +=
-      step.residentialTax + step.businessTax + step.fuelTax + step.subsidy + fares + air.incomeToday + step.parking + step.tourism + step.trade -
+      step.residentialTax + step.businessTax + step.fuelTax + step.subsidy + fares + air.incomeToday + step.parking + step.bikes + step.tourism + step.trade -
       step.airUpkeep - step.admin;
     if (this.steps % (UPKEEP_DAYS * DAY_STEPS) === 0) {
       const due = (roadLength * ROAD_UPKEEP + upkeep) * HOUR_STEPS + bill;

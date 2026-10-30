@@ -547,7 +547,7 @@ export function parking(k: Kit, w: number, d: number): void {
 
 /** One lettered sign: its label and where it hangs on the -v face (or a ±u face) of a facility. */
 export interface SignSpec {
-  label: SignLabel;
+  label: string;
   u0: number;
   u1: number;
   z0: number;
@@ -569,7 +569,7 @@ export const SIGN_LABELS: Record<SignLabel, { text: string; bg: string; fg: stri
   er: { text: '急診', bg: '#d0242b', fg: '#ffffff' },
   parking: { text: '公有停車場', bg: '#1f5fae', fg: '#ffffff' },
   parkingP: { text: 'P', bg: '#1f5fae', fg: '#ffffff' },
-  cityHall: { text: '高雄市政府', bg: '#d2c6ab', fg: '#5a3a1a' },
+  cityHall: { text: '市政府', bg: '#d2c6ab', fg: '#5a3a1a' },
 };
 
 /** Where each service's signs hang, matching the models above. */
@@ -585,7 +585,7 @@ export const SIGNS: Partial<Record<string, SignSpec[]>> = {
     { label: 'hospital', u0: -21.5, u1: -4.5, z0: 38.6, z1: 42.6, v: -1.2 },
     { label: 'er', u0: 13, u1: 19, z0: 5.05, z1: 7.35, v: -14.45 },
   ],
-  cityHall: [{ label: 'cityHall', u0: -7, u1: 7, z0: 9.1, z1: 10.5, v: -13.8 }],
+  cityHall: [{ label: 'cityHall', u0: -4.5, u1: 4.5, z0: 9.1, z1: 10.5, v: -13.8 }],
   parking: [
     { label: 'parking', u0: -8, u1: 4, z0: 10.5, z1: 12.7, v: -10.35 },
     { label: 'parkingP', u0: 14.25, u1: 16.75, z0: 6.15, z1: 8.65, v: -14.3 },

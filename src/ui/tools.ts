@@ -34,11 +34,13 @@ export type Tool =
   | 'landmark'
   | 'greenery'
   | 'footbridge'
-  | 'parking';
+  | 'parking'
+  | 'youbike'
+  | 'nightMarket';
 
 /** Tools that place a public service, landmark, green space or footbridge. */
-export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' | 'port' | 'parking' =>
-  t === 'landmark' || t === 'greenery' || t === 'footbridge' || t === 'port' || t === 'parking' || (SERVICE_KINDS as string[]).includes(t);
+export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' | 'port' | 'parking' | 'youbike' | 'nightMarket' =>
+  t === 'landmark' || t === 'greenery' || t === 'footbridge' || t === 'port' || t === 'parking' || t === 'youbike' || t === 'nightMarket' || (SERVICE_KINDS as string[]).includes(t);
 
 /** Train tools either lay track or plan lines through stations. */
 export type RailAction = 'station' | 'track' | 'line';
@@ -582,6 +584,8 @@ export class ToolController {
       case 'greenery':
       case 'footbridge':
       case 'parking':
+      case 'youbike':
+      case 'nightMarket':
       case 'port':
         return this.facilityHint();
       case 'streetName': {
@@ -650,6 +654,9 @@ export class ToolController {
       const t = this.city.trade;
       const trade = kind === 'cargoPort' && t.ports ? `　目前外貿出口 NT$${Math.round(t.shipped / 1e4).toLocaleString()}萬/月` : '';
       return `${spec.label} · ${ntd(spec.cost)} · 每兩週維護 ${ntd(spec.upkeep * HOUR_STEPS)}${tour}　${spec.blurb}；點海邊道路靠海的一側興建，碼頭會伸進海裡${trade}`;
+    }
+    if (kind === 'youbike') {
+      return `${spec.label} 站 · ${ntd(spec.cost)} · 每兩週維護 ${ntd(spec.upkeep * HOUR_STEPS)} · 範圍 ${spec.radius} 公尺　${spec.blurb}；點道路旁興建，現在全市每天 ${Math.round(this.city.bikeRides).toLocaleString()} 趟`;
     }
     if (kind === 'parking') {
       const fee = this.city.parkingFee;
