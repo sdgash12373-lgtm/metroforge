@@ -1426,6 +1426,9 @@ export class City {
     const { w, d } = FACILITIES[plan.kind];
     const t = this.terrain;
     const n = 10;
+    // A coast seldom runs square to the street: the yard may reach out over the water on reclaimed
+    // land, as long as most of the side by the road is on land and the berths are all at sea
+    let ashore = 0;
     for (let i = 0; i <= n; i++) {
       for (let j = 0; j <= n; j++) {
         const v = (j / n - 0.5) * d;
@@ -1433,11 +1436,13 @@ export class City {
         const fromRoad = (v + d / 2) / d;
         const sea = t.sea(q.x, q.y);
         const land = buildable(t, q);
-        if (fromRoad <= PORT_LAND ? !land : fromRoad >= 1 - PORT_BERTH ? !sea : !land && !sea) {
-          return '港口要蓋在海岸線上（靠路的一側在陸地，碼頭伸進海裡）';
-        }
+        if (!land && !sea) return '港口不能蓋在山坡或河流上，要蓋在平坦的海岸線';
+        if (fromRoad >= 1 - PORT_BERTH && !sea) return '港口要蓋在海岸線上（靠路的一側在陸地，碼頭伸進海裡）';
+        if (fromRoad <= PORT_LAND && land) ashore++;
       }
     }
+    const front = (n + 1) * (Math.floor(PORT_LAND * n) + 1);
+    if (ashore < front * 0.5) return '港口要蓋在海岸線上（靠路的一側在陸地，碼頭伸進海裡）';
     return null;
   }
 
