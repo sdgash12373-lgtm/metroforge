@@ -13,6 +13,8 @@ import { REGION_NAMES } from '../sim/terrain';
 import { BUS, LINE_COLORS, MODES, type Transit } from '../sim/transit';
 import { EditPanel } from './editPanel';
 import { Mailbox } from './mailbox';
+import { EventsPanel } from './events';
+import { EVENT_KINDS } from '../sim/events';
 import { clock } from '../sim/weather';
 import { BRUSH_MAX, BRUSH_MIN, DISTRICT_MAX, DISTRICT_MIN, type Tool, type ToolController, STYLE_CHOICES, isRail } from './tools';
 
@@ -53,7 +55,7 @@ const groupOf = (t: Tool): Group | null => (Object.keys(GROUPS) as Group[]).find
 
 type DockItem = Tool | Group;
 type BudgetRow =
-  | 'res' | 'biz' | 'fuel' | 'cluster' | 'subsidy' | 'fares' | 'air' | 'parking' | 'bikes' | 'tourism' | 'trade' | 'income'
+  | 'res' | 'biz' | 'fuel' | 'cluster' | 'subsidy' | 'fares' | 'air' | 'parking' | 'bikes' | 'tourism' | 'trade' | 'events' | 'income'
   | 'roads' | 'transit' | 'airUpkeep' | 'services' | 'admin' | 'policy' | 'running' | 'construction' | 'net';
 const TOOLS: { id: DockItem; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
@@ -134,6 +136,10 @@ export class Hud {
   private mail: Mailbox;
   private mailBtn: HTMLButtonElement;
   private mailBadge = el('b', 'badge');
+  /** 巨蛋活動: offers, bookings and results */
+  private events: EventsPanel;
+  private eventsBtn: HTMLButtonElement;
+  private eventsBadge = el('b', 'badge');
   /** line whose editor was last opened, so picking another line can close the budget on phones */
   private editKey: string | null = null;
   speed = 1;
@@ -267,6 +273,7 @@ export class Hud {
       bikes: row('YouBike 租借（規費）'),
       tourism: row('觀光收入（其他）'),
       trade: row('外貿收入（其他）'),
+      events: row('巨蛋活動（近 30 天）'),
       income: row('每月收入', 'sub'),
     };
     group('支出');
@@ -387,6 +394,17 @@ export class Hud {
     this.mailBtn = sideButton('📮', '信箱', '市民信箱：居民的心情、想法、建議和抱怨', () => this.showMail(this.mail.panel.hidden));
     this.mailBadge.hidden = true;
     this.mailBtn.append(this.mailBadge);
+    this.events = new EventsPanel({
+      changed: () => this.renderEventsBadge(),
+      toast: (m) => this.toast(m),
+      lookAt: (p) => {
+        actions.lookAt(p);
+        if (window.innerWidth < 720) this.showEvents(false);
+      },
+    });
+    this.eventsBtn = sideButton('🎤', '活動', '巨蛋活動：演唱會、運動賽事和音樂祭的邀約', () => this.showEvents(this.events.panel.hidden));
+    this.eventsBadge.hidden = true;
+    this.eventsBtn.append(this.eventsBadge);
     this.compass = el('button', 'compass panel');
     this.compass.type = 'button';
     this.compass.title = '方位：點一下讓北方朝上';
@@ -400,7 +418,7 @@ export class Hud {
     this.side = side;
     bottom.append(this.hint, this.sub, this.kinds, dock);
     this.bottomBar = bottom;
-    root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.levelPanel, this.mail.panel, this.editPanel.el, this.toastEl, this.mail.pop, side, bottom);
+    root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.levelPanel, this.mail.panel, this.events.panel, this.editPanel.el, this.toastEl, this.mail.pop, side, bottom);
 
     addEventListener('keydown', (e) => {
       const body = document.body.classList;
@@ -713,7 +731,7 @@ export class Hud {
         this.showLevel(false);
       }
     }
-    if (!key || (narrow && (!this.budgetPanel.hidden || !this.needsPanel.hidden || !this.levelPanel.hidden))) {
+    if (!key || (narrow && (!this.budgetPanel.hidden || !this.needsPanel.hidden || !this.levelPanel.hidden || !this.events.panel.hidden))) {
       this.editPanel.hide();
       return;
     }
@@ -800,6 +818,7 @@ export class Hud {
       this.showNeeds(false);
       this.showLevel(false);
       this.showMail(false);
+      this.showEvents(false);
     }
   }
 
@@ -810,6 +829,7 @@ export class Hud {
       this.showBudget(false);
       this.showLevel(false);
       this.showMail(false);
+      this.showEvents(false);
     }
     if (on && this.city) this.renderNeeds(this.city);
   }
@@ -821,6 +841,7 @@ export class Hud {
       this.showBudget(false);
       this.showNeeds(false);
       this.showMail(false);
+      this.showEvents(false);
       this.levelShown = '';
       if (this.city) this.renderLevel(this.city);
     }
@@ -834,7 +855,45 @@ export class Hud {
       this.showBudget(false);
       this.showNeeds(false);
       this.showLevel(false);
+      this.showEvents(false);
     }
+  }
+
+  private showEvents(on: boolean): void {
+    if (on === !this.events.panel.hidden) return;
+    this.events.panel.hidden = !on;
+    this.eventsBtn.setAttribute('aria-pressed', String(on));
+    if (on) {
+      this.showBudget(false);
+      this.showNeeds(false);
+      this.showLevel(false);
+      this.showMail(false);
+      if (this.city) this.events.render(this.city, true);
+    }
+  }
+
+  private renderEventsBadge(): void {
+    const n = this.city?.events.offers.length ?? 0;
+    this.eventsBadge.hidden = n === 0;
+    this.eventsBadge.textContent = String(n);
+  }
+
+  /** Tells the player about new offers, events opening their doors and how each one went. */
+  private eventNews(city: City): void {
+    for (const n of city.eventNews.splice(0)) {
+      if (n.offered) {
+        const spec = EVENT_KINDS[n.offered.kind];
+        this.ticker(`${spec.icon} 新的${spec.label}邀約：「${n.offered.name}」想在巨蛋舉辦，到「活動」決定要不要接`, {
+          action: { label: '查看', run: () => this.showEvents(true) },
+        });
+      }
+      if (n.started) this.ticker(`${EVENT_KINDS[n.started.kind].icon} 「${n.started.name}」開始了！${n.started.attendance!.toLocaleString()} 位觀眾湧進巨蛋${n.started.clash ? '（撞期，觀眾分散）' : ''}`);
+      if (n.ended) {
+        const r = n.ended;
+        this.ticker(`${EVENT_KINDS[r.kind].icon} 「${r.name}」落幕：${r.attendance.toLocaleString()} 人入場，市庫${r.net >= 0 ? '進帳' : '虧損'} NT$${ntdShort(Math.abs(r.net))}`);
+      }
+    }
+    this.renderEventsBadge();
   }
 
   private renderMailBadge(): void {
@@ -1133,6 +1192,7 @@ export class Hud {
         bikes: b.bikes,
         tourism: b.tourism,
         trade: b.trade,
+        events: b.events,
         income: t.income,
         roads: -b.roadUpkeep,
         transit: -b.transitUpkeep,
@@ -1176,6 +1236,9 @@ export class Hud {
     this.budgetPanel.style.top = shift;
     this.needsPanel.style.top = shift;
     this.mail.panel.style.top = shift;
+    this.events.panel.style.top = shift;
+    this.eventNews(city);
+    if (!this.events.panel.hidden) this.events.render(city);
     this.levelPanel.style.top = shift;
     if (!this.needsPanel.hidden) this.renderNeeds(city);
     if (!this.levelPanel.hidden) this.renderLevel(city);
@@ -1187,7 +1250,7 @@ export class Hud {
       this.readyTold = city.level;
       this.toast(`可以升級成「${LEVELS[city.level + 1].name}」了！點上方的等級按鈕`);
     }
-    const open = [this.budgetPanel, this.needsPanel, this.levelPanel, this.mail.panel].find((p) => !p.hidden) ?? null;
+    const open = [this.budgetPanel, this.needsPanel, this.levelPanel, this.mail.panel, this.events.panel].find((p) => !p.hidden) ?? null;
     this.editPanel.el.style.top = open ? `calc(${shift} + ${open.offsetHeight + 8}px)` : shift;
     this.toastEl.style.top = shift;
     // On phones the toast would sit on the editor's title: show it just below the editor
@@ -1227,7 +1290,7 @@ export class Hud {
       this.mail.pop.style.right = `${window.innerWidth - rail.left + 8}px`;
       this.mail.pop.style.bottom = this.side.style.bottom;
     }
-    for (const p of [this.budgetPanel, this.needsPanel, this.levelPanel, this.mail.panel, this.editPanel.el]) {
+    for (const p of [this.budgetPanel, this.needsPanel, this.levelPanel, this.mail.panel, this.events.panel, this.editPanel.el]) {
       if (!p.hidden) p.style.maxHeight = `${Math.max(120, floor - p.getBoundingClientRect().top)}px`;
     }
     this.stats.pop.textContent = city.stats.population.toLocaleString();
