@@ -2269,7 +2269,7 @@ export class City {
       1 / DAY_STEPS,
       rng,
     );
-    if (ev.offered || ev.started || ev.ended) this.eventNews.push({ offered: ev.offered, started: ev.started, ended: ev.ended });
+    if (ev.offered || ev.started || ev.ended || ev.delayed) this.eventNews.push({ offered: ev.offered, started: ev.started, ended: ev.ended, delayed: ev.delayed });
     if (ev.money) this.money += ev.money;
     this.fansDue += ev.cars;
     if (arena && this.fansDue >= 1) this.spawnFans(arena, zoned, rng);

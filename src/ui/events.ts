@@ -1,5 +1,5 @@
 import type { City } from '../sim/city';
-import { EVENT_KINDS, type EventOffer, FANS_PER_CAR, clashes, eventNet, matchup, expectedAttendance, keenLabel } from '../sim/events';
+import { EVENT_KINDS, type EventOffer, FANS_PER_CAR, clashes, delayRisk, eventNet, matchup, expectedAttendance, keenLabel } from '../sim/events';
 import { gameDate } from '../sim/format';
 import { ntdShort } from '../sim/levels';
 
@@ -71,10 +71,12 @@ export class EventsPanel {
     for (const b of book.booked) {
       const spec = EVENT_KINDS[b.kind];
       const clash = book.booked.some((o) => o !== b && clashes(o, b));
+      const pair = book.backToBackWith(b).length > 0;
       const row = el('div', `brow check${clash ? ' warn' : ''}`);
       const live = b.attendance !== undefined;
+      const tag = clash ? ' ⚠️撞期' : b.delayed ? ` ⏰延後${b.delayed}分` : pair ? ' 🔁同日接檔' : '';
       row.append(
-        el('span', '', `${spec.icon} ${b.name}${clash ? ' ⚠️撞期' : ''}`),
+        el('span', '', `${spec.icon} ${b.name}${tag}`),
         el('b', '', live ? `進行中 · ${b.attendance!.toLocaleString()} 人` : gameDate(b.start)),
       );
       body.push(row);
@@ -85,7 +87,7 @@ export class EventsPanel {
       for (const r of book.history.slice(0, 6)) {
         const row = el('div', 'brow');
         const v = el('b', r.net < 0 ? 'neg' : '', money(r.net));
-        row.append(el('span', '', `${EVENT_KINDS[r.kind].icon} ${r.name} · ${r.attendance.toLocaleString()} 人${r.clash ? ' · 撞期' : ''}`), v);
+        row.append(el('span', '', `${EVENT_KINDS[r.kind].icon} ${r.name} · ${r.attendance.toLocaleString()} 人${r.clash ? ' · 撞期' : r.delayed ? ` · 延後${r.delayed}分` : ''}`), v);
         body.push(row);
       }
     }
@@ -120,6 +122,20 @@ export class EventsPanel {
     }
     const clash = book.clashesWith(o.id);
     if (clash.length) card.append(el('p', 'note warn', `⚠️ 和已排定的「${clash.map((c) => c.name).join('、')}」撞期：觀眾會分散，民眾和廠商好感度都會下降`));
+    // 同日接檔: both fill up, with a chance the earlier one holds up the later
+    for (const { other, gap, first } of book.backToBackWith(o)) {
+      const before = first ? o : other;
+      const full = expectedAttendance(before.capacity, before.keen) / before.capacity;
+      const risk = delayRisk(gap, 1 - transit, full);
+      const hours = gap < 1.95 ? `${Math.round(gap * 60)} 分鐘` : `${Math.round(gap * 10) / 10} 小時`;
+      card.append(
+        el(
+          'p',
+          `note ${risk.any > 0.35 ? 'warn' : ''}`,
+          `🔁 和「${other.name}」同日接檔，${first ? '這場在前' : '這場在後'}，中間隔 ${hours}：觀眾不會分散，收益照算；但約 ${Math.round(risk.any * 100)}% 機率前場延遲散場或人潮疏散太慢，後場延後開演（觀眾流失、加班費、好感度下降）。場館周邊大眾運輸越方便、間隔越長，風險越低`,
+        ),
+      );
+    }
     if (net < 0) card.append(el('p', 'note warn', '熱衷程度偏低，預估會入不敷出'));
     card.append(el('small', 'ev-expire', `請在 ${gameDate(o.expires)} 前回覆`));
     const buttons = el('div', 'ev-buttons');
