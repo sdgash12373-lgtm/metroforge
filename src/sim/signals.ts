@@ -70,7 +70,7 @@ export function findJunctions(net: RoadNetwork): Map<number, Junction> {
   }
   const out = new Map<number, Junction>();
   for (const [node, list] of at) {
-    if (list.length < 3 || list.some((e) => e.seg.oneway)) continue;
+    if (list.length < 3 || list.some((e) => e.seg.ring)) continue;
     const axes: number[] = [];
     const approaches = list.map(({ seg, end }) => {
       const o = outward(seg, end);

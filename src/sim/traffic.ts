@@ -679,7 +679,10 @@ export class Traffic {
     hx /= hl;
     hy /= hl;
     // Right of travel direction (x east, y south); wider roads have more lanes further out
-    const off = this.rules.laneOffset + ((seg.lanes ?? 1) - 1 - sub) * LANE_WIDTH;
+    // A one-way road's lanes spread across the whole carriageway; two-way traffic keeps right of the centre line
+    const off = seg.oneway && !seg.ring
+      ? ((this.laneCount(seg) - 1) / 2 - sub) * LANE_WIDTH
+      : this.rules.laneOffset + ((seg.lanes ?? 1) - 1 - sub) * LANE_WIDTH;
     return {
       p: { x: a.x + (b.x - a.x) * f - hy * off, y: a.y + (b.y - a.y) * f + hx * off },
       h: this.net.heightAt(seg, a.t + (b.t - a.t) * f),

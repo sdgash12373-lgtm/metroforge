@@ -140,7 +140,7 @@ export class DriveMode {
     const target = this.world.rig.target;
     let best: { seg: RoadSegment; d: number } | null = null;
     for (const seg of net.segments.values()) {
-      if (!net.isStreet(seg) && !seg.oneway) continue;
+      if (!net.isStreet(seg) && !seg.ring) continue;
       const mid = seg.samples[Math.floor(seg.samples.length / 2)];
       const d = Math.hypot(mid.x - target.x, mid.y - target.y);
       if (seg.length > 12 && (!best || d < best.d)) best = { seg, d };
@@ -275,7 +275,7 @@ export class DriveMode {
     }
     this.followCamera(dt);
     this.speedEl.textContent = String(Math.round(car.speed * 3.6));
-    this.streetEl.textContent = seg.name ?? (seg.oneway ? '圓環' : '無名道路');
+    this.streetEl.textContent = seg.name ?? (seg.ring ? '圓環' : '無名道路');
     const light = traffic.lightFor(seg, car.dir);
     const lightIcon = light === 'red' ? '🔴' : light === 'yellow' ? '🟡' : light === 'green' ? '🟢' : '';
     this.turnEl.textContent = `${TURN_ICON[this.turn]} ${exits.length ? TURN_LABEL[this.turn] : '死路，按油門或迴轉鍵掉頭'} ${lightIcon}`;

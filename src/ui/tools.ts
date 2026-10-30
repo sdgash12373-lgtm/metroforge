@@ -7,7 +7,7 @@ import { BULLDOZE_REFUND, type City, type RoadStyle } from '../sim/city';
 import { LEVELS, UNLOCK } from '../sim/levels';
 import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, dist, lerp, quadPoint } from '../sim/geometry';
-import { HOUR_STEPS, ROUNDABOUT_RADIUS, type RoundaboutSize } from '../sim/city';
+import { HOUR_STEPS, ROAD_KINDS, ROUNDABOUT_RADIUS, type RoadKind, type RoundaboutSize } from '../sim/city';
 import { RAIL_SPECS, type RailKind, TRACK_OFFSET } from '../sim/rail';
 import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type RoadNetwork, type Snap, TUNNEL_DEPTH } from '../sim/roads';
 import { LINE_COLORS, type PathPiece, type Transit } from '../sim/transit';
@@ -19,6 +19,7 @@ export type Tool =
   | 'road'
   | 'curve'
   | 'roundabout'
+  | 'interchange'
   | 'upgradeRoad'
   | 'zone'
   | 'bulldoze'
@@ -94,6 +95,8 @@ export class ToolController {
   brushRadius = BRUSH_DEFAULT;
   roadLevel: RoadLevel = 'ground';
   roundaboutSize: RoundaboutSize = 4;
+  /** what the road tool draws: a two-way street, a one-way street, a ramp or a freeway */
+  roadKind: RoadKind = 'street';
   roadStyle: StyleChoice = 2;
   /** stops of the bus or train line being planned */
   lineDraft: number[] = [];
@@ -200,6 +203,16 @@ export class ToolController {
     this.refresh();
   }
 
+  /** What a road drawn now would be: the chosen kind with the road tools, a street otherwise. */
+  get drawKind(): RoadKind {
+    return this.tool === 'road' || this.tool === 'curve' ? this.roadKind : 'street';
+  }
+
+  setRoadKind(kind: RoadKind): void {
+    this.roadKind = kind;
+    this.cancel();
+  }
+
   setRailAction(action: RailAction): void {
     this.cancel();
     this.railAction = action;
@@ -292,7 +305,7 @@ export class ToolController {
   private streetAt(p: Vec2) {
     const r = Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6);
     const hit = this.city.net.segmentAt(p, r, 0);
-    return hit && !hit.seg.oneway ? hit.seg : null;
+    return hit && !hit.seg.ring ? hit.seg : null;
   }
 
   private upgradeHint(): string {
@@ -537,6 +550,8 @@ export class ToolController {
           : `塗抹空的格子設為「${ZONES[this.zone].name}」，已有的分區不會被蓋掉（要改請按「更正」）；雙指移動地圖`;
       case 'upgradeRoad':
         return this.upgradeHint();
+      case 'interchange':
+        return '點在高架高速公路上，蓋一座鑽石型交流道：下方一條穿越道路，兩側各一對上下匝道。也可以用「匝道」自己拉';
       case 'roundabout': {
         const cost = this.city.roundaboutCost(this.roundaboutSize);
         return `${this.roundaboutSize} 通圓環 · 約 ${ntd(cost)}　靠近路口或道路會自動吸附（橘色圈），壓到的道路自動接上；車輛逆時針單向繞行`;
@@ -644,13 +659,14 @@ export class ToolController {
     const { start, control } = this.draft;
     if (start && this.hover && (!this.curved || control)) {
       const end = this.snapRoad(this.hover).snap;
-      const steep = this.city.buildProblem(start, control, end, this.height, this.net);
+      const steep = this.city.buildProblem(start, control, end, this.height, this.net, this.drawKind);
       if (steep) return steep;
       const len = Math.round(Math.hypot(end.p.x - start.p.x, end.p.y - start.p.y));
       const [ha, hb] = this.city.roadHeights(start, end, this.height, this.net);
       const cost = this.cost(start.p, control, end.p, ha, hb);
-      const kind = ha === hb ? (ha > 0 ? '高架 ' : ha < 0 ? '隧道 ' : '') : hb < 0 || ha < 0 ? '隧道入口 ' : '匝道 ';
-      return `${kind}約 ${len} 公尺 · ${ntd(cost)}　點一下完成；再點起點或按右鍵結束${verb}`;
+      const kind = ha === hb ? (ha > 0 ? '高架 ' : ha < 0 ? '隧道 ' : '') : hb < 0 || ha < 0 ? '隧道入口 ' : '坡道 ';
+      const what = isRail(this.tool) || this.drawKind === 'street' ? '' : `${ROAD_KINDS[this.drawKind].label} `;
+      return `${what}${kind}約 ${len} 公尺 · ${ntd(cost)}　點一下完成；再點起點或按右鍵結束${verb}`;
     }
     if (this.level === 'elevated' && !start) {
       return `高架${what}：從地面接出會自動做成匝道（至少 ${Math.ceil(ELEVATED_HEIGHT / MAX_GRADE)} 公尺），跨過地面不會形成路口`;
@@ -663,7 +679,7 @@ export class ToolController {
   }
 
   private cost(a: Vec2, c: Vec2 | null, b: Vec2, ha: number, hb: number): number {
-    return isRail(this.tool) ? this.city.trackCost(this.tool, a, c, b, ha, hb) : this.city.roadCost(a, c, b, ha, hb);
+    return isRail(this.tool) ? this.city.trackCost(this.tool, a, c, b, ha, hb) : Math.round(this.city.roadCost(a, c, b, ha, hb) * ROAD_KINDS[this.drawKind].cost);
   }
 
   private lineHint(): string {
@@ -750,8 +766,8 @@ export class ToolController {
       const net = this.city.net;
       const r = Math.max(ROAD_WIDTH / 2, this.world.rig.snapRadius * 0.6);
       const hit = net.segmentAt(p, r, 0) ?? net.segmentAt(p, r);
-      if (!hit || hit.seg.oneway) this.events.toast(hit ? '圓環不能命名，請點其他道路' : '點一條道路來命名');
-      this.selectedStreet = hit && !hit.seg.oneway ? hit.seg.id : null;
+      if (!hit || hit.seg.ring) this.events.toast(hit ? '圓環不能命名，請點其他道路' : '點一條道路來命名');
+      this.selectedStreet = hit && !hit.seg.ring ? hit.seg.id : null;
       this.events.changed();
     } else if (this.tool === 'district') {
       const d = this.city.districtAt(p, this.world.rig.snapRadius * 2);
@@ -770,7 +786,10 @@ export class ToolController {
       const r = this.city.buildAirport(p, this.radians, this.runways);
       this.events.toast(r.ok ? `機場完成，花費 ${ntd(r.cost)}；按「新增航班」開航` : (r.reason ?? '這裡不能蓋機場'));
     }
-    else if (this.tool === 'roundabout') {
+    else if (this.tool === 'interchange') {
+      const r = this.city.buildInterchange(p);
+      this.events.toast(r.ok ? `交流道完成，花費 ${ntd(r.cost)}；記得把穿越道路接到市區` : (r.reason ?? '這裡不能蓋交流道'));
+    } else if (this.tool === 'roundabout') {
       const r = this.city.buildRoundabout(this.roundaboutCenter(p).p, this.roundaboutSize);
       this.events.toast(r.ok ? `圓環完成，花費 ${ntd(r.cost)}` : (r.reason ?? '這裡不能蓋圓環'));
     } else if (this.tool === 'bulldoze' && this.demolishLines) this.tapDemolishLine(p);
@@ -811,7 +830,7 @@ export class ToolController {
     }
     const r = isRail(this.tool)
       ? this.city.buildTrack(this.tool, start, this.draft.control, s, this.height)
-      : this.city.buildRoad(start, this.draft.control, s, false, this.height);
+      : this.city.buildRoad(start, this.draft.control, s, false, this.height, this.drawKind);
     if (!r.ok) {
       if (r.reason) this.events.toast(r.reason);
       return;
@@ -956,7 +975,7 @@ export class ToolController {
       const end = hoverSnap.p;
       const [ha, hb] = this.city.roadHeights(start, hoverSnap, this.height, net);
       const cost = this.cost(start.p, ctrl, end, ha, hb);
-      const ok = cost <= this.city.money && !this.city.buildProblem(start, ctrl, hoverSnap, this.height, net);
+      const ok = cost <= this.city.money && !this.city.buildProblem(start, ctrl, hoverSnap, this.height, net, this.drawKind);
       w.setPreview({ a: start.p, c: ctrl ?? lerp(start.p, end, 0.5), b: end }, ok, ha, hb);
       w.setAngleGuides(angleGuides(net, start, ctrl, hoverSnap));
     } else {

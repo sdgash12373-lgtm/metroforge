@@ -1,7 +1,7 @@
 import { MAX_AIR_FARE } from '../sim/airport';
 import logoUrl from '../assets/logo.png';
 import { gameDate, ntd } from '../sim/format';
-import { type City, MAX_TAX, REGION_COST, budgetTotals, freewayTown } from '../sim/city';
+import { type City, MAX_TAX, REGION_COST, ROAD_KINDS, type RoadKind, budgetTotals, freewayTown } from '../sim/city';
 import { LEVELS, ntdShort } from '../sim/levels';
 import { FACILITIES, GREEN_KINDS, LANDMARK_KINDS, PORT_KINDS, SERVICE_KINDS } from '../sim/facilities';
 import { RAIL_KINDS } from '../sim/rail';
@@ -20,6 +20,7 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
     { id: 'road', label: '直線' },
     { id: 'curve', label: '曲線' },
     { id: 'roundabout', label: '圓環' },
+    { id: 'interchange', label: '交流道' },
     { id: 'upgradeRoad', label: '升級' },
   ],
   transport: [
@@ -475,6 +476,14 @@ export class Hud {
       size.append(el('span', '', '範圍'), range, value);
       this.sub.append(size);
     } else if (this.tools.tool === 'road' || this.tools.tool === 'curve') {
+      const t = this.tools;
+      for (const k of Object.keys(ROAD_KINDS) as RoadKind[]) {
+        option(ROAD_KINDS[k].label, t.roadKind === k, () => {
+          t.setRoadKind(k);
+          this.render();
+        });
+      }
+      this.sub.append(el('span', 'divider'));
       this.levelOptions(option, '結束拉路');
     } else if (this.tools.tool === 'upgradeRoad') {
       const t = this.tools;

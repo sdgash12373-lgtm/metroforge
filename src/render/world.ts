@@ -150,6 +150,7 @@ export class World {
     markings: new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
     preview: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }),
     concrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
+    barrier: new THREE.MeshLambertMaterial({ color: 0x9db8a8, side: THREE.DoubleSide, flatShading: true }),
     /** viaducts of track, kept solid when the streets fade */
     railConcrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
     tunnel: new THREE.MeshBasicMaterial({ color: 0x1c1f24, side: THREE.DoubleSide }),
@@ -736,7 +737,10 @@ export class World {
       concrete.castShadow = true;
       concrete.receiveShadow = true;
       const mouths = new THREE.Mesh(g.dark, this.materials.tunnel);
-      this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings), concrete, mouths);
+      const barriers = new THREE.Mesh(g.barriers, this.materials.barrier);
+      barriers.castShadow = true;
+      barriers.receiveShadow = true;
+      this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings), concrete, mouths, barriers);
       this.updateTrees(city);
     }
     for (const k of RAIL_KINDS) this.syncRail(city, k, painting);

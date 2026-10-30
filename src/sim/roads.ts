@@ -25,10 +25,12 @@ export const WALK_EXTRA = 2.5;
 export const LANE_CHOICES = [1, 2, 4] as const;
 export type LaneCount = (typeof LANE_CHOICES)[number];
 
-/** Width of the asphalt: lanes each way, both ways. */
-export const asphaltWidth = (seg: { lanes?: number }): number => (seg.lanes ?? 1) * 2 * LANE_WIDTH;
+/** What a road's width depends on. */
+type Widths = { lanes?: number; walk?: boolean; oneway?: boolean; ring?: boolean };
+/** Width of the asphalt: lanes each way, both ways; a one-way road's lanes all go its way. */
+export const asphaltWidth = (seg: Widths): number => (seg.lanes ?? 1) * (seg.oneway && !seg.ring ? 1 : 2) * LANE_WIDTH;
 /** Full width, kerb to kerb including sidewalks. */
-export const roadWidth = (seg: { lanes?: number; walk?: boolean }): number =>
+export const roadWidth = (seg: Widths): number =>
   asphaltWidth(seg) + (ROAD_WIDTH - 2 * LANE_WIDTH) + (seg.walk ? WALK_EXTRA * 2 : 0);
 /** Shortest road piece we keep; anything shorter is folded into a junction. */
 export const MIN_SEGMENT = 4;
@@ -51,6 +53,9 @@ export interface RoadNode {
   h: number;
 }
 
+/** What kind of road a new segment is, set before its lots are laid out. */
+export type RoadFlags = Pick<RoadSegment, 'ring' | 'ramp' | 'highway' | 'built' | 'lanes'>;
+
 export interface RoadSegment {
   id: number;
   a: number;
@@ -61,15 +66,21 @@ export interface RoadSegment {
   length: number;
   bbox: BBox;
   lots: Lot[];
-  /** traffic only drives a → b (roundabouts) */
+  /** traffic only drives a → b: roundabouts, one-way streets (單行道) and ramps (匝道) */
   oneway: boolean;
+  /** part of a roundabout's ring */
+  ring?: boolean;
+  /** a ramp (匝道): one-way, it may join a freeway */
+  ramp?: boolean;
+  /** a freeway the player built, which may be torn down unlike the region's own 國道 */
+  built?: boolean;
   /** street name the player gave it */
   name?: string;
   /** lanes each way (1 when unset) */
   lanes?: LaneCount;
   /** wide sidewalks with street trees */
   walk?: boolean;
-  /** part of the freeway or its ramps: only reached through the interchange, never rebuilt */
+  /** part of a freeway or its interchange ramps: joined only by ramps, never rebuilt */
   highway?: boolean;
 }
 
@@ -109,13 +120,17 @@ export class RoadNetwork {
   }
 
   /** New segment a → b. Pieces of a split segment keep its one-way setting. */
-  createSegment(a: number, b: number, c: Vec2, from?: RoadSegment, id?: number, oneway = from?.oneway ?? false): RoadSegment {
+  createSegment(a: number, b: number, c: Vec2, from?: RoadSegment, id?: number, oneway = from?.oneway ?? false, kind?: RoadFlags): RoadSegment {
     const seg: RoadSegment = {
+      ...kind,
       oneway,
       name: from?.name,
       ...(from?.lanes && from.lanes > 1 ? { lanes: from.lanes } : {}),
       ...(from?.walk ? { walk: true } : {}),
       ...(from?.highway ? { highway: true } : {}),
+      ...(from?.ring ? { ring: true } : {}),
+      ...(from?.ramp ? { ramp: true } : {}),
+      ...(from?.built ? { built: true } : {}),
       id: id ?? this.nextSeg++,
       a,
       b,
@@ -147,9 +162,9 @@ export class RoadNetwork {
     return this.node(seg.a).h > 0 || this.node(seg.b).h > 0;
   }
 
-  /** An ordinary two-way road at ground level: the kind buildings and bus stops can front onto. */
+  /** An ordinary road at ground level, two-way or one-way: the kind buildings and bus stops can front onto. */
   isStreet(seg: RoadSegment): boolean {
-    return !seg.oneway && this.node(seg.a).h === 0 && this.node(seg.b).h === 0;
+    return !seg.ring && !seg.ramp && !seg.highway && this.node(seg.a).h === 0 && this.node(seg.b).h === 0;
   }
 
   /** Height a snap would join the network at (free points take `free`). */
@@ -241,7 +256,7 @@ export class RoadNetwork {
    * wherever the new road crosses an existing one at the same level so those crossings are junctions.
    * Free ends are placed at `height`; an end on an existing road takes that road's height, which makes ramps.
    */
-  addRoad(start: Snap, control: Vec2 | null, end: Snap, height = 0, oneway = false): RoadSegment[] {
+  addRoad(start: Snap, control: Vec2 | null, end: Snap, height = 0, oneway = false, kind?: RoadFlags): RoadSegment[] {
     const A = this.resolve(start, height);
     // Resolving the start may have split the segment the end was snapped to
     const B = this.resolve(end.kind === 'segment' ? this.snap(end.p, 0.5, this.heightAt(end.seg, end.t)) : end, height);
@@ -292,7 +307,7 @@ export class RoadNetwork {
       const from = chain[i - 1].node;
       const existing = this.connected(from.id, node.id);
       if (existing && control === null) continue;
-      created.push(this.createSegment(from.id, node.id, piece.c, undefined, undefined, oneway));
+      created.push(this.createSegment(from.id, node.id, piece.c, undefined, undefined, oneway, kind));
     }
     return created;
   }
@@ -327,7 +342,7 @@ export class RoadNetwork {
         const back = away(cur, node);
         let best: { s: RoadSegment; dot: number } | null = null;
         for (const o of this.segments.values()) {
-          if (seen.has(o.id) || o.oneway || (o.a !== node && o.b !== node) || Math.abs(level(o) - level(cur)) > LEVEL_TOLERANCE) continue;
+          if (seen.has(o.id) || o.ring || o.oneway !== seg.oneway || (o.a !== node && o.b !== node) || Math.abs(level(o) - level(cur)) > LEVEL_TOLERANCE) continue;
           const d = away(o, node);
           // Straight on means leaving opposite to where we came in
           const dot = -(d.x * back.x + d.y * back.y);
