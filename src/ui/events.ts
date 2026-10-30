@@ -1,5 +1,5 @@
 import type { City } from '../sim/city';
-import { EVENT_KINDS, type EventOffer, FANS_PER_CAR, clashes, delayRisk, eventNet, matchup, expectedAttendance, keenLabel } from '../sim/events';
+import { CLASH_GAP_HOURS, EVENT_KINDS, type EventOffer, FANS_PER_CAR, clashes, delayRisk, eventEnd, eventNet, matchup, expectedAttendance, keenLabel } from '../sim/events';
 import { gameDate } from '../sim/format';
 import { ntdShort } from '../sim/levels';
 
@@ -8,6 +8,20 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''):
   if (cls) e.className = cls;
   if (text) e.textContent = text;
   return e;
+}
+
+/** "2109/11/25 11:00–21:00": when an event starts and ends, so the player can see whether two overlap. */
+function when(e: Pick<EventOffer, 'start' | 'hours'>): string {
+  const [date, start] = gameDate(e.start).split(' ');
+  const [endDate, end] = gameDate(eventEnd(e)).split(' ');
+  const hm = (t: string) => t.slice(0, 5);
+  return `${date} ${hm(start)}–${endDate === date ? '' : '隔天 '}${hm(end)}`;
+}
+
+/** Why two bookings clash, in words: they overlap, or leave too little time to turn the hall round. */
+function clashWhy(a: Pick<EventOffer, 'start' | 'hours'>, b: Pick<EventOffer, 'start' | 'hours' | 'name'>): string {
+  const overlap = a.start < eventEnd(b) && b.start < eventEnd(a);
+  return overlap ? `和「${b.name}」（${when(b)}）時間重疊` : `和「${b.name}」（${when(b)}）間隔不到 ${CLASH_GAP_HOURS} 小時，來不及換場`;
 }
 
 const money = (v: number) => `${v < 0 ? '−' : '+'}NT$${ntdShort(Math.abs(v))}`;
@@ -70,16 +84,18 @@ export class EventsPanel {
     if (!book.booked.length) body.push(el('p', 'note', '還沒有排定的活動。'));
     for (const b of book.booked) {
       const spec = EVENT_KINDS[b.kind];
-      const clash = book.booked.some((o) => o !== b && clashes(o, b));
+      const clashWith = book.booked.find((o) => o !== b && clashes(o, b));
+      const clash = !!clashWith;
       const pair = book.backToBackWith(b).length > 0;
       const row = el('div', `brow check${clash ? ' warn' : ''}`);
       const live = b.attendance !== undefined;
       const tag = clash ? ' ⚠️撞期' : b.delayed ? ` ⏰延後${b.delayed}分` : pair ? ' 🔁同日接檔' : '';
       row.append(
         el('span', '', `${spec.icon} ${b.name}${tag}`),
-        el('b', '', live ? `進行中 · ${b.attendance!.toLocaleString()} 人` : gameDate(b.start)),
+        el('b', '', live ? `進行中 · ${b.attendance!.toLocaleString()} 人` : when(b)),
       );
       body.push(row);
+      if (clashWith && !live) body.push(el('p', 'note warn', `⚠️ ${clashWhy(b, clashWith)}`));
     }
 
     if (book.history.length) {
@@ -101,7 +117,7 @@ export class EventsPanel {
     const head = el('div', 'ev-head');
     head.append(el('b', '', `${spec.icon} ${o.name}`), el('small', '', spec.label));
     card.append(head);
-    card.append(el('div', 'ev-when', `${gameDate(o.start)} 起 ${o.hours} 小時`));
+    card.append(el('div', 'ev-when', `${when(o)}（${o.hours} 小時）`));
     if (o.kind === 'sports') {
       const [[home], [away]] = matchup(o);
       card.append(el('div', 'ev-when', `對戰：${home} vs ${away}`));
@@ -121,7 +137,7 @@ export class EventsPanel {
       card.append(r);
     }
     const clash = book.clashesWith(o.id);
-    if (clash.length) card.append(el('p', 'note warn', `⚠️ 和已排定的「${clash.map((c) => c.name).join('、')}」撞期：觀眾會分散，民眾和廠商好感度都會下降`));
+    for (const c of clash) card.append(el('p', 'note warn', `⚠️ 撞期：${clashWhy(o, c)}。觀眾會分散，民眾和廠商好感度都會下降`));
     // 同日接檔: both fill up, with a chance the earlier one holds up the later
     for (const { other, gap, first } of book.backToBackWith(o)) {
       const before = first ? o : other;
@@ -143,7 +159,7 @@ export class EventsPanel {
     yes.type = 'button';
     yes.onclick = () => {
       const b = book.accept(o.id);
-      if (b) this.hooks.toast(`已排定「${b.name}」：${gameDate(b.start)}`);
+      if (b) this.hooks.toast(`已排定「${b.name}」：${when(b)}`);
       this.render(city, true);
       this.hooks.changed();
     };
