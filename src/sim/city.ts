@@ -103,15 +103,109 @@ export interface StationSpot {
  * only road that may join a freeway) or a freeway (高速公路, two lanes each way, met only by ramps and freeways).
  */
 export type RoadKind = 'street' | 'oneway' | 'ramp' | 'highway';
-/** A diamond interchange's ramps meet the freeway this far either side of the street under it */
+/** An interchange's ramps meet the freeway this far either side of the street under it */
 export const INTERCHANGE_REACH = 150;
 /** and the street this far either side of the freeway; the street runs on this far out each way. */
 export const INTERCHANGE_WIDTH = 45;
-export const INTERCHANGE_STREET = 110;
-/** 國道 10 號 bends off 國道 1 號 over this distance, and meets 國道 3 號 this far along it from its middle. */
-const LINK_BEND = 160;
-const LINK_AT = -500;
-const LINK_NAME = '國道 10 號';
+export const INTERCHANGE_STREET = 180;
+/** A DDI's street splits into its two directions this far out, runs them this far either side of its middle, */
+const DDI_SPLIT = 140;
+const DDI_SPLIT_WIDTH = 7;
+/** and crosses them over this far out, on a diagonal this long either side. */
+const DDI_CROSSOVER = 70;
+const DDI_CROSSOVER_HALF = 10;
+/** Corners on a 國道's route are rounded off this far either side. */
+const FREEWAY_CORNER = 250;
+const RS_ = Math.SQRT1_2;
+/** A point on Pingtung's 國道 3 號, `a` metres up the plain from its middle. */
+const ptFreeway = (a: number): Vec2 => ({ x: 1900 * RS_ + RS_ * a, y: 1900 * RS_ - RS_ * a });
+/**
+ * The 國道 beyond each region's own, on the Kaohsiung–Pingtung map (after the map of Taiwan's freeways): 國道 3 號
+ * turns off its line up the Pingtung Plain, crosses the Gaoping River and runs north-west along the foot of the
+ * hills east of Kaohsiung; 國道 10 號 leaves 國道 1 號 north of town and crosses 國道 3 號 towards 旗山.
+ * `probe` is a point on the route, to tell whether a city has it already.
+ */
+const FREEWAY_ROUTES: { name: string; pts: Vec2[]; probe: Vec2; corner?: number[] }[] = [
+  // Round the low hills on the Pingtung bank, over the river where it widens
+  { name: '國道 3 號', pts: [ptFreeway(250), ptFreeway(650), { x: 500, y: 760 }, { x: 250, y: -200 }, { x: -300, y: -880 }], probe: { x: 400, y: 380 }, corner: [200, 300, 250] },
+  { name: '國道 10 號', pts: [{ x: -700, y: -450 }, { x: 100, y: -450 }], probe: { x: -300, y: -450 } },
+];
+
+/** 國道 ends left where they are, not carried on: 國道 3 號 heads into the hills here, where the plain narrows towards 國道 1 號. */
+const FREEWAY_FIXED_ENDS: Vec2[] = [{ x: -300, y: -880 }];
+
+/** A route through `pts` as straight pieces with each corner rounded into a curve `r` either side of it. */
+function smoothRoute(pts: Vec2[], r: number | number[]): { a: Vec2; c: Vec2 | null; b: Vec2 }[] {
+  const out: { a: Vec2; c: Vec2 | null; b: Vec2 }[] = [];
+  const toward = (p: Vec2, q: Vec2, d: number): Vec2 => {
+    const l = dist(p, q) || 1;
+    return { x: p.x + ((q.x - p.x) / l) * d, y: p.y + ((q.y - p.y) / l) * d };
+  };
+  let from = pts[0];
+  for (let i = 1; i < pts.length; i++) {
+    const corner = pts[i];
+    if (i === pts.length - 1) {
+      out.push({ a: from, c: null, b: corner });
+      break;
+    }
+    const cut = Math.min(typeof r === 'number' ? r : r[i - 1], dist(pts[i - 1], corner) / 2, dist(corner, pts[i + 1]) / 2);
+    const inn = toward(corner, pts[i - 1], cut);
+    if (dist(from, inn) >= MIN_SEGMENT) out.push({ a: from, c: null, b: inn });
+    const next = toward(corner, pts[i + 1], cut);
+    out.push({ a: inn, c: corner, b: next });
+    from = next;
+  }
+  return out;
+}
+
+/**
+ * The pieces of a diverging diamond interchange, in its own frame: u along the freeway (its traffic heading +u
+ * keeps to the +v side), v along the street under it. Mirrored through the middle for the other side.
+ */
+function ddiPlan(): { a: Vec2; c: Vec2 | null; b: Vec2; kind: RoadKind; ha: number; hb: number }[] {
+  const W = DDI_SPLIT_WIDTH;
+  const C = DDI_CROSSOVER;
+  const D = DDI_CROSSOVER_HALF;
+  const S = DDI_SPLIT;
+  const E = INTERCHANGE_STREET;
+  const L = INTERCHANGE_REACH;
+  const H = ELEVATED_HEIGHT;
+  const v = (x: number, y: number): Vec2 => ({ x, y });
+  type Piece = { a: Vec2; c: Vec2 | null; b: Vec2; kind: RoadKind; ha: number; hb: number };
+  const flip = (x: Piece): Piece => ({ ...x, a: v(-x.a.x, -x.a.y), c: x.c && v(-x.c.x, -x.c.y), b: v(-x.b.x, -x.b.y) });
+  const street = (a: Vec2, c: Vec2 | null, b: Vec2, kind: RoadKind = 'oneway'): Piece => ({ a, c, b, kind, ha: 0, hb: 0 });
+  // The street heading +v keeps right (-u) outside the crossovers and drives on the left (+u) between them
+  const plusV: Piece[] = [
+    street(v(0, -S), v(-W, -S + 20), v(-W, -S + 30)),
+    street(v(-W, -S + 30), null, v(-W, -C - D)),
+    street(v(-W, -C - D), null, v(W, -C + D)),
+    street(v(W, -C + D), null, v(W, C - D)),
+    street(v(W, C - D), null, v(-W, C + D)),
+    street(v(-W, C + D), null, v(-W, S - 30)),
+    street(v(-W, S - 30), v(-W, S - 20), v(0, S)),
+  ];
+  // Off the +u carriageway on the +v side, down to a fork: onto the street heading +v beyond the crossover, and
+  // onto the street heading -v between them; up onto the +u carriageway from both
+  const G = v(-45, 62);
+  const K = v(45, 62);
+  const ramps: Piece[] = [
+    { a: v(-L, 0), c: v(-100, G.y), b: G, kind: 'ramp', ha: H, hb: 0 },
+    { a: G, c: v(-12, 88), b: v(-W, 100), kind: 'ramp', ha: 0, hb: 0 },
+    { a: G, c: v(-14, 45), b: v(-W, 35), kind: 'ramp', ha: 0, hb: 0 },
+    { a: v(W, 35), c: v(14, 45), b: K, kind: 'ramp', ha: 0, hb: 0 },
+    { a: v(W, 100), c: v(12, 88), b: K, kind: 'ramp', ha: 0, hb: 0 },
+    { a: K, c: v(100, K.y), b: v(L, 0), kind: 'ramp', ha: 0, hb: H },
+  ];
+  return [
+    street(v(0, -E), null, v(0, -S), 'street'),
+    street(v(0, S), null, v(0, E), 'street'),
+    ...plusV,
+    ...plusV.map(flip),
+    ...ramps,
+    ...ramps.map(flip),
+  ];
+}
+
 /** Steps a freeway is carried on in towards the edge of the land. */
 const FREEWAY_STEP = 40;
 export const ROAD_KINDS: Record<RoadKind, { label: string; oneway: boolean; lanes: number; cost: number }> = {
@@ -124,7 +218,7 @@ export const ROAD_KINDS: Record<RoadKind, { label: string; oneway: boolean; lane
 export const FREEWAYS: Record<RegionName, FreewaySpec> = {
   kaohsiung: { center: { x: FREEWAY.x, y: 0 }, axis: { x: 0, y: -1 }, side: { x: 1, y: 0 }, north: -FREEWAY.north, south: FREEWAY.south, ramp: FREEWAY.ramp, exit: 140, town: 396, name: FREEWAY.name },
   // Turned axes: up the plain (u) and away from the Gaoping River (v), the town on the river side
-  pingtung: { center: { x: 1900 * RS, y: 1900 * RS }, axis: { x: RS, y: -RS }, side: { x: -RS, y: -RS }, north: 1300, south: 1250, ramp: 160, exit: 140, town: 400, name: '國道 3 號' },
+  pingtung: { center: { x: 1900 * RS, y: 1900 * RS }, axis: { x: RS, y: -RS }, side: { x: -RS, y: -RS }, north: 250, south: 1250, ramp: 160, exit: 140, town: 400, name: '國道 3 號' },
 };
 
 /** A point `a` metres along a freeway and `c` across it, towards its town. */
@@ -537,8 +631,9 @@ export class City {
     this.spend(REGION_COST);
     this.regions.add(r);
     this.regionsVersion++;
-    const hasFreeway = [...this.net.segments.values()].some((s) => s.highway && this.terrain.region(s.samples[0].x, s.samples[0].y) === r);
-    if (!hasFreeway) this.buildFreeway(r);
+    // Its 國道 may run there already; the way into town off it is built now
+    const hasAccess = !!this.net.segmentAt(freewayTown(r), 3, 0);
+    if (!hasAccess) this.buildFreeway(r);
     else this.roadsChanged();
     return { ok: true };
   }
@@ -752,37 +847,140 @@ export class City {
   }
 
   /**
-   * Lays out a region's freeway, free: the main line on viaducts (two lanes each way) leaving the map at
-   * both ends, two ramps down to the interchange, and an access road into town.
+   * Lays out a region's way in, free: the 國道 network if it isn't there yet, then on the region's own 國道 the
+   * same interchange the player can build, and an access road from it into town.
    */
   buildFreeway(region: RegionName = 'kaohsiung'): void {
-    const net = this.net;
     const f = FREEWAYS[region];
     const at = (a: number, c: number) => freewayPoint(f, a, c);
-    const free = (p: Vec2): Snap => ({ kind: 'free', p });
-    const main = net.addRoad(free(at(f.north, 0)), null, free(at(-f.south, 0)), ELEVATED_HEIGHT);
-    for (const s of main) Object.assign(s, { lanes: 2, highway: true, name: f.name });
-    const ends = [main[0].a, main[main.length - 1].b];
-    const exit = region === 'kaohsiung' ? at(0, f.exit) : cellCenter(at(0, f.exit));
-    const access = net.addRoad(free(exit), null, free(region === 'kaohsiung' ? at(0, f.town) : freewayTown(region)), 0);
-    for (const s of access) applyStyle(net, s, { lanes: 2 });
-    const g = net.node(access[0].a);
-    for (const dir of [-1, 1]) {
-      const on = net.snap(at(-dir * f.ramp, 0), 1, ELEVATED_HEIGHT);
-      const control = at(-dir * f.ramp * 0.3, 10);
-      for (const s of net.addRoad({ kind: 'node', node: g, p: g.p }, control, on, 0)) s.highway = true;
+    // A new city lays the whole network; a city opening this region lays what fits round what it has built,
+    // and the region's own 國道 in any case (nothing can stand on land only now opened)
+    this.layFreeways(this.net.segments.size === 0, region);
+    this.buildInterchange(at(0, 0), true);
+    const town = region === 'kaohsiung' ? at(0, f.town) : freewayTown(region);
+    const net = this.net;
+    const exit = [...net.nodes.values()]
+      .filter((n) => n.h === 0 && dist(n.p, at(0, 0)) < INTERCHANGE_STREET + 1)
+      .sort((p, q) => dist(p.p, town) - dist(q.p, town))[0];
+    if (!exit) {
+      this.roadsChanged();
+      return;
     }
-    for (const n of ends) this.outside.add(n);
-    this.extendFreeways();
+    const access = net.addRoad({ kind: 'node', node: exit, p: exit.p }, null, { kind: 'free', p: town }, 0);
+    for (const s of access) applyStyle(net, s, { lanes: 2 });
     this.roadsChanged();
   }
 
+  /** Whether a stretch of 國道 viaduct can go here: over plain or rivers inside the map, clear of anything built. */
+  private freewayClear(a: Vec2, c: Vec2 | null, e: Vec2, from?: RoadSegment): boolean {
+    const b = this.terrain.bounds;
+    const pts = sampleQuad({ a, c: c ?? lerp(a, e, 0.5), b: e }, Math.max(4, Math.ceil(dist(a, e) / 8)));
+    const flat = this.terrain === FLAT || this.terrain === FLAT_CLASSIC;
+    for (const p of pts.slice(1)) {
+      if (p.x < b.minX + 20 || p.x > b.maxX - 20 || p.y < b.minY + 20 || p.y > b.maxY - 20) return false;
+      if (!flat && (this.terrain.sea(p.x, p.y) || this.terrain.height(p.x, p.y) > ELEVATED_HEIGHT - 3)) return false;
+      // The old all-flat map keeps within what the new 平地 map allows, so the city can still move onto it
+      if (this.terrain === FLAT && (PLAIN.sea(p.x, p.y) || PLAIN.height(p.x, p.y) > ELEVATED_HEIGHT - 3)) return false;
+      if (this.buildingAt(p) || this.aviation.airportAt(p, 4)) return false;
+      const hit = this.net.segmentAt(p, 12, ELEVATED_HEIGHT);
+      if (hit && !hit.seg.highway && Math.abs(this.net.heightAt(hit.seg, hit.t) - ELEVATED_HEIGHT) < LEVEL_TOLERANCE) return false;
+      // Carried on from `from`, it stops short of another freeway rather than run into it
+      if (from && hit && hit.seg.id !== from.id && hit.seg.highway && dist(p, a) > 1) return false;
+    }
+    return true;
+  }
+
+  /** A stretch of 國道: two lanes each way on a viaduct, named. */
+  private layFreeway(start: Snap, c: Vec2 | null, end: Snap, name: string): RoadSegment[] {
+    const made = this.net.addRoad(start, c, end, ELEVATED_HEIGHT, false, { highway: true, lanes: 2 });
+    for (const s of made) s.name = name;
+    return made;
+  }
+
   /**
-   * A diamond interchange (鑽石型交流道) where p is on a raised freeway: a street passing under it, and a pair of
-   * ramps each side, off the freeway down to the street and from the street back up onto it, each for the traffic
-   * keeping to that side. Built all at once or not at all.
+   * The 國道 the map has, as on the map of Taiwan's freeways: 國道 1 號 down the coast plain west of Kaohsiung,
+   * 國道 3 號 inland, from the hills north of town along their foot, across the Gaoping River and down the
+   * Pingtung Plain, and 國道 10 號 from 國道 1 號 north of town across 國道 3 號 towards 旗山. They run across
+   * regions not yet opened. Each is laid whole or not at all; on a city that has one already it is left as it is.
+   * Every end is then carried on to the edge of the land, and leads out of the map.
    */
-  buildInterchange(p: Vec2): { ok: boolean; cost: number; reason?: string } {
+  layFreeways(newCity = false, must?: RegionName): void {
+    const net = this.net;
+    const has = (name: string, p: Vec2) => net.segmentAt(p, 40, ELEVATED_HEIGHT)?.seg.name === name;
+    // Old cities from before the 國道 keep their own way in
+    if (!newCity && !must && ![...net.segments.values()].some((s) => s.highway && !s.built)) return;
+    this.dropOldLink();
+    const regions = this.terrain.regions;
+    const routes: { name: string; pts: Vec2[]; probe: Vec2; must?: boolean; corner?: number[] }[] = [];
+    const k = FREEWAYS.kaohsiung;
+    const p = FREEWAYS.pingtung;
+    if (regions.includes('kaohsiung') || !regions.length) {
+      routes.push({ name: k.name, pts: [freewayPoint(k, k.north, 0), freewayPoint(k, -k.south, 0)], probe: freewayPoint(k, 0, 0), must: must === 'kaohsiung' });
+    }
+    if (regions.includes('pingtung')) {
+      routes.push({ name: p.name, pts: [freewayPoint(p, -p.south, 0), freewayPoint(p, p.north, 0)], probe: freewayPoint(p, -p.south / 2, 0), must: must === 'pingtung' });
+    }
+    // Old cities from before the 國道 that open a region get its own only
+    const old = !newCity && ![...net.segments.values()].some((s) => s.highway && !s.built);
+    if (regions.includes('kaohsiung') && regions.includes('pingtung') && !old) routes.push(...FREEWAY_ROUTES);
+    for (const r of routes) {
+      if (has(r.name, r.probe)) continue;
+      // Straight stretches along the 國道 a city has already (an older, longer line) are kept, not laid again
+      const along = (x: { a: Vec2; c: Vec2 | null; b: Vec2 }) =>
+        !x.c && [x.a, lerp(x.a, x.b, 0.5), x.b].every((q) => net.segmentAt(q, 3, ELEVATED_HEIGHT)?.seg.name === r.name);
+      const pieces = smoothRoute(r.pts, r.corner ?? FREEWAY_CORNER).filter((x) => !along(x));
+      if (old && !r.must) continue;
+      if (!newCity && !r.must && !pieces.every((x) => this.freewayClear(x.a, x.c, x.b))) continue;
+      let from: Snap = net.snapLevel(pieces[0].a, 3, ELEVATED_HEIGHT);
+      pieces.forEach((x, i) => {
+        const end = i === pieces.length - 1 ? net.snapLevel(x.b, 3, ELEVATED_HEIGHT) : ({ kind: 'free', p: x.b } as Snap);
+        const made = this.layFreeway(from, x.c, end, r.name);
+        if (made.length) {
+          const last = net.node(made[made.length - 1].b);
+          from = { kind: 'node', node: last, p: last.p };
+        }
+      });
+    }
+    this.extendFreeways();
+  }
+
+  /**
+   * An earlier version bent 國道 1 號's south end east as 國道 10 號 to 國道 3 號. That stretch goes: 國道 10 號 now
+   * leaves 國道 1 號 north of town, and 國道 1 號 runs on south to the coast.
+   */
+  private dropOldLink(): void {
+    if (!this.terrain.regions.includes('pingtung')) return;
+    const net = this.net;
+    const k = FREEWAYS.kaohsiung;
+    const from = freewayPoint(k, -k.south, 0);
+    const bend = { x: from.x, y: from.y + 160 };
+    const to = freewayPoint(FREEWAYS.pingtung, -500, 0);
+    const len = dist(bend, to);
+    const via = { x: bend.x + ((to.x - bend.x) / len) * 160, y: bend.y + ((to.y - bend.y) / len) * 160 };
+    const curve = sampleQuad({ a: from, c: bend, b: via }, 16);
+    const onOld = (s: RoadSegment) => {
+      const m = s.samples[s.samples.length >> 1];
+      return pointSegment(m, via, to).d < 5 || curve.some((q) => dist(q, m) < 12);
+    };
+    const old = [...net.segments.values()].filter((s) => s.highway && !s.built && s.name === '國道 10 號' && onOld(s));
+    const ids = new Set(old.map((s) => s.id));
+    // Kept if anything the player built joins it
+    for (const s of net.segments.values()) {
+      if (ids.has(s.id)) continue;
+      if (!s.highway && old.some((o) => o.a === s.a || o.a === s.b || o.b === s.a || o.b === s.b)) return;
+    }
+    for (const s of old) net.removeSegment(s.id);
+    for (const n of [...this.outside]) if (!net.nodes.has(n)) this.outside.delete(n);
+  }
+
+  /**
+   * A diverging diamond interchange (DDI, 分岔式鑽石交流道) where p is on a raised freeway. The street under it
+   * splits into its two directions, which swap sides at a signalled crossover either side of the freeway, so
+   * traffic on and off the freeway never turns across the oncoming lanes. Each off-ramp comes down on its own
+   * side and splits for both directions of the street; each on-ramp is fed from both. Built all at once or not
+   * at all; free as part of a region's 國道 (`setup`), laid then whether or not the region is open yet.
+   */
+  buildInterchange(p: Vec2, setup = false): { ok: boolean; cost: number; reason?: string } {
     const net = this.net;
     const hit = net.segmentAt(p, 30);
     if (!hit || !hit.seg.highway || hit.seg.ramp || net.heightAt(hit.seg, hit.t) < ELEVATED_HEIGHT - 1) {
@@ -791,7 +989,7 @@ export class City {
     const q = net.quad(hit.seg);
     const at = quadPoint(q, hit.t);
     const d = quadTangent(q, hit.t);
-    // Right of traffic heading along d
+    // Traffic heading along d keeps to the +v side; the street runs along v
     const n = { x: -d.y, y: d.x };
     const pt = (u: number, v: number): Vec2 => ({ x: at.x + d.x * u + n.x * v, y: at.y + d.y * u + n.y * v });
     // The freeway must run on, raised and without other junctions, for the ramps to land on
@@ -801,132 +999,63 @@ export class City {
         return { ok: false, cost: 0, reason: `交流道前後各 ${INTERCHANGE_REACH} 公尺都要是平直的高架高速公路` };
       }
     }
-    const R = INTERCHANGE_WIDTH;
-    const L = INTERCHANGE_REACH;
-    // Plan: the street under the freeway, then four ramps
-    const pieces: { a: Vec2; c: Vec2 | null; b: Vec2; kind: RoadKind; ha: number; hb: number }[] = [
-      { a: pt(0, -INTERCHANGE_STREET), c: null, b: pt(0, INTERCHANGE_STREET), kind: 'street', ha: 0, hb: 0 },
-      { a: pt(-L, 0), c: pt(-L * 0.55, R), b: pt(0, R), kind: 'ramp', ha: ELEVATED_HEIGHT, hb: 0 },
-      { a: pt(0, R), c: pt(L * 0.55, R), b: pt(L, 0), kind: 'ramp', ha: 0, hb: ELEVATED_HEIGHT },
-      { a: pt(L, 0), c: pt(L * 0.55, -R), b: pt(0, -R), kind: 'ramp', ha: ELEVATED_HEIGHT, hb: 0 },
-      { a: pt(0, -R), c: pt(-L * 0.55, -R), b: pt(-L, 0), kind: 'ramp', ha: 0, hb: ELEVATED_HEIGHT },
-    ];
-    const cost = pieces.reduce((sum, x) => sum + Math.round(this.roadCost(x.a, x.c, x.b, x.ha, x.hb) * ROAD_KINDS[x.kind].cost), 0);
+    const pieces = ddiPlan().map((x) => ({ ...x, a: pt(x.a.x, x.a.y), c: x.c && pt(x.c.x, x.c.y), b: pt(x.b.x, x.b.y) }));
+    const cost = setup ? 0 : pieces.reduce((sum, x) => sum + Math.round(this.roadCost(x.a, x.c, x.b, x.ha, x.hb) * ROAD_KINDS[x.kind].cost), 0);
     if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
-    const snapAt = (p: Vec2, h: number): Snap => net.snapLevel(p, 1, h);
-    const built: RoadSegment[] = [];
+    const before = new Set(net.segments.keys());
     for (const x of pieces) {
-      const r = this.buildRoad(snapAt(x.a, x.ha), x.c, snapAt(x.b, x.hb), true, x.kind === 'street' ? 0 : x.hb, x.kind);
+      const a = net.snapLevel(x.a, 1, x.ha);
+      const b = net.snapLevel(x.b, 1, x.hb);
+      const height = x.ha === x.hb ? x.ha : 0;
+      if (setup) {
+        const spec = ROAD_KINDS[x.kind];
+        net.addRoad(a, x.c, b, height, spec.oneway, x.kind === 'ramp' ? { ramp: true } : spec.lanes > 1 ? { lanes: spec.lanes as LaneCount } : {});
+        continue;
+      }
+      const r = this.buildRoad(a, x.c, b, true, height, x.kind);
       if (!r.ok) {
-        for (const seg of built) if (net.segments.has(seg.id)) net.removeSegment(seg.id);
+        for (const id of [...net.segments.keys()]) if (!before.has(id)) net.removeSegment(id);
         this.roadsChanged();
         return { ok: false, cost, reason: `這裡蓋不下交流道：${r.reason ?? '有東西擋住'}` };
       }
-      built.push(...(r.segs ?? []));
     }
     this.spend(cost);
+    this.roadsChanged();
     return { ok: true, cost };
   }
 
   /**
-   * Where 國道 1 號 turns off towards Pingtung as 國道 10 號, when the land has both regions: from its south end it
-   * bends east (`bend` is the curve's control point) to `via`, then runs straight across the Gaoping River to meet
-   * 國道 3 號 at `to`.
-   */
-  private freewayLink(): { from: Vec2; bend: Vec2; via: Vec2; to: Vec2 } | null {
-    if (!this.terrain.regions.includes('kaohsiung') || !this.terrain.regions.includes('pingtung')) return null;
-    const k = FREEWAYS.kaohsiung;
-    const from = freewayPoint(k, -k.south, 0);
-    const down = { x: -k.axis.x, y: -k.axis.y };
-    const bend = { x: from.x + down.x * LINK_BEND, y: from.y + down.y * LINK_BEND };
-    const to = freewayPoint(FREEWAYS.pingtung, LINK_AT, 0);
-    const len = dist(bend, to) || 1;
-    const via = { x: bend.x + ((to.x - bend.x) / len) * LINK_BEND, y: bend.y + ((to.y - bend.y) / len) * LINK_BEND };
-    return { from, bend, via, to };
-  }
-
-  /**
-   * Carries each region's 國道 on from where it was laid out to the edge of the land it may use, so it no longer
-   * stops in the middle of the plain: along its line to the edge of the map, a coast or the mountains, or, for
-   * 國道 1 號's south end, east as 國道 10 號 to the edge of Pingtung and, once Pingtung is open, on to 國道 3 號.
-   * The ends stay open to the map's edge for regions added later. Nothing already built is cleared for it: it stops
-   * short of buildings and raised roads in its way. Running it again only carries on what is left.
+   * Carries each 國道 end on from where it was laid out to the edge of the land: straight along its own line to
+   * the edge of the map, a coast or the hills, stopping short of anything built in its way. The ends stay open
+   * to the map's edge, for regions added later. Running it again only carries on what is left.
    */
   private extendFreeways(): void {
     const net = this.net;
-    const link = this.freewayLink();
-    const b = this.terrain.bounds;
-    const inside = (p: Vec2) => p.x > b.minX + 20 && p.x < b.maxX - 20 && p.y > b.minY + 20 && p.y < b.maxY - 20;
-    // Whether a straight (or curved) stretch of viaduct can go here
-    const clear = (a: Vec2, c: Vec2 | null, e: Vec2): boolean => {
-      if (!inside(e) || this.terrainProblem(a, c, e, ELEVATED_HEIGHT, ELEVATED_HEIGHT)) return false;
-      // The old all-flat map stays within what the new 平地 map allows, so the city can still move onto it
-      if (this.terrain === FLAT && this.terrainProblem(a, c, e, ELEVATED_HEIGHT, ELEVATED_HEIGHT, PLAIN)) return false;
-      if (this.crossesAirport(a, c, e, ELEVATED_HEIGHT, ELEVATED_HEIGHT)) return false;
-      const pts = sampleQuad({ a, c: c ?? lerp(a, e, 0.5), b: e }, Math.max(4, Math.ceil(dist(a, e) / 8)));
-      for (const p of pts.slice(1)) {
-        // Bridges over rivers, but the 國道 ends at the coast
-        if (this.terrain.sea(p.x, p.y) || this.buildingAt(p)) return false;
-        const hit = net.segmentAt(p, 12, ELEVATED_HEIGHT);
-        if (hit && !hit.seg.highway && Math.abs(net.heightAt(hit.seg, hit.t) - ELEVATED_HEIGHT) < LEVEL_TOLERANCE) return false;
+    const ends = [...net.nodes.values()].filter((node) => {
+      if (Math.abs(node.h - ELEVATED_HEIGHT) > 0.5) return false;
+      const touching = [...net.segments.values()].filter((s) => s.a === node.id || s.b === node.id);
+      return touching.length === 1 && touching[0].highway && !touching[0].built;
+    });
+    // Ends the freeway had before (moved on below) and ends of the 國道 laid since lead out of the map
+    for (const node of ends) this.outside.add(node.id);
+    for (const start of ends) {
+      if (FREEWAY_FIXED_ENDS.some((q) => dist(q, start.p) < 5)) continue;
+      const seg = [...net.segments.values()].find((s) => s.a === start.id || s.b === start.id)!;
+      const tan = quadTangent(net.quad(seg), seg.a === start.id ? 0 : 1);
+      const dir = seg.a === start.id ? { x: -tan.x, y: -tan.y } : tan;
+      let reach = start.p;
+      for (let d = FREEWAY_STEP; d <= 6000; d += FREEWAY_STEP) {
+        const next = { x: start.p.x + dir.x * d, y: start.p.y + dir.y * d };
+        if (!this.freewayClear(reach, null, next, seg)) break;
+        reach = next;
       }
-      return true;
-    };
-    const lay = (from: RoadNode, c: Vec2 | null, end: Snap, name: string | undefined): RoadNode => {
-      const made = net.addRoad({ kind: 'node', node: from, p: from.p }, c, end, ELEVATED_HEIGHT, false, { highway: true, lanes: 2 });
-      for (const s of made) s.name = name;
-      return made.length ? net.node(made[made.length - 1].b) : from;
-    };
-    // Walks from p towards `toward` (or on along `dir`) in steps while the way is clear; the furthest point reached
-    const walk = (p: Vec2, dir: Vec2, limit: number): Vec2 => {
-      let at = p;
-      for (let d = FREEWAY_STEP; d <= limit + 0.01; d += FREEWAY_STEP) {
-        const next = d > limit - FREEWAY_STEP ? { x: p.x + dir.x * limit, y: p.y + dir.y * limit } : { x: p.x + dir.x * d, y: p.y + dir.y * d };
-        if (!clear(at, null, next)) break;
-        at = next;
-        if (d > limit - FREEWAY_STEP) break;
-      }
-      return at;
-    };
-    for (const id of [...this.outside]) {
-      let node = net.nodes.get(id);
-      if (!node || Math.abs(node.h - ELEVATED_HEIGHT) > 0.5) continue;
-      const touching = [...net.segments.values()].filter((s) => s.a === id || s.b === id);
-      if (touching.length !== 1 || !touching[0].highway || touching[0].built) continue;
-      const seg = touching[0];
-      let name = seg.name;
-      const start = node;
-      // 國道 1 號's south end turns east as 國道 10 號
-      if (link && dist(node.p, link.from) < 1 && clear(node.p, link.bend, link.via)) {
-        node = lay(node, link.bend, { kind: 'free', p: link.via }, LINK_NAME);
-        name = LINK_NAME;
-      }
-      if (link && pointSegment(node.p, link.via, link.to).d < 3) {
-        const len = dist(node.p, link.to);
-        const dir = { x: (link.to.x - node.p.x) / (len || 1), y: (link.to.y - node.p.y) / (len || 1) };
-        const onto = net.snapLevel(link.to, 3, ELEVATED_HEIGHT);
-        const target = onto.kind !== 'free' && (onto.kind === 'segment' ? onto.seg.highway : true);
-        // With no 國道 3 號 there yet, it waits a step short of where it will join
-        const reach = walk(node.p, dir, target ? len : len - FREEWAY_STEP);
-        const joins = target && dist(reach, link.to) < 1;
-        if (joins) node = lay(node, null, onto, LINK_NAME);
-        else if (dist(reach, node.p) >= FREEWAY_STEP) node = lay(node, null, { kind: 'free', p: reach }, LINK_NAME);
-        this.outside.delete(id);
-        // Joined to 國道 3 號, it leads nowhere out of the map any more
-        if (!joins) this.outside.add(node.id);
-        continue;
-      }
-      // Any other end: straight on along its own line to the edge of the land
-      const q = net.quad(seg);
-      const tan = quadTangent(q, seg.a === id ? 0 : 1);
-      const dir = seg.a === id ? { x: -tan.x, y: -tan.y } : tan;
-      const reach = walk(node.p, dir, 6000);
-      if (dist(reach, node.p) >= FREEWAY_STEP) node = lay(node, null, { kind: 'free', p: reach }, name);
-      if (node !== start) {
-        this.outside.delete(id);
-        this.outside.add(node.id);
-      }
+      if (dist(reach, start.p) < FREEWAY_STEP) continue;
+      const made = this.layFreeway({ kind: 'node', node: start, p: start.p }, null, { kind: 'free', p: reach }, seg.name ?? '');
+      if (!made.length) continue;
+      this.outside.delete(start.id);
+      this.outside.add(made[made.length - 1].b);
     }
+    for (const n of [...this.outside]) if (!net.nodes.has(n)) this.outside.delete(n);
     this.labelsVersion++;
   }
 
@@ -2126,7 +2255,7 @@ export class City {
     if (terrain !== FLAT) return City.load(data, terrain);
     const flat = City.load(data, FLAT, false);
     if (flat.fitsTerrain(PLAIN)) return City.load(data, PLAIN);
-    flat.extendFreeways();
+    flat.layFreeways();
     flat.roadsChanged();
     return flat;
   }
@@ -2205,7 +2334,7 @@ export class City {
     }
     city.holdLand = false;
     city.restoreGate();
-    if (extend) city.extendFreeways();
+    if (extend) city.layFreeways();
     city.roadsChanged();
     // The stations just read are already accounted for: the first step needn't clear the land under them again
     city.stationsChanged();

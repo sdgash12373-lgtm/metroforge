@@ -21,6 +21,11 @@ const PLAYER_TOP = 1.6;
 const LANE_CHANGE_RATE = 0.7;
 /** Vehicles don't start a lane change this close to the junction ahead. */
 const NO_CHANGE_NEAR = 12;
+/**
+ * Vehicles keep to the lane they cruise in until this close to the junction where they turn, then move over to
+ * the lane for the turn: so on a long road the turning traffic doesn't fill one lane from end to end.
+ */
+const TURN_LANE_REACH = 90;
 
 export type Dir = 1 | -1;
 export type VehicleKind = 'car' | 'police' | 'scooter' | 'truck' | 'bus' | 'metro' | 'train' | 'hsr';
@@ -83,8 +88,10 @@ export interface Vehicle {
   sub?: number;
   /** where the vehicle is drawn across the lanes, easing towards `sub` so lane changes are smooth */
   lat?: number;
-  /** the lane it is moving over to for its next turn */
+  /** the lane it keeps to along this road */
   want?: number;
+  /** the lane for its turn at the end of this road, moved into once near the junction (none going straight on) */
+  turn?: number;
   /** driven by the player: never gives up or arrives, speed set from the controls */
   player?: boolean;
   /** player's throttle, −1 (brake) .. 1 */
@@ -360,7 +367,7 @@ export class Traffic {
     };
     const seg = this.net.segments.get(v.seg)!;
     v.sub = Math.floor(tint * 997) % this.laneCount(seg);
-    v.want = this.wantSub(v, { seg: v.seg, dir: v.dir }, v.route[0]);
+    this.planLanes(v, { seg: v.seg, dir: v.dir }, v.route[0]);
     v.lat = v.sub;
     // Don't drop a vehicle on top of another one
     const lane = this.lanes.get(laneKey(v.seg, v.dir));
@@ -397,6 +404,7 @@ export class Traffic {
     v.pos = Math.max(0, seg.length - v.pos);
     v.sub = n - 1;
     v.want = v.sub;
+    v.turn = undefined;
     v.lat = n - 1 + (this.rules.laneOffset + off) / LANE_WIDTH;
     v.speed = Math.min(v.speed, 5);
     v.route = [];
@@ -453,7 +461,7 @@ export class Traffic {
   private entryRoom(v: Vehicle, lane: LaneRef, after: LaneRef | undefined): { room: number; sub: number } {
     const seg = this.net.segments.get(lane.seg);
     const n = seg ? this.laneCount(seg) : 1;
-    const want = Math.min(n - 1, this.wantSub(v, lane, after));
+    const want = Math.min(n - 1, this.wantSub(v, lane, after, seg ? seg.length : 0));
     const room = this.subRoom(lane, want);
     if (room >= VEHICLE_LENGTH[v.kind] + MIN_GAP) return { room, sub: want };
     let best = { room, sub: want };
@@ -465,27 +473,52 @@ export class Traffic {
   }
 
   /**
-   * The sub-lane a vehicle on `lane` should be in for where it goes next: inside for a left turn, the
-   * kerb for a right turn, a bus stop or the end of its trip (once on its last road), and otherwise the lane it is in (or one picked
-   * from its tint when it comes off a narrower road), so traffic spreads over every lane.
+   * The sub-lane a vehicle on `lane` should be in for its turn at the end of it: inside for a left turn (either of
+   * the two inside lanes on a wide road), the kerb for a right turn, a bus stop or the end of its trip (once on its
+   * last road); none going straight on.
    */
-  private wantSub(v: Vehicle, lane: LaneRef, after: LaneRef | undefined): number {
+  private turnSub(v: Vehicle, lane: LaneRef, after: LaneRef | undefined): number | undefined {
     const seg = this.net.segments.get(lane.seg);
     const n = seg ? this.laneCount(seg) : 1;
     if (n === 1 || !seg) return 0;
     if (v.kind === 'bus' || (!after && v.seg === lane.seg)) return 0;
     const next = after && this.net.segments.get(after.seg);
-    if (after && next) {
-      const a = this.headingAt(seg, lane.dir, seg.length);
-      const b = this.headingAt(next, after.dir, 0);
-      // y points south on the map, so a turn to the left has a negative cross product
-      const turn = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
-      if (turn < -0.5) return n - 1;
-      if (turn > 0.5) return 0;
-    }
+    if (!after || !next) return undefined;
+    const a = this.headingAt(seg, lane.dir, seg.length);
+    const b = this.headingAt(next, after.dir, 0);
+    // y points south on the map, so a turn to the left has a negative cross product
+    const turn = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
+    if (turn < -0.5) return n >= 3 ? n - 1 - (Math.floor(v.tint * 991) % 2) : n - 1;
+    if (turn > 0.5) return 0;
+    return undefined;
+  }
+
+  /**
+   * The sub-lane a vehicle keeps to along `lane` while not about to turn: the lane it is in, or coming off a
+   * narrower road or a turn one picked from its tint, so traffic spreads over every lane.
+   */
+  private cruiseSub(v: Vehicle, lane: LaneRef): number {
+    const seg = this.net.segments.get(lane.seg);
+    const n = seg ? this.laneCount(seg) : 1;
+    if (n === 1) return 0;
+    if (v.kind === 'bus') return 0;
+    if (v.seg === lane.seg) return Math.min(n - 1, v.sub ?? 0);
+    // Straight on from a road as wide keeps its lane; after a turn it picks one afresh
     const cur = this.net.segments.get(v.seg);
-    if (cur && v.seg !== lane.seg && this.laneCount(cur) > 1) return Math.min(n - 1, v.sub ?? 0);
+    if (cur && v.turn === undefined && this.laneCount(cur) > 1) return Math.min(n - 1, v.sub ?? 0);
     return Math.floor(v.tint * 997) % n;
+  }
+
+  /** The lane to drive into on `lane`, `left` metres from its end: the turn's lane when that close to the junction. */
+  private wantSub(v: Vehicle, lane: LaneRef, after: LaneRef | undefined, left: number): number {
+    const turn = this.turnSub(v, lane, after);
+    return turn !== undefined && left < TURN_LANE_REACH ? turn : this.cruiseSub(v, lane);
+  }
+
+  /** Sets the lanes a vehicle keeps to on `lane` and moves into for its turn at the end. */
+  private planLanes(v: Vehicle, lane: LaneRef, after: LaneRef | undefined): void {
+    v.want = this.cruiseSub(v, lane);
+    v.turn = this.turnSub(v, lane, after);
   }
 
   step(dt: number): void {
@@ -573,8 +606,9 @@ export class Traffic {
 
         // Move over a lane towards the one wanted for the next turn, once the lane beside is clear
         const sub0 = v.sub ?? 0;
-        if (!v.player && v.want !== undefined && v.want !== sub0 && v.pos < seg.length - NO_CHANGE_NEAR) {
-          const to = sub0 + Math.sign(v.want - sub0);
+        const want = v.turn !== undefined && seg.length - v.pos < TURN_LANE_REACH ? v.turn : v.want;
+        if (!v.player && want !== undefined && want !== sub0 && v.pos < seg.length - NO_CHANGE_NEAR) {
+          const to = sub0 + Math.sign(want - sub0);
           if (!this.laneTaken(v, to)) v.sub = to;
         }
         const target = v.sub ?? 0;
@@ -602,7 +636,10 @@ export class Traffic {
             v.sub = v.player ? Math.min(v.sub ?? 0, top) : entry.sub;
             v.lat = Math.min(v.lat ?? v.sub, top);
             v.route.shift();
-            v.want = v.player ? v.sub : this.wantSub(v, next, v.route[0]);
+            if (v.player) {
+              v.want = v.sub;
+              v.turn = undefined;
+            } else this.planLanes(v, next, v.route[0]);
             // Joined the tail of the next lane: keep the index right for cars behind
             const k = laneKey(next.seg, next.dir);
             const l = this.lanes.get(k);
