@@ -69,3 +69,20 @@ describe('市民信箱', () => {
     expect(recent.some((t) => t.startsWith('lack-') || t.startsWith('idea-'))).toBe(true);
   });
 });
+
+describe('YouBike', () => {
+  it('earns rental fees from the homes around a station', () => {
+    const city = new City();
+    city.money = 1e7;
+    city.buildRoad(free(-400, 0), null, free(400, 0), true);
+    city.addOutsideConnection([...city.net.nodes.values()].find((n) => n.p.x === -400)!.id);
+    city.paint({ x: 0, y: 60 }, 120, Zone.Commercial);
+    city.paint({ x: 0, y: -60 }, 120, Zone.ResidentialLow);
+    const s = city.facilitySpot('youbike', { x: 0, y: -12 });
+    expect(city.buildFacility('youbike', s.p, s.angle).ok).toBe(true);
+    const r = rng();
+    for (let i = 0; i < 900; i++) city.tick(r);
+    expect(city.bikeRides).toBeGreaterThan(0);
+    expect(city.budget.bikes).toBeGreaterThan(0);
+  });
+});

@@ -3,7 +3,9 @@ import { type Facility, dims, toWorld } from '../sim/facilities';
 import { hash01 } from '../sim/geometry';
 import { Builder } from './roadMesh';
 import { arena, cityHall, dragonTiger, ferrisWheel, tower85 } from './landmarks';
-import { SIGNS, SIGN_LABELS, type SignLabel, fire, hospital, park, parking, police, school } from './civic';
+import type { SignSpec } from './civic';
+import { MARKET_LABELS, MARKET_SIGNS, nightMarket, youbike } from './market';
+import { SIGNS as CIVIC_SIGNS, SIGN_LABELS as CIVIC_LABELS, fire, hospital, park, parking, police, school } from './civic';
 
 type P3 = [number, number, number];
 
@@ -213,6 +215,8 @@ const MODELS: Record<Facility['kind'], (k: Kit, w: number, d: number) => void> =
   ecoPark,
   footbridge,
   parking,
+  youbike,
+  nightMarket,
   cargoPort,
   cruisePort,
 };
@@ -370,6 +374,10 @@ export function buildFacilityGeometry(facilities: Iterable<Facility>): THREE.Buf
   }
   return b.geometry();
 }
+
+const SIGN_LABELS: Record<string, { text: string; bg: string; fg: string; vertical?: boolean }> = { ...CIVIC_LABELS, ...MARKET_LABELS };
+const SIGNS: Partial<Record<string, SignSpec[]>> = { ...CIVIC_SIGNS, ...MARKET_SIGNS };
+type SignLabel = string;
 
 const ATLAS = 1024;
 /** Pixel height of a horizontal sign in the atlas; vertical signs are this wide. */

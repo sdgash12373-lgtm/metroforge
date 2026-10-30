@@ -32,6 +32,7 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
     { id: 'hsr', label: '高鐵' },
     { id: 'airport', label: '機場' },
     { id: 'port', label: '港口' },
+    { id: 'youbike', label: 'YouBike' },
   ],
   build: [
     ...SERVICE_KINDS.map((k) => ({ id: k as Tool, label: FACILITIES[k].label })),
@@ -39,6 +40,7 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
     { id: 'greenery', label: '綠化' },
     { id: 'footbridge', label: '天橋' },
     { id: 'parking', label: '停車場' },
+    { id: 'nightMarket', label: '夜市' },
   ],
   names: [
     { id: 'streetName', label: '路名' },
@@ -49,7 +51,7 @@ const groupOf = (t: Tool): Group | null => (Object.keys(GROUPS) as Group[]).find
 
 type DockItem = Tool | Group;
 type BudgetRow =
-  | 'res' | 'biz' | 'fuel' | 'subsidy' | 'fares' | 'air' | 'parking' | 'tourism' | 'trade' | 'income'
+  | 'res' | 'biz' | 'fuel' | 'subsidy' | 'fares' | 'air' | 'parking' | 'bikes' | 'tourism' | 'trade' | 'income'
   | 'roads' | 'transit' | 'airUpkeep' | 'services' | 'admin' | 'running' | 'construction' | 'net';
 const TOOLS: { id: DockItem; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
@@ -259,6 +261,7 @@ export class Hud {
       fares: row('運輸票價（規費）'),
       air: row('機場規費'),
       parking: row('停車費（規費）'),
+      bikes: row('YouBike 租借（規費）'),
       tourism: row('觀光收入（其他）'),
       trade: row('外貿收入（其他）'),
       income: row('每月收入', 'sub'),
@@ -1050,6 +1053,7 @@ export class Hud {
         fares: b.transitFares,
         air: b.airIncome,
         parking: b.parking,
+        bikes: b.bikes,
         tourism: b.tourism,
         trade: b.trade,
         income: t.income,

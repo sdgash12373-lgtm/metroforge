@@ -190,6 +190,12 @@ export function composeLetter(city: City, rand: Rng, hour: number, recent: reado
   const lines = city.transits.reduce((s, t) => s + t.lines.size, 0);
   if (pop > 1500 && !lines) add({ topic: 'no-bus', tone: 'suggest', weight: 2, texts: ['希望有公車可以搭，老人家不會騎車', '要是有捷運就好了，每天塞車好浪費時間'] });
   if (lines) add({ topic: 'bus', tone: 'mood', weight: 0.8, texts: ['每天搭公車上班，看看窗外的風景也不錯', '捷運跟公車越來越方便，我都不開車了'] });
+  const own = (kind: string) => [...city.facilities.values()].filter((f) => f.kind === kind);
+  const markets = own('nightMarket');
+  if (markets.length) add({ topic: 'night-market', tone: 'mood', weight: 1.2, texts: ['下班去夜市吃雞排配珍奶，一天的疲勞都不見了', '夜市的蚵仔煎超好吃，週末一定要去', '帶孩子去夜市撈金魚，玩得好開心'], at: pick(markets, rand).p });
+  const docks = own('youbike');
+  if (docks.length) add({ topic: 'youbike', tone: 'mood', weight: 0.9, texts: ['騎 YouBike 去捷運站，又快又環保', '家門口就有 YouBike 站，買菜方便多了'], at: pick(docks, rand).p });
+  else if (pop > 2000) add({ topic: 'want-youbike', tone: 'suggest', weight: 0.8, texts: ['希望附近設 YouBike 站，短程騎車就好不用開車'] });
   const garages = city.parkingWanted.size;
   if (!garages && pop > 3000 && jobs > 1500) add({ topic: 'no-parking', tone: 'suggest', weight: 1.2, texts: ['開車去市區都找不到停車位，可以蓋公有停車場嗎？', '路邊違停好多，希望多蓋幾座停車場'] });
   if (garages && city.parkingFee >= 60) {
