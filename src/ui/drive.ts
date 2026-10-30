@@ -14,9 +14,9 @@ const TURN_ZONE = 30;
 type View = 'chase' | 'driver' | 'drone';
 
 /** 空拍機: how fast it flies (m/s) near the ground, and how much faster per metre of height; how quickly it turns to a drag (rad/px). */
-const DRONE_SPEED = 18;
-const DRONE_SPEED_PER_M = 0.5;
-const DRONE_LOOK = 0.005;
+const DRONE_SPEED = 8;
+const DRONE_SPEED_PER_M = 0.25;
+const DRONE_LOOK = 0.002;
 /** It may go anywhere (through buildings and the ground too), only kept within a few km of the city. */
 const DRONE_BOUNDS = 12000;
 const DRONE_FLOOR = -300;
@@ -54,6 +54,8 @@ export class DriveMode {
   private savedNear = 1;
   /** 空拍機: where it is and which way it looks */
   private drone = { pos: new THREE.Vector3(), yaw: 0, pitch: -0.3 };
+  /** where the controls point the drone; it turns there smoothly */
+  private aim = { yaw: 0, pitch: -0.3 };
   /** ▲ / ▼ held on touch screens: +1 up, −1 down */
   private lift = 0;
   /** the view to go back to when the drone lands */
@@ -348,6 +350,7 @@ export class DriveMode {
       this.drone.pos.copy(cam.position).add(new THREE.Vector3(0, 6, 0));
       this.drone.yaw = Math.atan2(dir.x, dir.z);
       this.drone.pitch = -0.35;
+      this.aim = { yaw: this.drone.yaw, pitch: this.drone.pitch };
     }
     const flying = this.view === 'drone';
     this.droneBtn.textContent = flying ? '🚗 回到車上' : '🚁 空拍機';
@@ -385,8 +388,8 @@ export class DriveMode {
     }, true);
     addEventListener('pointermove', (e) => {
       if (e.pointerId !== id) return;
-      this.drone.yaw -= (e.clientX - last.x) * DRONE_LOOK;
-      this.drone.pitch = THREE.MathUtils.clamp(this.drone.pitch - (e.clientY - last.y) * DRONE_LOOK, -1.55, 1.55);
+      this.aim.yaw -= (e.clientX - last.x) * DRONE_LOOK;
+      this.aim.pitch = THREE.MathUtils.clamp(this.aim.pitch - (e.clientY - last.y) * DRONE_LOOK, -1.55, 1.55);
       last = { x: e.clientX, y: e.clientY };
       e.stopImmediatePropagation();
     }, true);
@@ -406,11 +409,16 @@ export class DriveMode {
   private fly(dt: number): void {
     const d = this.drone;
     const k = this.keys;
-    const turn = 1.6 * dt;
-    if (k.has('arrowleft')) d.yaw += turn;
-    if (k.has('arrowright')) d.yaw -= turn;
-    if (k.has('arrowup')) d.pitch = Math.min(1.55, d.pitch + turn);
-    if (k.has('arrowdown')) d.pitch = Math.max(-1.55, d.pitch - turn);
+    const turn = 0.8 * dt;
+    const a = this.aim;
+    if (k.has('arrowleft')) a.yaw += turn;
+    if (k.has('arrowright')) a.yaw -= turn;
+    if (k.has('arrowup')) a.pitch = Math.min(1.55, a.pitch + turn);
+    if (k.has('arrowdown')) a.pitch = Math.max(-1.55, a.pitch - turn);
+    // Ease towards the aim so a quick drag swings the view gently
+    const ease = 1 - Math.exp(-dt * 6);
+    d.yaw += (a.yaw - d.yaw) * ease;
+    d.pitch += (a.pitch - d.pitch) * ease;
     let fwd = this.stick.y;
     let strafe = this.stick.x;
     if (k.has('w')) fwd = 1;
@@ -420,7 +428,7 @@ export class DriveMode {
     let up = this.lift;
     if (k.has('e') || k.has(' ')) up = 1;
     if (k.has('q') || k.has('c')) up = -1;
-    const speed = (DRONE_SPEED + Math.abs(d.pos.y) * DRONE_SPEED_PER_M) * (k.has('shift') ? 4 : 1);
+    const speed = (DRONE_SPEED + Math.abs(d.pos.y) * DRONE_SPEED_PER_M) * (k.has('shift') ? 3 : 1);
     const look = new THREE.Vector3(Math.sin(d.yaw) * Math.cos(d.pitch), Math.sin(d.pitch), Math.cos(d.yaw) * Math.cos(d.pitch));
     const right = new THREE.Vector3(-Math.cos(d.yaw), 0, Math.sin(d.yaw));
     d.pos.addScaledVector(look, fwd * speed * dt).addScaledVector(right, strafe * speed * dt);
