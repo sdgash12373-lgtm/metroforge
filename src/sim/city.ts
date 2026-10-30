@@ -32,6 +32,26 @@ import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
 import { type StationPose, stationCovers, stationFront, stationPose, stationSide } from './stations';
 import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, type RoadNode, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
+import {
+  CLUSTER_JOBS,
+  CLUSTER_MIN_JOBS,
+  CLUSTER_PAY,
+  CLUSTER_RAMP_REACH,
+  CLUSTER_REACH,
+  CLUSTER_RES_TAX,
+  CLUSTER_TAX,
+  type Cluster,
+  METRO_REACH,
+  POLICIES,
+  POLICY_RANK,
+  type PolicyKey,
+  PointGrid,
+  type Review,
+  TOD_DENSITY,
+  TOD_LEVELS,
+  TOD_REACH,
+  emptyReview,
+} from './policy';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, FLAT_CLASSIC, PLAIN, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic, taxiTint } from './traffic';
@@ -310,6 +330,8 @@ export interface Budget {
   tourism: number;
   /** 外貿收入: industry's goods shipped abroad through cargo ports */
   trade: number;
+  /** 產業聚落: the extra business tax science parks in a cluster pay, and the higher pay of the people round them */
+  cluster: number;
   /** 營運支出 */
   roadUpkeep: number;
   /** buses, trains and track */
@@ -319,15 +341,17 @@ export interface Budget {
   servicesUpkeep: number;
   /** civil servants and city offices, per resident by rank */
   admin: number;
+  /** 市政政策 in force */
+  policy: number;
   /** 建設支出: roads, track, buildings bought, averaged over the last few days */
   construction: number;
 }
 
 export function budgetTotals(b: Budget): { income: number; taxes: number; fees: number; other: number; running: number; balance: number } {
-  const taxes = b.residentialTax + b.businessTax + b.fuelTax;
+  const taxes = b.residentialTax + b.businessTax + b.fuelTax + b.cluster;
   const fees = b.transitFares + b.airIncome + b.parking + b.bikes;
   const income = taxes + b.subsidy + fees + b.tourism + b.trade;
-  const running = b.roadUpkeep + b.transitUpkeep + b.airUpkeep + b.servicesUpkeep + b.admin;
+  const running = b.roadUpkeep + b.transitUpkeep + b.airUpkeep + b.servicesUpkeep + b.admin + b.policy;
   return { income, taxes, fees, other: b.tourism + b.trade, running, balance: income - running - b.construction };
 }
 
@@ -388,6 +412,9 @@ export interface SaveData extends NetSave {
   airFare?: number;
   /** v20-ish: parking fee per hour */
   parkingFee?: number;
+  /** 市政政策 in force, and yesterday's bus and train boardings (for the review) */
+  policies?: PolicyKey[];
+  ridersDay?: number;
   /** v4: street names (segment id, name) and districts (id, x, y, radius, name, colour) */
   roadNames?: [number, string][];
   districts?: [number, number, number, number, string, number][];
@@ -473,13 +500,30 @@ export class City {
     bikes: 0,
     tourism: 0,
     trade: 0,
+    cluster: 0,
     roadUpkeep: 0,
     transitUpkeep: 0,
     airUpkeep: 0,
     servicesUpkeep: 0,
     admin: 0,
+    policy: 0,
     construction: 0,
   };
+  /** 市政政策 in force */
+  policies = new Set<PolicyKey>();
+  /** 升格審查: each bar and whether it holds, from the last survey */
+  review: Review = emptyReview();
+  /** 產業聚落 round each university, from the last survey */
+  clusters: Cluster[] = [];
+  /** homes, shops and offices round a station under 捷運聯合開發, from the last survey */
+  tod = new Set<Lot>();
+  /** residents and jobs on TOD lots, and residents earning more in a 產業聚落, from the last survey */
+  policyStats = { todPeople: 0, todJobs: 0, clusterJobs: 0, clusterPeople: 0 };
+  /** boardings on buses and trains over the last full game day, and so far today */
+  ridersDay = 0;
+  private ridersSoFar = 0;
+  /** what the clusters pay on top of the usual taxes, per step */
+  private clusterStep = 0;
   /** rank: index into LEVELS */
   level = 0;
   /** bumped when the rank changes */
@@ -1867,13 +1911,64 @@ export class City {
     // Chemical plants, bucketed so each home only looks at the ones around it
     const fumes = new Map<string, Vec2[]>();
     const bucket = (x: number, y: number) => `${Math.floor(x / POLLUTION_REACH)},${Math.floor(y / POLLUTION_REACH)}`;
+    // 市政政策 from 縣轄市: universities that may anchor a 產業聚落, and the science parks round them
+    const ranked = this.level >= POLICY_RANK;
+    const universities = ranked ? [...this.facilities.values()].filter((f) => f.kind === 'university') : [];
+    const fabs: Lot[] = [];
     for (const seg of this.net.segments.values()) {
       for (const lot of seg.lots) {
-        if (lot.blocked || lot.zone !== Zone.Chemical || !lot.level) continue;
+        if (lot.blocked || !lot.level) continue;
+        if (lot.zone === Zone.SciencePark && universities.length) fabs.push(lot);
+        if (lot.zone !== Zone.Chemical) continue;
         const k = bucket(lot.x, lot.y);
         (fumes.get(k) ?? fumes.set(k, []).get(k)!).push(lot);
       }
     }
+    const ramps: Vec2[] = [];
+    if (universities.length) {
+      // Where freeway traffic comes off onto the city's streets: a ramp's ends, or a freeway piece meeting a street
+      const fast = new Set<number>();
+      const slow = new Set<number>();
+      for (const seg of this.net.segments.values()) {
+        const set = seg.ramp || seg.highway ? fast : slow;
+        set.add(seg.a);
+        set.add(seg.b);
+        if (seg.ramp) ramps.push(this.net.nodes.get(seg.a)!.p, this.net.nodes.get(seg.b)!.p);
+      }
+      for (const id of fast) if (slow.has(id)) ramps.push(this.net.nodes.get(id)!.p);
+    }
+    const industryOn = this.policies.has('industry');
+    this.clusters = universities.map((u) => {
+      let jobs = 0;
+      for (const lot of fabs) if (dist(lot, u.p) < CLUSTER_REACH) jobs += lot.level * ZONES[Zone.SciencePark].perLevel;
+      const ramp = ramps.some((q) => dist(q, u.p) < CLUSTER_RAMP_REACH);
+      return { id: u.id, p: u.p, jobs, ramp, active: industryOn && ramp && jobs >= CLUSTER_MIN_JOBS };
+    });
+    const clusterGrid = new PointGrid(this.clusters.filter((c) => c.active).map((c) => c.p), CLUSTER_REACH);
+    // Stations on running lines: 捷運聯合開發 round all of them, the review counts homes near 捷運
+    const stations: Vec2[] = [];
+    const metroStations: Vec2[] = [];
+    if (ranked) {
+      for (const k of RAIL_KINDS) {
+        const t = this.rails[k].transit;
+        const ids = new Set<number>();
+        for (const line of t.lines.values()) if (line.ok) for (const id of line.stops) ids.add(id);
+        for (const id of ids) {
+          const p = t.stops.get(id)?.p;
+          if (!p) continue;
+          stations.push(p);
+          if (k === 'metro') metroStations.push(p);
+        }
+      }
+    }
+    const todGrid = new PointGrid(this.policies.has('tod') ? stations : [], TOD_REACH);
+    const metroGrid = new PointGrid(metroStations, METRO_REACH);
+    const toTod = (z: Zone) => z === Zone.ResidentialHigh || z === Zone.Commercial || z === Zone.Office;
+    this.tod.clear();
+    // Bonuses from the last review, while each bar holds
+    const bonus = (k: keyof Review) => ranked && this.review[k].ok;
+    const policy = { todPeople: 0, todJobs: 0, clusterJobs: 0, clusterPeople: 0 };
+    let nearMetro = 0;
     const polluted = (p: Vec2): boolean => {
       if (!fumes.size) return false;
       const gx = Math.floor(p.x / POLLUTION_REACH);
@@ -1909,9 +2004,15 @@ export class City {
         if (!lot.level) continue;
         buildings++;
         const info = ZONES[lot.zone];
+        const dense = todGrid.size && toTod(lot.zone) && todGrid.near(lot);
+        if (dense) this.tod.add(lot);
         if (info.demand === 'R') {
-          const people = lot.level * info.perLevel;
+          const people = Math.round(lot.level * info.perLevel * (dense ? TOD_DENSITY : 1));
           pop += people;
+          if (dense) policy.todPeople += people;
+          if (metroGrid.size && metroGrid.near(lot)) nearMetro += people;
+          const cluster = clusterGrid.size > 0 && clusterGrid.near(lot);
+          if (cluster) policy.clusterPeople += people;
           const s = this.facilities.size ? this.servicesAt(lot) : { kinds: new Set<ServiceKind>(), landmark: 0 };
           for (const k of s.kinds) reach[k] += people;
           // Fumes from a chemical plant nearby cost a service's worth
@@ -1924,14 +2025,18 @@ export class City {
           const served = Math.max(0, s.kinds.size + s.landmark - (dirty ? 1 : 0));
           this.served.set(lot, served);
           satisfied += people * Math.min(1, served / SERVICE_KINDS.length);
-          const income = residentIncome(lot, served, this.level);
+          const income = residentIncome(lot, served, this.level) * (cluster ? CLUSTER_PAY : 1) * (bonus('education') ? 1.1 : 1);
           const bracket = bracketOf(income);
           this.incomes.set(lot, income);
           homes.people[bracket.key] += people;
           homes.fuelTaxYear += (people / PEOPLE_PER_HOUSEHOLD) * income * bracket.fuelTax;
           earned += people * income;
         } else {
-          jobs[info.demand] += lot.level * info.perLevel;
+          const fab = lot.zone === Zone.SciencePark && clusterGrid.size > 0 && clusterGrid.near(lot);
+          const held = Math.round(lot.level * info.perLevel * (dense ? TOD_DENSITY : 1) * (fab ? CLUSTER_JOBS : 1));
+          jobs[info.demand] += held;
+          if (dense) policy.todJobs += held;
+          if (fab) policy.clusterJobs += held;
           if (garages.length && (info.demand === 'C' || info.demand === 'O')) {
             for (const g of garages) if (dist(g.p, lot) < PARKING_REACH) wanted.set(g.id, wanted.get(g.id)! + lot.level * info.perLevel * PARKING_DRIVERS);
           }
@@ -1951,7 +2056,8 @@ export class City {
     const coverage = { park: 0, school: 0, police: 0, fire: 0, hospital: 0 };
     for (const k of SERVICE_KINDS) coverage[k] = pop ? reach[k] / pop : 0;
     const hall = [...this.facilities.values()].some((f) => f.kind === 'cityHall') ? 8 : 0;
-    const happiness = pop ? clamp(Math.round(30 + 65 * (satisfied / pop) + hall), 0, 100) : 50;
+    const safe = bonus('safety') ? 5 : 0;
+    const happiness = pop ? clamp(Math.round(30 + 65 * (satisfied / pop) + hall + safe), 0, 100) : 50;
     const wants = SERVICE_KINDS.filter((k) => coverage[k] < 0.6).sort((a, b) => coverage[a] - coverage[b]);
     this.needs = { happiness, coverage, wants, tourists: this.needs.tourists, polluted: pop ? smog / pop : 0 };
     // Happy residents bring more; landmarks' visitors bring shops and offices
@@ -1965,12 +2071,32 @@ export class City {
     const rTax = (this.taxes.residential - DEFAULT_TAX) * 3;
     const bTax = (this.taxes.business - DEFAULT_TAX) * 3;
     this.demand = {
-      R: d(50 + gap(totalJobs * 1.1 + 40, pop, 80) - rTax + mood),
-      C: d(45 + gap(pop * 0.25 + 15, jobs.C, 40) - bTax + visitors),
-      O: d(35 + gap(pop * 0.2 + 10, jobs.O, 40) - bTax + visitors * 0.5),
+      R: d(50 + gap(totalJobs * 1.1 + 40, pop, 80) - rTax + mood + (bonus('metro') ? 8 : 0)),
+      C: d(45 + gap(pop * 0.25 + 15, jobs.C, 40) - bTax + visitors + (bonus('transit') ? 6 : 0)),
+      O: d(35 + gap(pop * 0.2 + 10, jobs.O, 40) - bTax + visitors * 0.5 + (bonus('transit') ? 6 : 0)),
       // A cargo port opens markets abroad for industry
-      I: d(45 + gap(pop * 0.3 + 15, jobs.I, 40) - bTax + Math.min(15, ports.length * 6)),
+      I: d(45 + gap(pop * 0.3 + 15, jobs.I, 40) - bTax + Math.min(15, ports.length * 6) + (bonus('industry') ? 8 : 0)),
     };
+    this.policyStats = policy;
+    // 產業聚落: fabs in a cluster pay several times the business tax, and the better-paid people round them more residential tax
+    this.clusterStep =
+      policy.clusterJobs * this.taxes.business * 0.002 * (CLUSTER_TAX - 1) + policy.clusterPeople * this.taxes.residential * 0.0025 * CLUSTER_RES_TAX;
+    // 升格審查
+    const t = budgetTotals(this.budget);
+    const share = (v: number) => (pop ? v / pop : 0);
+    const have = {
+      metro: share(nearMetro),
+      transit: share(this.ridersDay),
+      safety: coverage.police,
+      education: coverage.school,
+      finance: t.balance > 0 && this.money > 0 ? 1 : 0,
+      industry: this.clusters.filter((c) => c.active).length,
+    };
+    for (const k of Object.keys(have) as (keyof Review)[]) {
+      const item = this.review[k];
+      item.have = have[k];
+      item.ok = ranked && pop > 0 && have[k] >= item.need;
+    }
     this.stats = { population: pop, jobs: totalJobs, buildings, disconnected, riders: this.stats.riders };
     homes.averageIncome = pop ? earned / pop : 0;
     let shipped = 0;
@@ -1990,13 +2116,16 @@ export class City {
    */
   levelCap(lot: Lot): number {
     const info = ZONES[lot.zone as Exclude<Zone, Zone.None>];
+    // 捷運聯合開發: round a station, buildings go two levels higher than usual, and homes need two fewer services to
+    const tod = this.tod.has(lot) ? TOD_LEVELS : 0;
     // A 直轄市's office districts keep growing into skyscrapers
-    if (lot.zone === Zone.Office && this.unlocked('tallOffices')) return OFFICE_TOWER_LEVEL;
+    if (lot.zone === Zone.Office && this.unlocked('tallOffices')) return Math.max(OFFICE_TOWER_LEVEL, info.maxLevel + tod);
+    if (lot.zone === Zone.Office || lot.zone === Zone.Commercial) return info.maxLevel + tod;
     // Fabs need educated workers: a science park stays small without a school in reach
     if (lot.zone === Zone.SciencePark) return this.servicesAt(lot).kinds.has('school') ? info.maxLevel : 1;
     if (info.demand !== 'R') return info.maxLevel;
     const served = this.served.get(lot) ?? 0;
-    let cap = Math.min(info.maxLevel, 1 + Math.floor(served / SERVICES_PER_LEVEL));
+    let cap = Math.min(info.maxLevel + tod, 1 + tod + Math.floor(served / SERVICES_PER_LEVEL));
     if (lot.zone === Zone.ResidentialHigh && cap > 2 && !this.servicesAt(lot).kinds.has('school')) cap = 2;
     return cap;
   }
@@ -2039,6 +2168,14 @@ export class City {
     return true;
   }
 
+  /** Puts a 市政政策 in force or ends it; policies open at 縣轄市. */
+  setPolicy(key: PolicyKey, on: boolean): { ok: boolean; reason?: string } {
+    if (on && this.level < POLICY_RANK) return { ok: false, reason: `城市升級為「${LEVELS[POLICY_RANK].name}」後才能推動${POLICIES[key].label}` };
+    if (on) this.policies.add(key);
+    else this.policies.delete(key);
+    return { ok: true };
+  }
+
   /** Whether the city's rank has opened a feature. */
   unlocked(feature: keyof typeof UNLOCK): boolean {
     return this.level >= UNLOCK[feature];
@@ -2063,6 +2200,12 @@ export class City {
       const want = clamp((this.demand[info.demand] - 25) / 75, 0, 1);
       // Back rows only build once the row in front has something on it
       if (lot.front && lot.front.level === 0) continue;
+      // Levels only 捷運聯合開發 allows come down again when the station or the policy goes
+      if (lot.level > info.maxLevel && lot.level > this.levelCap(lot)) {
+        lot.level--;
+        changed = true;
+        continue;
+      }
       if (lot.level === 0) {
         if (rng() < want) {
           lot.level = 1;
@@ -2123,7 +2266,8 @@ export class City {
     const step = {
       parking: (parked * this.parkingFee * PARKING_HOURS) / DAY_STEPS,
       bikes: (this.bikeRides * YOUBIKE_FARE) / DAY_STEPS,
-      subsidy: (pop * rank.subsidy) / MONTH_STEPS,
+      // 升格審查: sound finances earn more from the central government
+      subsidy: ((pop * rank.subsidy) / MONTH_STEPS) * (this.level >= POLICY_RANK && this.review.finance.ok ? 1.3 : 1),
       admin: (pop * rank.admin) / MONTH_STEPS,
       residentialTax: this.stats.population * this.taxes.residential * 0.0025,
       businessTax: this.stats.jobs * this.taxes.business * 0.002,
@@ -2136,6 +2280,8 @@ export class City {
       servicesUpkeep: bill / (UPKEEP_DAYS * DAY_STEPS),
       tourism: tourists * TOURIST_SPEND,
       trade: (this.trade.shipped * TRADE_SHARE) / MONTH_STEPS,
+      cluster: this.clusterStep,
+      policy: [...this.policies].reduce((sum, k) => sum + POLICIES[k].cost, 0) / MONTH_STEPS,
     };
     const perMonth = (v: number) => v * MONTH_STEPS;
     // Construction averages over about three days so one big build doesn't swing the month
@@ -2152,23 +2298,30 @@ export class City {
       bikes: perMonth(step.bikes),
       tourism: perMonth(step.tourism),
       trade: perMonth(step.trade),
+      cluster: perMonth(step.cluster),
       roadUpkeep: perMonth(step.roadUpkeep),
       transitUpkeep: perMonth(step.transitUpkeep),
       airUpkeep: perMonth(step.airUpkeep),
       servicesUpkeep: perMonth(step.servicesUpkeep),
       admin: perMonth(step.admin),
+      policy: perMonth(step.policy),
       construction: this.budget.construction * (1 - ease) + perMonth(this.spentThisStep) * ease,
     };
     this.spentThisStep = 0;
     this.money +=
-      step.residentialTax + step.businessTax + step.fuelTax + step.subsidy + fares + air.incomeToday + step.parking + step.bikes + step.tourism + step.trade -
-      step.airUpkeep - step.admin;
+      step.residentialTax + step.businessTax + step.fuelTax + step.subsidy + fares + air.incomeToday + step.parking + step.bikes + step.tourism + step.trade + step.cluster -
+      step.airUpkeep - step.admin - step.policy;
     if (this.steps % (UPKEEP_DAYS * DAY_STEPS) === 0) {
       const due = (roadLength * ROAD_UPKEEP + upkeep) * HOUR_STEPS + bill;
       this.money -= due;
       this.lastUpkeepBill = due;
     }
     this.stats.riders = riders;
+    this.ridersSoFar += riders;
+    if ((this.steps + 1) % DAY_STEPS === 0) {
+      this.ridersDay = this.ridersSoFar;
+      this.ridersSoFar = 0;
+    }
     air.incomeToday = 0;
     air.passengersToday = 0;
     this.steps++;
@@ -2308,6 +2461,8 @@ export class City {
       flights: [...air.flights.values()].map((f) => [f.id, f.airport, f.color, f.name]),
       airFare: air.fare,
       parkingFee: this.parkingFee,
+      policies: [...this.policies],
+      ridersDay: Math.round(this.ridersDay),
       roadNames: [...this.net.segments.values()].filter((s) => s.name).map((s) => [s.id, s.name!]),
       districts: [...this.districts.values()].map((d) => [d.id, round2(d.p.x), round2(d.p.y), Math.round(d.r), d.name, d.color]),
       terrain: this.terrain.name,
@@ -2377,6 +2532,8 @@ export class City {
     for (const [id, airport, color, name] of data.flights ?? []) city.aviation.addFlight(airport, { id, color, name });
     if (data.airFare !== undefined) city.aviation.fare = data.airFare;
     if (data.parkingFee !== undefined) city.parkingFee = data.parkingFee;
+    for (const k of data.policies ?? []) if (POLICIES[k]) city.policies.add(k);
+    city.ridersDay = data.ridersDay ?? 0;
     for (const [id, name] of data.roadNames ?? []) {
       const seg = city.net.segments.get(id);
       if (seg) seg.name = name;

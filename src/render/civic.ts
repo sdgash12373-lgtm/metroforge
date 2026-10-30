@@ -546,6 +546,131 @@ export function parking(k: Kit, w: number, d: number): void {
 }
 
 /** One lettered sign: its label and where it hangs on the -v face (or a ±u face) of a facility. */
+/**
+ * 大學: a gate between red-brick pillars opening onto a 椰林大道 of royal palms that runs up to the
+ * library, red-brick lecture halls with arched windows and tiled roofs on the left, a track and field on
+ * the right with dorms behind it.
+ */
+export function university(k: Kit, w: number, d: number): void {
+  const RED = 0xa8442f;
+  const RED_DARK = 0x8a3524;
+  const ARCH = 0xe8dcc2;
+  const TILE_ROOF = 0x7c4a3a;
+  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.08, 0x8fbf6a);
+  // 椰林大道: paved avenue from the gate to the library, a royal palm every 8 m each side
+  k.rect(-5, -45, 5, 18, 0.12, 0xd9cfbf);
+  k.rect(-5, -45, -4.4, 18, 0.14, 0xb5523b);
+  k.rect(4.4, -45, 5, 18, 0.14, 0xb5523b);
+  for (let v = -38; v <= 12; v += 8) {
+    palm(k, -7.5, v, 1.15);
+    palm(k, 7.5, v, 1.15);
+  }
+  // Paths across the lawns
+  k.rect(-56, -2, -5, 1, 0.12, 0xd9cfbf);
+  k.rect(5, 10, 56, 13, 0.12, 0xd9cfbf);
+  // Gate: two red-brick pillars with lamps, a lintel, and a low brick name wall to the left
+  for (const u of [-8, 6]) {
+    k.box(u, -45, u + 2, -43, 0, 5.2, RED);
+    k.box(u - 0.2, -45.2, u + 2.2, -42.8, 5.2, 5.6, ARCH);
+    k.prism(u + 1, -44, 0.35, 0.35, 5.6, 6.4, 0xf4e7b0, 6);
+  }
+  k.box(-8, -44.8, 8, -43.2, 5.6, 6.3, RED_DARK);
+  k.box(-30, -44.6, -11, -43.4, 0, 2.6, RED);
+  k.box(-30.2, -44.8, -10.8, -43.2, 2.6, 2.9, ARCH);
+  // Fence along the street either side of the gate
+  for (const [u0, u1] of [
+    [-60, -30],
+    [8, 60],
+  ] as const) {
+    k.box(u0, -45, u1, -44.6, 0, 0.7, RED);
+    for (let u = u0; u <= u1; u += 2.5) k.box(u, -44.9, u + 0.12, -44.7, 0.7, 1.8, 0x3a3a3a);
+    k.box(u0, -44.9, u1, -44.7, 1.7, 1.8, 0x3a3a3a);
+  }
+  // Library at the head of the avenue: four floors of red brick, a pale arcade along the front and a tiled hip roof
+  const fh = 4;
+  k.box(-24, 20, 24, 40, 0, fh * 4, RED);
+  k.box(-24.1, 19.9, 24.1, 40.1, 0, 1, 0x8d8a85);
+  for (let u = -22; u <= 20; u += 4) {
+    k.box(u, 18.6, u + 1, 20, 0, fh * 1.5, ARCH);
+    k.box(u + 1, 19.4, u + 4, 20, fh * 1.2, fh * 1.5, ARCH);
+  }
+  k.box(-24, 18.6, 24, 20, fh * 1.5, fh * 1.5 + 0.6, ARCH);
+  for (let f = 1; f < 4; f++) {
+    for (let u = -22; u < 22; u += 4) {
+      k.box(u + 0.8, 19.88, u + 3.2, 20, f * fh + 0.8, f * fh + 2.8, GLASS);
+      k.prism(u + 2, 19.95, 1.2, 1.2, f * fh + 2.8, f * fh + 3.3, ARCH, 6);
+    }
+  }
+  // Entrance block stands proud with a pediment
+  k.box(-7, 16, 7, 20, 0, fh * 4 + 2, ARCH);
+  for (const u of [-6, -2.5, 1.5, 5]) k.prism(u + 0.5, 15.6, 0.5, 0.5, 0, fh * 2.5, 0xf2ece0, 8);
+  k.box(-3, 15.9, 3, 16, 0, 5, 0x5a4636);
+  k.box(-7.4, 15.4, 7.4, 20, fh * 2.5, fh * 2.5 + 0.8, ARCH);
+  hip(k, -25, 19, 25, 41, fh * 4, 4.5, TILE_ROOF);
+  hip(k, -7.6, 15.2, 7.6, 20.5, fh * 4 + 2, 3, TILE_ROOF);
+  // Lecture halls on the left: two long brick blocks with arched windows and tiled roofs
+  const hall = (v0: number, v1: number) => {
+    const floors = 3;
+    k.box(-56, v0, -16, v1, 0, fh * floors, RED);
+    band(k, -56, v0, -16, v1, 0, 1, 0x8d8a85, 0.12);
+    for (let f = 0; f < floors; f++) {
+      for (let u = -54; u < -18; u += 4) {
+        for (const [vf, dv] of [
+          [v0, -0.12],
+          [v1, 0.12],
+        ] as const) {
+          const a = Math.min(vf, vf + dv);
+          k.box(u + 0.9, a, u + 3.1, a + 0.12, f * fh + 1, f * fh + 2.9, GLASS);
+          k.box(u + 0.7, a - (dv < 0 ? 0.1 : -0.1), u + 3.3, a + 0.12 + (dv < 0 ? 0 : 0.1), f * fh + 2.9, f * fh + 3.3, ARCH);
+        }
+      }
+      k.box(-56.1, v0, -15.9, v1, f * fh + fh - 0.3, f * fh + fh, ARCH);
+    }
+    // Arched porch in the middle of the avenue side
+    k.box(-16, (v0 + v1) / 2 - 3, -14.5, (v0 + v1) / 2 + 3, 0, fh * 1.2, ARCH);
+    hip(k, -57, v0 - 1, -15, v1 + 1, fh * floors, 3.4, TILE_ROOF);
+  };
+  hall(-34, -22);
+  hall(-14, -4);
+  hall(5, 14);
+  // Track and field on the right, with stands along the avenue side
+  const pu = 0xc8664a;
+  const cv = -16;
+  k.prism(22, cv, 12, 12, 0.1, 0.16, pu, 18);
+  k.prism(44, cv, 12, 12, 0.1, 0.16, pu, 18);
+  k.rect(22, cv - 12, 44, cv + 12, 0.16, pu);
+  k.prism(22, cv, 8.6, 8.6, 0.1, 0.2, 0x6fb556, 18);
+  k.prism(44, cv, 8.6, 8.6, 0.1, 0.2, 0x6fb556, 18);
+  k.rect(22, cv - 8.6, 44, cv + 8.6, 0.2, 0x6fb556);
+  k.rect(32.9, cv - 8.6, 33.1, cv + 8.6, 0.22, 0xf2f2f2);
+  for (const u of [14.4, 51.6]) k.box(u - 0.1, cv - 3, u + 0.1, cv + 3, 0.2, 2.4, 0xf2f2f2);
+  for (let i = 0; i < 4; i++) k.box(26 + 0, cv - 16 - i * 0.9, 40, cv - 15 - i * 0.9, 0, 0.6 + i * 0.6, 0xc9c6bf);
+  k.box(26, cv - 19.6, 40, cv - 19.2, 2.4, 5, 0xc9c6bf);
+  k.box(25.5, cv - 19.8, 40.5, cv - 15, 5, 5.3, 0x2f6fb8);
+  // Dorms behind the field: cream tiled blocks with balconies
+  for (const u0 of [18, 38]) {
+    k.box(u0, 18, u0 + 16, 40, 0, 3.2 * 7, CREAM);
+    for (let f = 1; f < 7; f++) k.box(u0, 17, u0 + 16, 18, f * 3.2, f * 3.2 + 1.1, WHITE);
+    windows(k, u0 + 1, u0 + 15, 18, 0, 7, 3.2, 2.5);
+    band(k, u0, 18, u0 + 16, 40, 3.2 * 7, 3.2 * 7 + 1, WHITE);
+    k.rect(u0, 18, u0 + 16, 40, 3.2 * 7 + 0.05, ROOF_SLAB);
+    k.prism(u0 + 4, 30, 1.2, 1.2, 3.2 * 7, 3.2 * 7 + 2, 0xd5d8da, 8);
+  }
+  // Bicycles parked by the halls, banyans and shrubs on the lawns
+  for (let v = -40; v < -36; v += 0.8) k.box(-14, v, -12, v + 0.15, 0, 0.9, 0x3a3a3a);
+  for (const [u, v, s] of [
+    [-50, -40, 1],
+    [-36, -40, 0.85],
+    [-50, 22, 0.9],
+    [-36, 32, 1],
+    [56, -40, 0.8],
+    [14, 30, 0.7],
+  ] as const) {
+    banyan(k, u, v, s);
+  }
+  for (let u = -28; u < -12; u += 2.5) shrub(k, u, -42, 0.7);
+}
+
 export interface SignSpec {
   label: string;
   u0: number;
@@ -556,7 +681,7 @@ export interface SignSpec {
   v: number;
 }
 
-export type SignLabel = 'school' | 'park' | 'police' | 'fire' | 'fireTower' | 'hospital' | 'er' | 'parking' | 'parkingP' | 'cityHall';
+export type SignLabel = 'school' | 'park' | 'police' | 'fire' | 'fireTower' | 'hospital' | 'er' | 'parking' | 'parkingP' | 'cityHall' | 'university';
 
 /** Text and colours of each sign; `vertical` signs read top to bottom, Taiwanese style. */
 export const SIGN_LABELS: Record<SignLabel, { text: string; bg: string; fg: string; vertical?: boolean }> = {
@@ -570,6 +695,7 @@ export const SIGN_LABELS: Record<SignLabel, { text: string; bg: string; fg: stri
   parking: { text: '公有停車場', bg: '#1f5fae', fg: '#ffffff' },
   parkingP: { text: 'P', bg: '#1f5fae', fg: '#ffffff' },
   cityHall: { text: '市政府', bg: '#d2c6ab', fg: '#5a3a1a' },
+  university: { text: '大學', bg: '#ece2cc', fg: '#7a2318' },
 };
 
 /** Where each service's signs hang, matching the models above. */
@@ -585,6 +711,7 @@ export const SIGNS: Partial<Record<string, SignSpec[]>> = {
     { label: 'hospital', u0: -21.5, u1: -4.5, z0: 38.6, z1: 42.6, v: -1.2 },
     { label: 'er', u0: 13, u1: 19, z0: 5.05, z1: 7.35, v: -14.45 },
   ],
+  university: [{ label: 'university', u0: -26, u1: -15, z0: 0.5, z1: 2.4, v: -44.65 }],
   cityHall: [{ label: 'cityHall', u0: -4.5, u1: 4.5, z0: 9.1, z1: 10.5, v: -13.8 }],
   parking: [
     { label: 'parking', u0: -8, u1: 4, z0: 10.5, z1: 12.7, v: -10.35 },

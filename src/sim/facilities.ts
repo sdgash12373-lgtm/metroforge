@@ -9,7 +9,7 @@ export type LandmarkKind = 'tower85' | 'cityHall' | 'dragonTiger' | 'ferrisWheel
 export type GreenKind = 'greenBuilding' | 'plaza' | 'ecoPark';
 /** 港口 on the coastline: 貨櫃港 ships the city's industry abroad, 旅遊港 brings visitors by ferry. */
 export type PortKind = 'cargoPort' | 'cruisePort';
-export type FacilityKind = ServiceKind | LandmarkKind | GreenKind | PortKind | 'footbridge' | 'parking' | 'youbike' | 'nightMarket';
+export type FacilityKind = ServiceKind | LandmarkKind | GreenKind | PortKind | 'footbridge' | 'parking' | 'youbike' | 'nightMarket' | 'university';
 
 export const SERVICE_KINDS: ServiceKind[] = ['park', 'school', 'police', 'fire', 'hospital'];
 export const LANDMARK_KINDS: LandmarkKind[] = ['tower85', 'cityHall', 'dragonTiger', 'ferrisWheel', 'arena', 'themePark', 'mall'];
@@ -92,6 +92,18 @@ export const FACILITIES: Record<FacilityKind, FacilitySpec> = {
   ecoPark: { label: '生態公園', cost: 60000, upkeep: 120, w: 80, d: 70, radius: 420, serves: 'park', unlock: 'greenery', color: 0x3f9a4a, blurb: '濕地、步道和大片樹林，範圍比公園大很多' },
   youbike: { label: 'YouBike', cost: 15000, upkeep: 20, w: 12, d: 5, radius: YOUBIKE_REACH, color: 0xf2a900, blurb: 'YouBike 微笑單車站，附近居民借車代步，收租借費；只要設站，不用規劃路線' },
   nightMarket: { label: '夜市', cost: 250000, upkeep: 150, w: 64, d: 44, radius: 700, tourists: 5, color: 0xff6b3d, blurb: '小吃攤、霓虹招牌和人潮的台灣夜市，吸引觀光客並帶動附近商業' },
+  university: {
+    label: '大學',
+    cost: 3_000_000,
+    upkeep: 700,
+    w: 120,
+    d: 90,
+    radius: 900,
+    serves: 'school',
+    unlock: 'university',
+    color: 0x9c2f2f,
+    blurb: '紅磚校舍、椰林大道和操場的大學，附近算有學校；開啟「產業創新計畫」後，旁邊有科學園區與交流道就會形成產業聚落',
+  },
   parking: { label: '停車場', cost: 600_000, upkeep: 400, w: 40, d: 30, radius: PARKING_REACH, color: 0x2f6fb8, blurb: '公有立體停車場，收停車費增加市庫收入；附近商業、辦公和觀光客越多越常停滿' },
   footbridge: { label: '天橋', cost: 8000, upkeep: 20, w: 5, d: 30, radius: 160, unlock: 'footbridge', color: 0xd9d4c7, blurb: '跨過大馬路的行人天橋，讓附近更好走' },
   cargoPort: { label: '貨櫃港', cost: 3_000_000, upkeep: 900, w: 160, d: 120, radius: 0, color: 0xd9343a, blurb: '高雄港式貨櫃碼頭，把工業區的貨物外銷，賺取外貿收入' },

@@ -1284,3 +1284,24 @@ body.road-drawing .mail-pop {
   justify-content: space-between;
   color: var(--muted);
 }
+/* 市政政策 switches and 升格審查 notes in the level panel */
+.mail-toggle.policy {
+  align-items: flex-start;
+  padding: 6px 0;
+  color: var(--ink);
+}
+.mail-toggle.policy input {
+  flex: none;
+  margin-top: 2px;
+}
+.mail-toggle.policy small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+.budget .note.review {
+  margin: -2px 0 6px;
+  font-size: 11px;
+}
+.budget .note.ok {
+  color: #7cc576;
+}
