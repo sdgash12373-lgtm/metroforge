@@ -1,4 +1,4 @@
-import { type Vec2, closestOnSamples, quadPoint, quadTangent, tAtLength } from './geometry';
+import { type Vec2, bboxNear, closestOnSamples, quadPoint, quadTangent, tAtLength } from './geometry';
 import type { RailKind, RailSystem } from './rail';
 import { type RoadNetwork, roadWidth } from './roads';
 import type { BusStop, StationStyle } from './transit';
@@ -75,20 +75,23 @@ export function stationCovers(kind: RailKind, pose: StationPose, side: number, p
  * there and not on the other side.
  */
 export function stationSide(net: RoadNetwork, kind: RailKind, pose: StationPose): 1 | -1 {
-  const streets = [...net.segments.values()].filter((s) => net.isStreet(s));
   const [u0, u1, v0, v1] = BUILDING[kind][0];
+  const reach = Math.hypot(Math.max(Math.abs(u0), Math.abs(u1)), v1);
+  // Only streets that could reach the building are checked for standing on it
+  const streets = [...net.segments.values()].filter((s) => net.isStreet(s));
+  const close = streets.filter((s) => bboxNear(s.bbox, pose.p, reach + roadWidth(s)));
   const score = (side: number) => {
     let onRoad = 0;
     for (let u = u0; u <= u1; u += 4) {
       for (let v = v0; v <= v1; v += 3) {
         const pt = { x: pose.p.x + pose.d.x * u - pose.d.y * v * side, y: pose.p.y + pose.d.y * u + pose.d.x * v * side };
-        if (streets.some((s) => closestOnSamples(s.samples, pt).d < roadWidth(s) / 2)) onRoad++;
+        if (close.some((s) => bboxNear(s.bbox, pt, roadWidth(s) / 2) && closestOnSamples(s.samples, pt).d < roadWidth(s) / 2)) onRoad++;
       }
     }
     const mid = (v0 + v1) / 2;
     const q = { x: pose.p.x - pose.d.y * mid * side, y: pose.p.y + pose.d.x * mid * side };
     let near = Infinity;
-    for (const s of streets) near = Math.min(near, closestOnSamples(s.samples, q).d);
+    for (const s of streets) if (bboxNear(s.bbox, q, near)) near = Math.min(near, closestOnSamples(s.samples, q).d);
     return { onRoad, near };
   };
   const a = score(1);
