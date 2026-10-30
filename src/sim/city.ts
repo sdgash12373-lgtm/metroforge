@@ -58,6 +58,8 @@ export const ROAD_UPKEEP = 0.004;
 export const DEFAULT_TAX = 9;
 export const MAX_TAX = 29;
 const SAVE_VERSION = 9;
+/** Commuters per step who may still set out by bus or train when the roads are full of cars. */
+const TRANSIT_TRIPS = 6;
 /** Ring radius of a roundabout by its number of exits. */
 /** Where the single highway road entered the map in cities from before the freeway */
 export const GATE: Vec2 = { x: -480, y: 60 };
@@ -2205,12 +2207,14 @@ export class City {
       if (isIndustry(p.lot.zone)) industry.push(p);
     }
     const room = this.maxVehicles - this.traffic.vehicles.length;
-    if (room <= 0) return;
     const pick = <T>(a: T[]) => a[Math.floor(rng() * a.length) % a.length];
     const at = (p: Placed): RoadPoint => ({ seg: p.seg.id, s: p.lot.s });
     const gate = this.gatePoint(rng);
 
-    const wanted = Math.min(room, Math.round((this.stats.population + this.stats.jobs) / 60 + rng()));
+    // Riders on buses and trains take no room on the roads, so a few commuters still set out when the
+    // streets are full: otherwise a big city with jammed roads never has anyone waiting at a stop
+    const wanted = Math.min(Math.max(0, room) + TRANSIT_TRIPS, Math.round((this.stats.population + this.stats.jobs) / 60 + rng()));
+    let cars = 0;
     for (let i = 0; i < wanted && homes.length; i++) {
       const home = pick(homes);
       // Without local jobs, residents commute out of town along the highway
@@ -2219,10 +2223,14 @@ export class City {
       if (job && this.rideTransit(home.lot, job.lot, rng)) continue;
       // What they can afford: a bicycle keeps off the road, a scooter or a car joins the traffic
       const commute = bracketOf(this.incomes.get(home.lot) ?? 0).commute;
-      if (commute === 'bike') continue;
+      if (commute === 'bike' || cars >= room) continue;
       const to = job ? at(job) : gate;
-      if (to) this.traffic.spawn(at(home), to, commute, rng());
+      if (to) {
+        this.traffic.spawn(at(home), to, commute, rng());
+        cars++;
+      }
     }
+    if (room <= 0) return;
     // Lorries: supplies in from the highway, goods out to the highway, and deliveries from industry to the
     // shops in town, so a lorry at a junction may go any way, not all one way to the factories
     const shops = work.filter((p) => ZONES[p.lot.zone as Exclude<Zone, Zone.None>].demand === 'C');
