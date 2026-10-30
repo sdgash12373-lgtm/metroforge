@@ -54,7 +54,7 @@ function outward(seg: RoadSegment, end: 'a' | 'b'): Vec2 {
 }
 
 /**
- * Every node where three or more two-way roads meet gets traffic lights. Roads that line up across
+ * Every node where three or more two-way roads meet gets traffic lights, except on freeways. Roads that line up across
  * the junction share a phase; roundabouts (one-way rings) keep yielding instead.
  */
 export function findJunctions(net: RoadNetwork): Map<number, Junction> {
@@ -71,6 +71,18 @@ export function findJunctions(net: RoadNetwork): Map<number, Junction> {
   const out = new Map<number, Junction>();
   for (const [node, list] of at) {
     if (list.length < 3 || list.some((e) => e.seg.ring)) continue;
+    // Freeways have no lights: ramps merge onto and leave the main line freely, and ramps join each other freely;
+    // only where a ramp comes down onto a street (on the ground) is there a signalled junction
+    if (list.every((e) => e.seg.ramp || e.seg.highway)) continue;
+    if (net.node(node).h !== 0 && list.some((e) => e.seg.highway)) continue;
+    // Nor where a ramp merges into or leaves a one-way road, or a street splits into its two directions
+    // (as at an interchange), since no traffic there crosses another's way
+    if (list.length === 3 && list.filter((e) => e.seg.oneway && !e.seg.ring && !e.seg.ramp).length === 2) {
+      const third = list.find((e) => !(e.seg.oneway && !e.seg.ramp))!;
+      if (!third || third.seg.ramp) continue;
+      const [p, q] = list.filter((e) => e !== third).map((e) => outward(e.seg, e.end));
+      if (p.x * q.x + p.y * q.y > 0.5) continue;
+    }
     const axes: number[] = [];
     const approaches = list.map(({ seg, end }) => {
       const o = outward(seg, end);

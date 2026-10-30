@@ -551,7 +551,7 @@ export class ToolController {
       case 'upgradeRoad':
         return this.upgradeHint();
       case 'interchange':
-        return '點在高架高速公路上，蓋一座鑽石型交流道：下方一條穿越道路，兩側各一對上下匝道。也可以用「匝道」自己拉';
+        return '點在高架高速公路上，蓋一座 DDI 分岔式鑽石交流道：下方道路的兩個方向在交叉口換邊，上下匝道不用穿越對向車流。也可以用「匝道」自己拉';
       case 'roundabout': {
         const cost = this.city.roundaboutCost(this.roundaboutSize);
         return `${this.roundaboutSize} 通圓環 · 約 ${ntd(cost)}　靠近路口或道路會自動吸附（橘色圈），壓到的道路自動接上；車輛逆時針單向繞行`;

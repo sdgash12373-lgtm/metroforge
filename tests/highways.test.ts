@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { City, FREEWAY, INTERCHANGE_REACH } from '../src/sim/city';
 import { quadPoint } from '../src/sim/geometry';
 import { UNLOCK } from '../src/sim/levels';
+import { findJunctions } from '../src/sim/signals';
 import { ELEVATED_HEIGHT } from '../src/sim/roads';
 import { TERRAINS } from '../src/sim/terrain';
 
@@ -76,29 +77,52 @@ describe('freeways and ramps', () => {
     expect(c.buildInterchange({ x: FREEWAY.x + 300, y: -600 }).ok).toBe(false);
   });
 
-  it('carries the 國道 on to the edge of the land and joins 國道 1 號 to 國道 3 號 as 國道 10 號', () => {
+  it('lays 國道 1, 3 and 10 as on the map of Taiwan, carried on to the edge of the land', () => {
     const c = new City(TERRAINS.kaohsiung);
     c.money = 1e9;
     c.buildFreeway('kaohsiung');
-    const link = () => [...c.net.segments.values()].filter((s) => s.name === '國道 10 號');
-    // Before Pingtung opens: 國道 10 號 stops at its edge, leading out of the map
-    expect(link().length).toBeGreaterThan(0);
-    expect(c.outside.size).toBe(2);
-    c.level = UNLOCK.region;
-    expect(c.openRegion('pingtung').ok).toBe(true);
-    // Joined: 國道 1 號's north end and 國道 3 號's two ends lead out
-    expect(c.outside.size).toBe(3);
-    expect(link().every((s) => s.highway && !s.built && s.lanes === 2)).toBe(true);
+    const named = (n: string) => [...c.net.segments.values()].filter((s) => s.name === n);
+    // 國道 3 號 runs inland from the hills north of town, across the river and down the Pingtung Plain
+    expect(c.net.segmentAt({ x: 400, y: 380 }, 5, ELEVATED_HEIGHT)?.seg.name).toBe('國道 3 號');
+    expect(c.net.segmentAt({ x: 1000, y: 1700 }, 40, ELEVATED_HEIGHT)?.seg.name).toBe('國道 3 號');
+    // 國道 10 號 leaves 國道 1 號 north of town and crosses 國道 3 號
+    expect(c.net.segmentAt({ x: -300, y: -450 }, 3, ELEVATED_HEIGHT)?.seg.name).toBe('國道 10 號');
+    expect(named('國道 10 號').every((s) => s.highway && !s.built && s.lanes === 2 && !s.lots.length)).toBe(true);
+    // 國道 1 號 runs on south to the coast
+    expect(Math.max(...named('國道 1 號').flatMap((s) => [c.net.node(s.a).p.y, c.net.node(s.b).p.y]))).toBeGreaterThan(800);
+    expect(c.outside.size).toBe(5);
     expect(c.disconnectedRoads()).toHaveLength(0);
+    // No lights anywhere on the 國道: only where the interchange's street crosses over
+    const lights = [...findJunctions(c.net).keys()].map((id) => c.net.node(id));
+    expect(lights.length).toBe(2);
+    expect(lights.every((n) => n.h === 0)).toBe(true);
+    // Opening Pingtung builds only its interchange and road into town
+    c.level = UNLOCK.region;
+    const roads = c.net.segments.size;
+    expect(c.openRegion('pingtung').ok).toBe(true);
+    expect(c.net.segments.size).toBeGreaterThan(roads);
+    expect(c.outside.size).toBe(5);
     // Saving and loading again lays nothing more
     const size = c.net.segments.size;
     const back = City.deserialize(JSON.parse(JSON.stringify(c.serialize())));
     expect(back.net.segments.size).toBe(size);
-    expect(back.outside.size).toBe(3);
-    // Nobody can tear the extension down
-    const s = link()[0];
-    const mid = quadPoint(c.net.quad(s), 0.5);
-    expect(c.bulldoze(mid, 4).ok).toBe(false);
+    expect(back.outside.size).toBe(5);
+    // Nobody can tear the 國道 down
+    const s = named('國道 10 號')[0];
+    expect(c.bulldoze(quadPoint(c.net.quad(s), 0.5), 4).ok).toBe(false);
   });
 
+  it('lays the 國道 network into a city that had 國道 1 號 only, round what it has built', () => {
+    const c = new City(TERRAINS.kaohsiung);
+    c.money = 1e9;
+    c.buildFreeway('kaohsiung');
+    const data = c.serialize();
+    // Keep only 國道 1 號 and its interchange, as an older save had them
+    const keep = new Set([...c.net.segments.values()].filter((s) => s.name !== '國道 3 號' && s.name !== '國道 10 號').map((s) => s.id));
+    data.segs = data.segs.filter((x: unknown[]) => keep.has(x[0] as number));
+    const back = City.deserialize(JSON.parse(JSON.stringify(data)));
+    expect(back.net.segmentAt({ x: 400, y: 380 }, 5, ELEVATED_HEIGHT)?.seg.name).toBe('國道 3 號');
+    expect(back.net.segmentAt({ x: -300, y: -450 }, 3, ELEVATED_HEIGHT)?.seg.name).toBe('國道 10 號');
+    expect(back.disconnectedRoads()).toHaveLength(0);
+  });
 });

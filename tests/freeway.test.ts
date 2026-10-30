@@ -21,9 +21,12 @@ describe('the freeway a new city starts with', () => {
   it('runs north–south on viaducts, two lanes each way, carried on to the edge of the land at both ends', () => {
     for (const terrain of ['flat', 'plain', 'kaohsiung'] as const) {
       const city = fresh(terrain);
-      expect(city.outside.size).toBe(2);
-      const ends = [...city.outside].map((n) => city.net.node(n));
-      expect(ends.every((n) => n.h === ELEVATED_HEIGHT)).toBe(true);
+      // On the Kaohsiung map 國道 3 號 and 10 號 lead out too
+      expect(city.outside.size).toBe(terrain === 'kaohsiung' ? 5 : 2);
+      const all = [...city.outside].map((n) => city.net.node(n));
+      expect(all.every((n) => n.h === ELEVATED_HEIGHT)).toBe(true);
+      const ends = all.filter((n) => n.p.x === FREEWAY.x);
+      expect(ends).toHaveLength(2);
       const [north, south] = ends.sort((a, b) => a.p.y - b.p.y);
       expect(north.p.x).toBe(FREEWAY.x);
       expect(north.p.y).toBeLessThan(FREEWAY.north);
@@ -35,10 +38,10 @@ describe('the freeway a new city starts with', () => {
     }
   });
 
-  it('comes down two ramps to an access road into town that can be zoned', () => {
+  it('comes down at a diverging diamond interchange to an access road into town that can be zoned', () => {
     const city = fresh();
-    const ramps = [...city.net.segments.values()].filter((s) => s.highway && s.name !== FREEWAY.name);
-    expect(ramps).toHaveLength(2);
+    expect([...city.net.segments.values()].filter((s) => s.highway && s.name !== FREEWAY.name)).toHaveLength(0);
+    expect([...city.net.segments.values()].filter((s) => s.ramp).length).toBeGreaterThanOrEqual(12);
     const access = city.net.segmentAt(FREEWAY.town, 3, 0)!.seg;
     expect(access.highway).toBeFalsy();
     expect(access.lanes).toBe(2);

@@ -74,7 +74,8 @@ describe('Pingtung, across the Gaoping River', () => {
   it('has 國道 3 號 up the plain with an interchange and a road into Pingtung city', () => {
     const city = new City(T);
     city.buildFreeway('pingtung');
-    expect(city.outside.size).toBe(2);
+    // 國道 1, 3 and 10 all lead out of the map
+    expect(city.outside.size).toBe(5);
     const main = [...city.net.segments.values()].filter((s) => s.highway && s.name === FREEWAYS.pingtung.name);
     expect(main.length).toBeGreaterThan(0);
     const town = freewayTown('pingtung');
