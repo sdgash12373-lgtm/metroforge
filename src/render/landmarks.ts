@@ -85,7 +85,7 @@ export function tower85(k: Kit, w: number, d: number): void {
       k.box(u - 0.15, -hv - 0.12, u + 0.15, -hv, z0, z1, rib);
       k.box(u - 0.15, hv, u + 0.15, hv + 0.12, z0, z1, rib);
     }
-    band(k, -hu - 0.15, -hv - 0.15, hu + 0.15, hv + 0.15, z1 - 1.2, z1, trim, 0.4);
+    band(k, -hu - 0.15, -hv - 0.15, hu + 0.15, hv + 0.15, z1 - 1.2, z1 + 0.15, trim, 0.4);
   }
   // The pyramid crown, three storeys high (floors 83–85), then the antenna spire
   k.prism(0, 0, 9.4, 1.4, 258, 270, 0x6f93a8, 4, Math.PI / 4);
@@ -116,7 +116,7 @@ export function cityHall(k: Kit, w: number, d: number): void {
   band(k, -33.2, -4.2, 33.2, 17.2, top - 0.6, top + 1, pier, 0.5);
   k.rect(-33, -4, 33, 17, top + 0.1, 0xa9aba7);
   // The taller centre: glass framed in stone, a crown of fins on top
-  k.box(-12, -8, 12, 17, 0, 40, 0xefe7d4);
+  k.box(-12, -8, 12, 17.15, 0, 40, 0xefe7d4);
   k.box(-9, -8.14, 9, -8, 10, 37, glass);
   for (let u = -8; u <= 8; u += 2) k.box(u - 0.12, -8.22, u + 0.12, -8.08, 10, 37, 0xdcd3bf);
   for (let z = 13; z < 37; z += 3.6) k.box(-9, -8.22, 9, -8.08, z, z + 0.25, 0xdcd3bf);
@@ -128,7 +128,7 @@ export function cityHall(k: Kit, w: number, d: number): void {
   k.box(-11, -13.5, 11, -8, 0, 0.6, 0xd8cfb8);
   for (let u = -10; u <= 10; u += 4) k.prism(u, -12.6, 0.55, 0.55, 0.6, 9, 0xf2ecdc, 8);
   k.box(-11.5, -13.6, 11.5, -8, 9, 10.6, 0xf2ecdc);
-  k.box(-11.6, -13.75, 11.6, -13.55, 9, 10.6, pier);
+  k.box(-11.6, -13.75, 11.6, -13.55, 9, 10.65, pier);
   // Flags and trees
   // Flags beside the plaza, clear of the name on the portico
   for (const [u, c] of [

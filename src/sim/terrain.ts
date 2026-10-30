@@ -51,8 +51,25 @@ export const FLAT: Terrain = {
 };
 
 /** Flat dry land, where streets and buildings can go. */
+/** Answers per terrain, by x then y: the same lot and tree spots are asked about every time land is recounted. */
+const buildableCache = new WeakMap<Terrain, Map<number, Map<number, boolean>>>();
+const BUILDABLE_CACHE_MAX = 400_000;
+let buildableCached = 0;
+
 export function buildable(t: Terrain, p: Vec2): boolean {
-  return !t.water(p.x, p.y) && t.height(p.x, p.y) <= 0.05;
+  let byX = buildableCache.get(t);
+  if (!byX) buildableCache.set(t, (byX = new Map()));
+  let byY = byX.get(p.x);
+  const hit = byY?.get(p.y);
+  if (hit !== undefined) return hit;
+  const ok = !t.water(p.x, p.y) && t.height(p.x, p.y) <= 0.05;
+  // Lots and trees sit at fixed spots; other callers (the cursor, a road being drawn) ask once, so cap the cache
+  if (buildableCached < BUILDABLE_CACHE_MAX) {
+    if (!byY) byX.set(p.x, (byY = new Map()));
+    byY.set(p.y, ok);
+    buildableCached++;
+  }
+  return ok;
 }
 
 const smooth = (a: number, b: number, x: number) => {

@@ -28,6 +28,28 @@ function landColor(h: number, out: THREE.Color): THREE.Color {
   return out.copy(ROCK).lerp(PEAK, Math.min(1, (h - 330) / 120));
 }
 
+/** Ground heights at the cell corners, kept per terrain: the ground, the water and the veil all ask for them. */
+const corners = new WeakMap<Terrain, (x: number, y: number) => number>();
+
+function cornerHeights(terrain: Terrain): (x: number, y: number) => number {
+  let h = corners.get(terrain);
+  if (h) return h;
+  const b = terrain.bounds;
+  const cols = Math.ceil((b.maxX - b.minX) / STEP) + 1;
+  const rows = Math.ceil((b.maxY - b.minY) / STEP) + 1;
+  const grid = new Float32Array(cols * rows).fill(NaN);
+  h = (x: number, y: number) => {
+    const i = Math.round((x - b.minX) / STEP);
+    const j = Math.round((y - b.minY) / STEP);
+    if (i < 0 || j < 0 || i >= cols || j >= rows) return terrain.height(x, y);
+    let v = grid[j * cols + i];
+    if (Number.isNaN(v)) grid[j * cols + i] = v = terrain.height(x, y);
+    return v;
+  };
+  corners.set(terrain, h);
+  return h;
+}
+
 /** Calls `cell` for every ground cell on the map (its corner x, y), row by row. */
 function eachCell(terrain: Terrain, cell: (x: number, y: number) => void, keep?: (r: RegionName) => boolean): void {
   const b = terrain.bounds;
@@ -53,14 +75,7 @@ function cellTriangles(x: number, y: number, h: (x: number, y: number) => number
  */
 export function buildGroundGeometry(terrain: Terrain): THREE.BufferGeometry {
   const pos: number[] = [];
-  // Heights are shared by up to six triangles: work each corner out once
-  const heights = new Map<number, number>();
-  const h = (x: number, y: number) => {
-    const key = Math.round(x) * 100003 + Math.round(y);
-    let v = heights.get(key);
-    if (v === undefined) heights.set(key, (v = terrain.height(x, y)));
-    return v;
-  };
+  const h = cornerHeights(terrain);
   eachCell(terrain, (x, y) => cellTriangles(x, y, h, pos));
   const colors: number[] = [];
   const c = new THREE.Color();
@@ -83,8 +98,9 @@ export function buildGroundGeometry(terrain: Terrain): THREE.BufferGeometry {
 /** The water surface: only over cells with some ground below it. */
 export function buildWaterGeometry(terrain: Terrain): THREE.BufferGeometry {
   const pos: number[] = [];
+  const h = cornerHeights(terrain);
   eachCell(terrain, (x, y) => {
-    const wet = [0, STEP].some((i) => [0, STEP].some((j) => terrain.height(x + i, y + j) < 0));
+    const wet = h(x, y) < 0 || h(x + STEP, y) < 0 || h(x, y + STEP) < 0 || h(x + STEP, y + STEP) < 0;
     if (wet) cellTriangles(x, y, () => WATER_LEVEL, pos);
   });
   const g = new THREE.BufferGeometry();
@@ -96,7 +112,8 @@ export function buildWaterGeometry(terrain: Terrain): THREE.BufferGeometry {
 /** A veil over the regions not opened yet, just above the ground. */
 export function buildLockedGeometry(terrain: Terrain, open: ReadonlySet<RegionName>): THREE.BufferGeometry {
   const pos: number[] = [];
-  const h = (x: number, y: number) => Math.max(WATER_LEVEL, terrain.height(x, y)) + 1.2;
+  const ground = cornerHeights(terrain);
+  const h = (x: number, y: number) => Math.max(WATER_LEVEL, ground(x, y)) + 1.2;
   eachCell(terrain, (x, y) => cellTriangles(x, y, h, pos), (r) => !open.has(r));
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));

@@ -157,18 +157,21 @@ export function school(k: Kit, w: number, d: number): void {
     k.box(-31, 9, 31, 9.35, f * fh, f * fh + 1.1, CREAM);
     k.box(-31, 8.95, 31, 9.4, f * fh + 1.1, f * fh + 1.28, CAP);
   }
-  for (let u = -27; u <= 27; u += 6.75) k.box(u - 0.35, 9, u + 0.35, 9.7, 0, top, 0xe9dcc0);
+  for (let u = -27; u <= 27; u += 6.75) k.box(u - 0.35, 8.9, u + 0.35, 9.7, 0, top, 0xe9dcc0);
   for (let f = 0; f < 4; f++) {
     for (let u = -26; u < 26; u += 6.75) {
       k.box(u, 11.88, u + 3.4, 12, f * fh + 1, f * fh + 2.8, GLASS);
       k.box(u + 4.2, 11.88, u + 5.4, 12, f * fh, f * fh + 2.6, 0x8a6a4a);
+      // Classroom windows on the back wall too, so it isn't a blank slab from behind
+      k.box(u, 21, u + 3.4, 21.12, f * fh + 1, f * fh + 2.8, GLASS);
     }
   }
   // Brick-tiled stair towers at both ends, then the red tiled hip roofs
   for (const s of [-1, 1]) {
     const a = s < 0 ? -31 : 27;
-    k.box(a, 9, a + 4, 21, 0, top + 2.2, TILE);
-    for (let z = 2; z < top; z += fh) k.box(a + 1.2, 8.88, a + 2.8, 9, z, z + 1.6, GLASS);
+    // A little proud of the block on every side, so the brick and cream faces never share a plane
+    k.box(a - 0.1, 8.85, a + 4.1, 21.1, 0, top + 2.2, TILE);
+    for (let z = 2; z < top; z += fh) k.box(a + 1.2, 8.73, a + 2.8, 8.85, z, z + 1.6, GLASS);
     hip(k, a - 0.4, 8.6, a + 4.4, 21.4, top + 2.2, 1.8, ROOF);
   }
   hip(k, -27, 8.4, 27, 21.6, top, 3.2, ROOF);
@@ -180,9 +183,9 @@ export function school(k: Kit, w: number, d: number): void {
     k.box(-21.35, -14, -21, 9, f * fh, f * fh + 1.1, CREAM);
     k.box(-21.4, -14, -20.95, 9, f * fh + 1.1, f * fh + 1.28, CAP);
   }
-  for (const v of [-14, -6.5, 1]) k.box(-21.7, v, -21, v + 0.7, 0, wing, 0xe9dcc0);
+  for (const v of [-14, -6.5, 1]) k.box(-21.7, v, -20.9, v + 0.7, 0, wing, 0xe9dcc0);
   for (let f = 0; f < 3; f++) for (let v = -13; v < 8; v += 5.5) k.box(-24, v, -23.88, v + 3, f * fh + 1, f * fh + 2.8, GLASS);
-  k.box(-31.05, -14.05, -23.95, 9, 0, 0.9, TILE);
+  k.box(-31.05, -14.05, -23.95, 8.95, 0, 0.9, TILE);
   hip(k, -31.5, -14.5, -20.6, 8.6, wing, 2.8, ROOF);
   // PU track and the grass field inside it
   const pu = 0xc8664a;
@@ -358,7 +361,7 @@ export function police(k: Kit, w: number, d: number): void {
   k.box(-12.1, -3.1, 12.1, 13.1, fh, fh + 0.9, blue);
   band(k, -12.1, -3.1, 12.1, 13.1, top - 0.3, top + 0.7, blue);
   k.rect(-12, -3, 12, 13, top + 0.05, ROOF_SLAB);
-  for (const u of [-12.25, 10.75]) k.box(u, -3.25, u + 1.5, -1.75, fh, top, blue);
+  for (const u of [-12.25, 10.75]) k.box(u, -3.25, u + 1.5, -1.75, fh, top + 0.7, blue);
   windows(k, -10, 10, -3, fh + 0.4, 3, fh, 3.4);
   sideWindows(k, 12, 1, -1, 12, fh + 0.4, 3, fh, 3.4);
   sideWindows(k, -12, -1, -1, 12, fh + 0.4, 3, fh, 3.4);
@@ -407,7 +410,7 @@ export function fire(k: Kit, w: number, d: number): void {
     k.box(u - 0.6, -6.3, u, -6, 0, bay, red);
   }
   k.box(3.2, -6.3, 8, -6, 0, bay, red);
-  k.box(4.5, -6.12, 7, -6, 0, 2.6, GLASS);
+  k.box(4.5, -6.42, 7, -6.3, 0, 2.6, GLASS);
   // Upper floors: white with red bands and window rows
   k.box(-15, -6, 8, 12, bay, bay + 9, 0xf1efe9);
   k.box(-15.1, -6.1, 8.1, 12.1, bay, bay + 0.8, red);
@@ -525,10 +528,10 @@ export function parking(k: Kit, w: number, d: number): void {
       }
     }
   });
-  for (const u of [-17.7, -9, 0, 9, 17.7]) for (const v of [-9.7, 2, 13.7]) k.box(u - 0.3, v - 0.3, u + 0.3, v + 0.3, 0, 9.4, 0xc9cbcc);
+  for (const u of [-17.4, -9, 0, 9, 17.4]) for (const v of [-9.4, 2, 13.4]) k.box(u - 0.3, v - 0.3, u + 0.3, v + 0.3, 0, 9.4, 0xc9cbcc);
   // Stair and lift core, the ramp up the side
-  k.box(-18, 8, -13, 14, 0, 11.6, 0xe6e3dc);
-  band(k, -18.05, 7.95, -12.95, 14.05, 11.2, 11.8, blue);
+  k.box(-18.15, 7.85, -12.85, 14.15, 0, 11.6, 0xe6e3dc);
+  band(k, -18.2, 7.8, -12.8, 14.2, 11.2, 11.8, blue);
   k.box(-15.5, 7.88, -14, 8, 9.6, 11, GLASS);
   k.color(0x8f9396).quad([18.2, -13, 0.14], [20, -13, 0.14], [18.2, 8, 3.2], [20, 8, 3.2]);
   k.color(0xd9dbdc).quad([20, -13, 0.14], [20, 8, 3.2], [20, -13, 1.1], [20, 8, 4.3]);
@@ -696,7 +699,7 @@ export function university(k: Kit, w: number, d: number): void {
     }
     // Entrance bay standing proud with a gable-like crown
     const vm = (v0 + v1) / 2;
-    const ea = side < 0 ? inner - 0.5 : inner - 1.5;
+    const ea = side < 0 ? inner - 0.6 : inner - 1.4;
     k.box(ea, vm - 3.5, ea + 2, vm + 3.5, 0, top + 2.2, IVORY);
     k.box(ea - 0.1, vm - 1.4, ea + 2.1, vm + 1.4, 0, 3.4, SHADE);
     k.box(ea - 0.15, vm - 3.7, ea + 2.15, vm + 3.7, top + 2.2, top + 2.6, TAN_DARK);
@@ -728,7 +731,7 @@ export function university(k: Kit, w: number, d: number): void {
     k.box(-8, v0 - 0.2, 8, v0, 0.6, fh * 2, 0x6f8fa3);
     for (let i = 0; i < 6; i++) k.prism(-7.5 + i * 3, 19.4, 0.55, 0.5, 0.6, fh * 2, IVORY, 10);
     k.box(-9, 18.4, 9, v0, fh * 2, fh * 2 + 1, IVORY);
-    k.quad([-9, 18.4, fh * 2 + 1], [9, 18.4, fh * 2 + 1], [0, 18.4, fh * 2 + 3.2], [0, 18.4, fh * 2 + 3.2]);
+    k.quad([-9, 18.3, fh * 2 + 1], [9, 18.3, fh * 2 + 1], [0, 18.3, fh * 2 + 3.2], [0, 18.3, fh * 2 + 3.2]);
     k.box(-9, 18.4, 9, v0, fh * 2 + 1, fh * 3, TAN);
     // Central tower with a clock and a pyramid roof
     k.box(-4.5, 24, 4.5, 33, 0, fh * 3 + 9, TAN);

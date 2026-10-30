@@ -72,6 +72,8 @@ export const PATROLS_PER_STATION = 2;
 export const DAY_STEPS = 2400;
 /** Steps in one game hour; the budget shows money per hour. */
 export const HOUR_STEPS = DAY_STEPS / 24;
+/** Ticks between full recounts of buildings, people and jobs when nothing has changed. */
+const SURVEY_EVERY = 4;
 /** Steps in one game month (30 days); the budget shows money per month. */
 export const MONTH_STEPS = DAY_STEPS * MONTH_DAYS;
 
@@ -547,6 +549,12 @@ export class City {
   nextFacility = 1;
   /** bumped when facilities are built or removed */
   facilitiesVersion = 0;
+  /** the last survey's zoned lots, and what it was taken under */
+  private zoned: Placed[] = [];
+  private surveyKey = '';
+  private surveyAge = 0;
+  private servicesCache = new WeakMap<Vec2, { kinds: Set<ServiceKind>; landmark: number }>();
+  private servicesVersion = -1;
   needs: Needs = { happiness: 50, coverage: { park: 0, school: 0, police: 0, fire: 0, hospital: 0 }, wants: [], tourists: 0, polluted: 0 };
   /** services in reach of each home, from the last survey */
   private served = new Map<Lot, number>();
@@ -1585,6 +1593,17 @@ export class City {
 
   /** Services within reach of a point, and how much landmarks around it add (0..1). */
   servicesAt(p: Vec2): { kinds: Set<ServiceKind>; landmark: number } {
+    // Buildings ask every tick; the answer only changes when a facility is built or removed
+    if (this.servicesVersion !== this.facilitiesVersion) {
+      this.servicesCache = new WeakMap();
+      this.servicesVersion = this.facilitiesVersion;
+    }
+    let out = this.servicesCache.get(p);
+    if (!out) this.servicesCache.set(p, (out = this.servicesNow(p)));
+    return out;
+  }
+
+  private servicesNow(p: Vec2): { kinds: Set<ServiceKind>; landmark: number } {
     const kinds = new Set<ServiceKind>();
     let landmark = 0;
     for (const f of this.facilities.values()) {
@@ -2204,7 +2223,15 @@ export class City {
   tick(rng: Rng = Math.random): void {
     // Stations opened or closed (lines are edited straight on the transit systems): clear the lots they stand on
     if (this.stationsChanged()) this.landChanged();
-    const zoned = this.survey();
+    // A full recount of a big city takes most of a tick, so it runs every few ticks, or straight away when
+    // zoning, roads, services, rank, policies or taxes change
+    const key = `${this.zoningVersion}:${this.facilitiesVersion}:${this.level}:${[...this.policies].join()}:${this.taxes.residential}:${this.taxes.business}`;
+    if (key !== this.surveyKey || ++this.surveyAge >= SURVEY_EVERY) {
+      this.zoned = this.survey();
+      this.surveyKey = key;
+      this.surveyAge = 0;
+    }
+    const zoned = this.zoned;
     let changed = false;
     const attempts = Math.min(16, zoned.length);
     for (let i = 0; i < attempts; i++) {

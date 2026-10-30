@@ -146,7 +146,8 @@ export class BuildingLayer {
   private s = new THREE.Vector3();
   private p = new THREE.Vector3();
   private up = new THREE.Vector3(0, 1, 0);
-  private c = new THREE.Color();
+  private readonly colours = new Map<number, THREE.Color>();
+  private meshes: Record<Kind, THREE.InstancedMesh> | undefined;
   private n = { b: 0, r: 0, k: 0, g: 0, d: 0, t: 0 };
   /** extra yaw for the parts being placed, so houses don't all stand square to the street */
   private turn = 0;
@@ -206,7 +207,10 @@ export class BuildingLayer {
     this.s.set(sx, sy, sz);
     this.m.compose(this.p, this.q, this.s);
     mesh.setMatrixAt(i, this.m);
-    mesh.setColorAt(i, this.c.setHex(color));
+    // Hex to linear colour is costly and the same few dozen colours repeat across the whole city
+    let c = this.colours.get(color);
+    if (!c) this.colours.set(color, (c = new THREE.Color(color)));
+    mesh.setColorAt(i, c);
   }
 
   /**
@@ -214,7 +218,7 @@ export class BuildingLayer {
    * (negative is toward the street), sizes likewise.
    */
   private part(kind: Kind, lot: Lot, x: number, z: number, along: number, out: number, y: number, w: number, h: number, d: number, color: number, skin = Skin.Plain): void {
-    const mesh = { b: this.bodies, r: this.roofs, k: this.stacks, g: this.signs, d: this.decor, t: this.canopies }[kind];
+    const mesh = (this.meshes ??= { b: this.bodies, r: this.roofs, k: this.stacks, g: this.signs, d: this.decor, t: this.canopies })[kind];
     const cap = kind === 'b' ? MAX_PARTS : kind === 'd' ? MAX_DECOR : kind === 't' ? MAX_TREES : MAX;
     if (this.n[kind] >= cap) return;
     if (kind === 'b') this.skins.setX(this.n.b, skin);

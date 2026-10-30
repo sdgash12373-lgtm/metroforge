@@ -232,7 +232,7 @@ function gantry(k: Kit, u: number, v0: number, v1: number, reach: number): void 
   const white = 0xf2f3f4;
   for (const v of [v0, v1]) {
     for (const du of [-6, 6]) k.box(u + du - 0.6, v - 0.6, u + du + 0.6, v + 0.6, 0.3, 30, red);
-    k.box(u - 6.6, v - 0.8, u + 6.6, v + 0.8, 0.3, 1.6, 0x5f6366);
+    k.box(u - 6.5, v - 0.8, u + 6.5, v + 0.8, 0.3, 1.6, 0x5f6366);
   }
   // Cross beams, the girder out over the water and the machinery house at the back
   for (const z of [12, 29]) for (const du of [-6, 6]) k.box(u + du - 0.4, v0, u + du + 0.4, v1, z, z + 1, white);
@@ -247,14 +247,14 @@ function gantry(k: Kit, u: number, v0: number, v1: number, reach: number): void 
 /** A container ship (or one moored), bow along +u, its hull from v0 to v1. */
 function containerShip(k: Kit, u0: number, u1: number, v0: number, v1: number): void {
   k.box(u0 + 6, v0, u1 - 8, v1, -4, 3.5, 0x23324a);
-  k.box(u0 + 6, v0 - 0.05, u1 - 8, v1 + 0.05, -4, -1.6, 0xa8322a);
+  k.box(u0 + 5.95, v0 - 0.05, u1 - 7.95, v1 + 0.05, -4, -1.6, 0xa8322a);
   // Bow tapers
   k.box(u1 - 8, v0 + 2, u1 - 2, v1 - 2, -3, 3.5, 0x23324a);
   k.box(u1 - 2, v0 + 5, u1, v1 - 5, -2, 3.5, 0x23324a);
   k.box(u0 + 2, v0 + 1, u0 + 6, v1 - 1, -3, 3.5, 0x23324a);
   // Bridge and funnel at the stern
   k.box(u0 + 4, v0 + 1.5, u0 + 13, v1 - 1.5, 3.5, 17, 0xf2f3f4);
-  k.box(u0 + 4, v0 + 1, u0 + 13, v1 - 1, 15.2, 16.2, 0x2f3f5a);
+  k.box(u0 + 3.95, v0 + 1, u0 + 13.05, v1 - 1, 15.2, 16.2, 0x2f3f5a);
   k.box(u0 + 2, v0 + 5, u0 + 6, v1 - 5, 14, 21, 0xd9343a);
   // Rows of containers, two to four high
   let i = 0;
@@ -315,11 +315,11 @@ function cargoPort(k: Kit, w: number, d: number): void {
 function ferry(k: Kit, u0: number, u1: number, v0: number, v1: number): void {
   k.box(u0 + 1.5, v0, u1 - 3, v1, -1.6, 1.4, 0xf5f5f5);
   k.box(u1 - 3, v0 + 1, u1, v1 - 1, -1.2, 1.4, 0xf5f5f5);
-  k.box(u0 + 1.5, v0 - 0.05, u1 - 3, v1 + 0.05, -0.2, 0.5, 0x1f5fa8);
+  k.box(u0 + 1.45, v0 - 0.05, u1 - 2.95, v1 + 0.05, -0.2, 0.5, 0x1f5fa8);
   k.box(u0 + 3, v0 + 0.6, u1 - 6, v1 - 0.6, 1.4, 4, 0xf2f3f4);
-  k.box(u0 + 3, v0 + 0.55, u1 - 6, v1 - 0.55, 2.3, 3.3, 0x2a3a4a);
+  k.box(u0 + 2.95, v0 + 0.55, u1 - 5.95, v1 - 0.55, 2.3, 3.3, 0x2a3a4a);
   k.box(u0 + 6, v0 + 1, u1 - 9, v1 - 1, 4, 6, 0xf2f3f4);
-  k.box(u0 + 6, v0 + 0.95, u1 - 9, v1 - 0.95, 4.6, 5.4, 0x2a3a4a);
+  k.box(u0 + 5.95, v0 + 0.95, u1 - 8.95, v1 - 0.95, 4.6, 5.4, 0x2a3a4a);
   k.box(u0 + 4, v0 + 2, u0 + 6, v1 - 2, 4, 7, 0x3fa7d6);
 }
 
