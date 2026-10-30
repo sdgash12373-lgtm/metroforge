@@ -23,7 +23,7 @@ import { LEVELS, UNLOCK } from '../sim/levels';
 import { VehicleLayer } from './vehicles';
 import { PedestrianLayer } from './pedestrians';
 import { RAIL_KINDS, type RailKind, TRACK_OFFSET } from '../sim/rail';
-import type { RoadNetwork } from '../sim/roads';
+import type { RoadNetwork, RoadSegment } from '../sim/roads';
 import { airportMaterial, buildAirportGeometry, PlaneLayer, TaxiRank } from './airport';
 import { buildTrackGeometries } from './railMesh';
 import { StationLayer } from './stations';
@@ -50,6 +50,12 @@ const TREE_COUNT = LOWLAND_TREES + HILL_TREES + OUTER_TREES;
 const STREET_TREES = 4000;
 /** How often painted cells are redrawn while the brush moves. */
 const PAINT_REDRAW_MS = 120;
+/**
+ * Buildings growing on their own are redrawn at most this often: a big city's redraw takes tens of milliseconds and
+ * something grows nearly every tick, which made the game stutter twice a second. The player's own changes still
+ * show straight away.
+ */
+const GROWTH_REDRAW_MS = 2500;
 
 /** A round-crowned street tree in one geometry, coloured per vertex. */
 function mergeTree(): THREE.BufferGeometry {
@@ -147,6 +153,7 @@ export class World {
   /** a zoning brush stroke is under way: it changes the zoning every frame */
   private painting = false;
   private buildingsAt = 0;
+  private buildingsZoning = -1;
   private showEmpty = false;
   private readonly materials = {
     sidewalk: new THREE.MeshLambertMaterial({ color: 0xc4c7c2, side: THREE.DoubleSide }),
@@ -348,22 +355,35 @@ export class World {
   /** Clears trees that stand on roads or zoned cells. */
   private updateTrees(city: City): void {
     this.treesZoning = city.zoningVersion;
-    const zoned = new Set<string>();
+    // Numeric grid keys and roads bucketed by area: this runs over every tree whenever a road or zone changes
+    const key = (i: number, j: number) => (i + 32768) * 65536 + (j + 32768);
+    const zoned = new Set<number>();
     for (const seg of city.net.segments.values()) {
-      for (const l of seg.lots) if (!l.blocked && l.zone !== Zone.None) zoned.add(`${Math.round(l.x / 4)},${Math.round(l.y / 4)}`);
+      for (const l of seg.lots) if (!l.blocked && l.zone !== Zone.None) zoned.add(key(Math.round(l.x / 4), Math.round(l.y / 4)));
     }
     const near = (x: number, y: number) => {
       const gx = Math.round(x / 4);
       const gy = Math.round(y / 4);
-      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (zoned.has(`${gx + i},${gy + j}`)) return true;
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (zoned.has(key(gx + i, gy + j))) return true;
       return false;
     };
-    const segs = [...city.net.segments.values()];
+    const ROAD_CELL = 64;
+    const roads = new Map<number, RoadSegment[]>();
+    for (const s of city.net.segments.values()) {
+      const pad = roadWidth(s) / 2 + 2;
+      for (let i = Math.floor((s.bbox.minX - pad) / ROAD_CELL); i <= Math.floor((s.bbox.maxX + pad) / ROAD_CELL); i++) {
+        for (let j = Math.floor((s.bbox.minY - pad) / ROAD_CELL); j <= Math.floor((s.bbox.maxY + pad) / ROAD_CELL); j++) {
+          const k = key(i, j);
+          (roads.get(k) ?? roads.set(k, []).get(k)!).push(s);
+        }
+      }
+    }
     const m = new THREE.Matrix4();
     let n = 0;
     for (const t of this.trees.spots) {
       if (!t.wild && (near(t.x, t.y) || city.occupied(t))) continue;
-      if (segs.some((s) => bboxNear(s.bbox, t, roadWidth(s) / 2 + 2) && closestOnSamples(s.samples, t).d < roadWidth(s) / 2 + 2)) continue;
+      const here = roads.get(key(Math.floor(t.x / ROAD_CELL), Math.floor(t.y / ROAD_CELL)));
+      if (here?.some((s) => bboxNear(s.bbox, t, roadWidth(s) / 2 + 2) && closestOnSamples(s.samples, t).d < roadWidth(s) / 2 + 2)) continue;
       m.makeScale(t.s, t.s, t.s).setPosition(t.x, t.h, t.y);
       this.trees.trunks.setMatrixAt(n, m);
       this.trees.crowns.setMatrixAt(n, m);
@@ -394,6 +414,7 @@ export class World {
   invalidate(): void {
     this.roadsVersion = -1;
     this.lotsVersion = -1;
+    this.buildingsZoning = -1;
     this.transitVersion = -1;
     this.aviationVersion = -1;
     this.facilitiesVersion = -1;
@@ -780,8 +801,11 @@ export class World {
       this.facilitySigns.geometry = buildFacilitySigns(city.facilities.values());
     }
     // Painted cells still show as the brush moves, a few times a second rather than every frame
-    if (city.lotsVersion !== this.lotsVersion && (!painting || now - this.buildingsAt > PAINT_REDRAW_MS)) {
+    const own = city.zoningVersion !== this.buildingsZoning;
+    const wait = painting ? PAINT_REDRAW_MS : own ? 0 : GROWTH_REDRAW_MS;
+    if (city.lotsVersion !== this.lotsVersion && now - this.buildingsAt > wait) {
       this.lotsVersion = city.lotsVersion;
+      this.buildingsZoning = city.zoningVersion;
       this.buildingsAt = now;
       this.buildings.update(city);
     }
@@ -896,6 +920,9 @@ export class World {
     cam.near = Math.max(1, reach - span * 2);
     cam.far = reach + span * 2;
     cam.updateProjectionMatrix();
+    // Push the shadow test out by over half a shadow texel, which grows as the view zooms out: with a fixed
+    // bias, walls lit at a glancing angle broke up into stripes (shadow acne) when seen from afar
+    this.sun.shadow.normalBias = Math.max(0.03, ((span * 2) / this.sun.shadow.mapSize.x) * 0.7);
     this.renderer.render(this.scene, this.rig.camera);
     this.placeNames();
     if (this.guides.length) {

@@ -9,7 +9,12 @@ export const vec = (x: number, y: number): Vec2 => ({ x, y });
 export const add = (a: Vec2, b: Vec2): Vec2 => ({ x: a.x + b.x, y: a.y + b.y });
 export const sub = (a: Vec2, b: Vec2): Vec2 => ({ x: a.x - b.x, y: a.y - b.y });
 export const scale = (a: Vec2, k: number): Vec2 => ({ x: a.x * k, y: a.y * k });
-export const dist = (a: Vec2, b: Vec2): number => Math.hypot(a.x - b.x, a.y - b.y);
+export const dist = (a: Vec2, b: Vec2): number => {
+  // Math.hypot is several times slower, and this runs for every building every tick
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+};
 export const lerp = (a: Vec2, b: Vec2, t: number): Vec2 => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
 export const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
@@ -99,7 +104,9 @@ export function pointSegment(p: Vec2, a: Vec2, b: Vec2): { d: number; f: number 
   const dy = b.y - a.y;
   const l2 = dx * dx + dy * dy || 1;
   const f = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0, 1);
-  return { d: Math.hypot(p.x - a.x - dx * f, p.y - a.y - dy * f), f };
+  const ex = p.x - a.x - dx * f;
+  const ey = p.y - a.y - dy * f;
+  return { d: Math.sqrt(ex * ex + ey * ey), f };
 }
 
 /** Closest point on a sampled curve: distance and curve parameter t. */
