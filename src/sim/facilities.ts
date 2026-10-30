@@ -54,6 +54,16 @@ export const YOUBIKE_RIDES = 0.12;
 export const YOUBIKE_FARE = 10;
 export const YOUBIKE_STATION_RIDES = 400;
 
+/**
+ * 就學: the share of residents of 國小 age, and the share at university (about Taiwan's own), and the seats one
+ * school or university has. Children go to the nearest school whose area reaches their home; students come to the
+ * universities from all over the city.
+ */
+export const PUPIL_SHARE = 0.055;
+export const SCHOOL_SEATS = 1800;
+export const STUDENT_SHARE = 0.04;
+export const UNIVERSITY_SEATS = 20000;
+
 /** 公有停車場: how far drivers walk from it, meters. */
 export const PARKING_REACH = 320;
 /** Spaces in one garage. */

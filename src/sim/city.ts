@@ -9,6 +9,10 @@ import {
   PARKING_REACH,
   YOUBIKE_FARE,
   YOUBIKE_REACH,
+  PUPIL_SHARE,
+  SCHOOL_SEATS,
+  STUDENT_SHARE,
+  UNIVERSITY_SEATS,
   YOUBIKE_RIDES,
   YOUBIKE_STATION_RIDES,
   SERVICE_KINDS,
@@ -362,6 +366,23 @@ export function budgetTotals(b: Budget): { income: number; taxes: number; fees: 
 }
 
 /** How well the city looks after its residents. */
+/** 就學人數: who is at school and university, from the last survey. */
+export interface Schooling {
+  /** pupils at each school, students at each university, by facility id */
+  enrolled: Map<number, number>;
+  /** children at a school, and the seats all schools have */
+  pupils: number;
+  pupilSeats: number;
+  /** children living beyond every school's area */
+  unschooled: number;
+  /** children whose nearest school is full */
+  turnedAway: number;
+  /** students at the universities, the seats they have, and those with no place (or no university) */
+  students: number;
+  studentSeats: number;
+  studentsWaiting: number;
+}
+
 export interface Needs {
   /** 0..100 */
   happiness: number;
@@ -496,6 +517,8 @@ export class City {
   parked = 0;
   /** YouBike rides a day across all stations */
   bikeRides = 0;
+  /** 就學人數 from the last survey: pupils at each school and students at each university (by facility id), and the totals */
+  schooling: Schooling = { enrolled: new Map(), pupils: 0, pupilSeats: 0, unschooled: 0, turnedAway: 0, students: 0, studentSeats: 0, studentsWaiting: 0 };
   /** income and expenses per game month, at the current rate */
   budget: Budget = {
     residentialTax: 0,
@@ -2019,6 +2042,10 @@ export class City {
     // Residents within walking distance of a YouBike station, per station
     const docks = [...this.facilities.values()].filter((f) => f.kind === 'youbike');
     const bikers = new Map<number, number>(docks.map((f) => [f.id, 0]));
+    // Children of school age, at the nearest school whose area reaches their home
+    const schools = [...this.facilities.values()].filter((f) => f.kind === 'school');
+    const pupils = new Map<number, number>(schools.map((f) => [f.id, 0]));
+    let unschooled = 0;
     const ports = this.cargoPorts();
     // Ports per road network, and the goods made on each: industry ships only through ports it can reach
     const portPieces = new Map<number, number>();
@@ -2052,6 +2079,14 @@ export class City {
             const near = docks.find((f) => dist(f.p, lot) < YOUBIKE_REACH);
             if (near) bikers.set(near.id, bikers.get(near.id)! + people);
           }
+          let school: Facility | null = null;
+          let best = FACILITIES.school.radius;
+          for (const f of schools) {
+            const d = dist(f.p, lot);
+            if (d < best) [school, best] = [f, d];
+          }
+          if (school) pupils.set(school.id, pupils.get(school.id)! + people * PUPIL_SHARE);
+          else unschooled += people * PUPIL_SHARE;
           const dirty = polluted(lot);
           if (dirty) smog += people;
           const served = Math.max(0, s.kinds.size + s.landmark - (dirty ? 1 : 0));
@@ -2141,6 +2176,29 @@ export class City {
     let rides = 0;
     for (const n of bikers.values()) rides += Math.min(YOUBIKE_STATION_RIDES, n * YOUBIKE_RIDES);
     this.bikeRides = rides;
+    // Universities share the city's students, each up to its seats
+    const enrolled = new Map<number, number>();
+    let inSchool = 0;
+    let wanting = 0;
+    for (const [id, n] of pupils) {
+      enrolled.set(id, Math.round(Math.min(n, SCHOOL_SEATS)));
+      inSchool += Math.min(n, SCHOOL_SEATS);
+      wanting += n;
+    }
+    const unis = [...this.facilities.values()].filter((f) => f.kind === 'university');
+    const students = pop * STUDENT_SHARE;
+    const each = unis.length ? Math.min(UNIVERSITY_SEATS, students / unis.length) : 0;
+    for (const u of unis) enrolled.set(u.id, Math.round(each));
+    this.schooling = {
+      enrolled,
+      pupils: Math.round(inSchool),
+      pupilSeats: schools.length * SCHOOL_SEATS,
+      unschooled: Math.round(unschooled),
+      turnedAway: Math.round(wanting - inSchool),
+      students: Math.round(each * unis.length),
+      studentSeats: unis.length * UNIVERSITY_SEATS,
+      studentsWaiting: Math.round(Math.max(0, students - each * unis.length)),
+    };
     return zoned;
   }
 

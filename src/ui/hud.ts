@@ -3,7 +3,7 @@ import logoUrl from '../assets/logo.png';
 import { gameDate, ntd } from '../sim/format';
 import { type City, MAX_TAX, REGION_COST, ROAD_KINDS, type RoadKind, budgetTotals, freewayTown } from '../sim/city';
 import { LEVELS, ntdShort } from '../sim/levels';
-import { FACILITIES, GREEN_KINDS, LANDMARK_KINDS, MAX_PARKING_FEE, PARKING_SPACES, PORT_KINDS, SERVICE_KINDS } from '../sim/facilities';
+import { FACILITIES, GREEN_KINDS, LANDMARK_KINDS, MAX_PARKING_FEE, PARKING_SPACES, PORT_KINDS, SCHOOL_SEATS, SERVICE_KINDS } from '../sim/facilities';
 import { RAIL_KINDS } from '../sim/rail';
 import { INCOME_BRACKETS } from '../sim/income';
 import { POLICIES, POLICY_KEYS, POLICY_RANK, REVIEW, REVIEW_KEYS } from '../sim/policy';
@@ -1116,6 +1116,7 @@ export class Hud {
       SERVICE_KINDS.map((k) => Math.round(n.coverage[k] * 100)),
       Math.round(homes.averageIncome / 1000),
       INCOME_BRACKETS.map((b) => homes.people[b.key]),
+      Object.values(city.schooling).filter((v) => typeof v === 'number'),
     ]);
     if (key === this.needsShown) return;
     this.needsShown = key;
@@ -1133,6 +1134,20 @@ export class Hud {
     const mood = n.happiness >= 70 ? '😊' : n.happiness >= 45 ? '😐' : '😟';
     meter('滿意度', n.happiness, n.happiness >= 70 ? '#5fb565' : n.happiness >= 45 ? '#e3b23c' : '#e4572e', `${mood} ${Math.round(n.happiness)}`);
     for (const k of SERVICE_KINDS) meter(FACILITIES[k].label, n.coverage[k] * 100, `#${FACILITIES[k].color.toString(16).padStart(6, '0')}`);
+    // 就學人數: pupils at the schools and students at the universities, against their seats
+    const s = city.schooling;
+    if (city.stats.population) {
+      rows.push(el('h3', '', `就學人數：小學 ${s.pupils.toLocaleString()} 人・大學 ${s.students.toLocaleString()} 人`));
+      const seats = (n: number, of: number) => (of ? (n / of) * 100 : 0);
+      meter('小學', seats(s.pupils, s.pupilSeats), '#f2b134', `${s.pupils.toLocaleString()} 人`);
+      meter('大學', seats(s.students, s.studentSeats), '#9c2f2f', `${s.students.toLocaleString()} 人`);
+      rows.push(el('p', 'note', `名額：小學 ${s.pupilSeats.toLocaleString()} 個、大學 ${s.studentSeats.toLocaleString()} 個，長條是已坐滿的比例`));
+      if (s.unschooled) rows.push(el('p', 'want', `${s.unschooled.toLocaleString()} 位學童住在學校範圍外 → 在住宅區附近蓋學校`));
+      if (s.turnedAway) rows.push(el('p', 'want', `有學校額滿（每所 ${SCHOOL_SEATS.toLocaleString()} 人），${s.turnedAway.toLocaleString()} 位學童排不進去 → 在附近再蓋一所學校`));
+      if (s.studentsWaiting) rows.push(el('p', 'note', s.studentSeats
+        ? `大學額滿，${s.studentsWaiting.toLocaleString()} 位學生到外地念書 → 再蓋一所大學`
+        : `全市約 ${s.studentsWaiting.toLocaleString()} 位大學生到外地念書（縣轄市起可蓋大學）`));
+    }
     rows.push(el('h3', '', '居民心聲'));
     if (!city.stats.population) rows.push(el('p', 'note', '還沒有居民。'));
     else if (!n.wants.length) rows.push(el('p', 'note', '居民對公共服務很滿意！'));

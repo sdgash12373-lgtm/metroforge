@@ -259,7 +259,7 @@ export class World {
     const rail = (kind: RailKind): RailLayer => {
       const layer: RailLayer = {
         tracks: new THREE.Group(),
-        stations: new StationLayer(shadows),
+        stations: new StationLayer(shadows, this.sky.night),
         trains: new TrainLayer(kind, shadows),
         lines: new THREE.Mesh(new THREE.BufferGeometry(), pathMaterial()),
         tunnels: new THREE.Mesh(new THREE.BufferGeometry(), this.tunnels.material),
@@ -700,7 +700,10 @@ export class World {
   animate(city: City, dt: number, simDt = dt, hour = 12, rain = 0): void {
     this.pedestrians.update(city, simDt, hour, rain);
     this.vehicles.update(city.traffic, (v) => city.transit.lines.get(v.line ?? -1)?.color ?? 0xf2b134);
-    for (const k of RAIL_KINDS) this.rails[k].trains.update(city.rails[k]);
+    for (const k of RAIL_KINDS) {
+      this.rails[k].trains.update(city.rails[k]);
+      this.rails[k].stations.light(this.sky.night.value);
+    }
     this.planes.update(city.aviation);
     this.ships.update(city, simDt);
     this.taxiRanks.update(city.aviation);

@@ -1,5 +1,5 @@
 import { angleGuides } from '../sim/angles';
-import { FACILITIES, PARKING_SPACES, type FacilityKind, type GreenKind, type LandmarkKind, type PortKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners, isPort } from '../sim/facilities';
+import { FACILITIES, PARKING_SPACES, SCHOOL_SEATS, UNIVERSITY_SEATS, type FacilityKind, type GreenKind, type LandmarkKind, type PortKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners, isPort } from '../sim/facilities';
 import { ntd } from '../sim/format';
 import { stationCovers } from '../sim/stations';
 import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
@@ -646,6 +646,15 @@ export class ToolController {
   private facilityHint(): string {
     const kind = this.facilityKind!;
     const spec = FACILITIES[kind];
+    if (kind === 'school' || kind === 'university') {
+      // Over a school or university already built: how many go there
+      const here = this.hover && this.city.facilityAt(this.hover, 2);
+      if (here && here.kind === kind) {
+        const n = this.city.schooling.enrolled.get(here.id) ?? 0;
+        const seats = kind === 'school' ? SCHOOL_SEATS : UNIVERSITY_SEATS;
+        return `這所${kind === 'school' ? '小學' : '大學'}：就學 ${n.toLocaleString()} 人，可收 ${seats.toLocaleString()} 人${n >= seats ? '（已額滿）' : ''}`;
+      }
+    }
     if (this.hover) {
       const spot = this.city.facilitySpot(kind, this.hover);
       const problem = this.city.facilityProblem(kind, spot.p, spot.angle);
@@ -666,7 +675,10 @@ export class ToolController {
     }
     const where = kind === 'footbridge' ? '點馬路（離路口遠一點）蓋一座橫跨的天橋' : '點道路旁的空地興建';
     const park = spec.serves === 'park' ? '・算作公園' : '';
-    return `${spec.label} · ${ntd(spec.cost)} · 每兩週維護 ${ntd(spec.upkeep * HOUR_STEPS)} · 範圍 ${spec.radius} 公尺${tour}${park}　${spec.blurb}；${where}`;
+    const s = this.city.schooling;
+    const pupils = kind === 'school' ? `　全市小學就學 ${s.pupils.toLocaleString()} 人；指著已蓋的學校看該校人數` : '';
+    const students = kind === 'university' ? `　全市大學就學 ${s.students.toLocaleString()} 人；指著已蓋的大學看該校人數` : '';
+    return `${spec.label} · ${ntd(spec.cost)} · 每兩週維護 ${ntd(spec.upkeep * HOUR_STEPS)} · 範圍 ${spec.radius} 公尺${tour}${park}　${spec.blurb}；${where}${pupils}${students}`;
   }
 
   /** Hint for drawing a road or track: length and price of the ghost, or how to start. */

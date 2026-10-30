@@ -37,21 +37,90 @@ const SKYLIGHT = 0xbfe0ec;
 const WINDOW = 0x2d3a46;
 const PALM = 0x4e8a3c;
 const TRUNK = 0x8a7458;
+/** Lamp heads, and the posts they stand on */
+const LAMP = 0xfff2cc;
+const LAMP_POST = 0x596068;
+
+/**
+ * Colours that light up at night: glass and windows, skylights, name boards, the MRT sign, lamps and the
+ * fountain pool. Faces in them are drawn into a second mesh that glows after dark.
+ */
+const GLOWING = new Set([GLASS, KMRT_GLASS, SKYLIGHT, WINDOW, KMRT_ORANGE, LAMP, 0x8fb4c4, 0x8fb0c0, 0xa9c4cf, 0xf7f7f4, 0xf0d9a0, 0x5fb8b5]);
+
+/** Soft discs of lamplight on the ground, bright in the middle and fading to nothing at the rim. */
+class Pools {
+  pos: number[] = [];
+  col: number[] = [];
+  idx: number[] = [];
+
+  disc(x: number, z: number, y: number, r: number, strength = 1): void {
+    const sides = 14;
+    const i = this.pos.length / 3;
+    this.pos.push(x, y, z);
+    this.col.push(1 * strength, 0.8 * strength, 0.5 * strength);
+    for (let k = 0; k < sides; k++) {
+      const a = (k / sides) * Math.PI * 2;
+      this.pos.push(x + Math.cos(a) * r, y, z + Math.sin(a) * r);
+      this.col.push(0, 0, 0);
+    }
+    for (let k = 0; k < sides; k++) this.idx.push(i, i + 1 + ((k + 1) % sides), i + 1 + k);
+  }
+
+  geometry(): THREE.BufferGeometry {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
+    g.setIndex(this.idx);
+    return g;
+  }
+}
+
+/** Where a station's pieces are drawn: the body, the faces that glow at night, the pools of lamplight, and the ground openings. */
+interface Out {
+  body: Builder;
+  glow: Builder;
+  pools: Pools;
+  mask?: Builder;
+}
 
 /** Boxes and panels turned to follow the track (or a street), in local coordinates (u along, v across). */
 class Frame {
+  /** the builder the next faces go to: the body, or the glowing mesh for lit colours */
+  private b: Builder;
+  private mask: Builder | null;
+
   constructor(
-    private b: Builder,
+    private out: Out,
     private x: number,
     private z: number,
     private dx: number,
     private dz: number,
-    private mask: Builder | null = null,
-  ) {}
+  ) {
+    this.b = out.body;
+    this.mask = out.mask ?? null;
+  }
+
+  private paint(color: number): void {
+    this.b = GLOWING.has(color) ? this.out.glow : this.out.body;
+    this.b.color = new THREE.Color(color);
+  }
+
+  /** A pool of lamplight `r` across on the ground at (u, v), height y. */
+  pool(u: number, v: number, y: number, r: number, strength = 1): void {
+    const [x, z] = this.at(u, v, y);
+    this.out.pools.disc(x, z, y + 0.08, r, strength);
+  }
+
+  /** A lamp post `tall` high at (u, v) standing on y, with its pool of light. */
+  lamp(u: number, v: number, y: number, tall = 4.5, reach = tall * 1.5): void {
+    this.box(u, v, 0.18, 0.18, y, y + tall, LAMP_POST);
+    this.box(u, v, 0.5, 0.5, y + tall, y + tall + 0.35, LAMP);
+    this.pool(u, v, y, reach);
+  }
 
   /** A slanted beam `w` thick from (u0, v0, y0) to (u1, v1, y1), as two crossed strips. */
   beam(u0: number, v0: number, y0: number, u1: number, v1: number, y1: number, w: number, color: number): void {
-    this.b.color = new THREE.Color(color);
+    this.paint(color);
     const len = Math.hypot(u1 - u0, v1 - v0) || 1;
     const su = (-(v1 - v0) / len) * (w / 2);
     const sv = ((u1 - u0) / len) * (w / 2);
@@ -61,19 +130,19 @@ class Frame {
 
   /** A square cell `size` across at (u, v), its corners at heights y(du, dv). */
   cell(u: number, v: number, size: number, y: (du: number, dv: number) => number, color: number): void {
-    this.b.color = new THREE.Color(color);
+    this.paint(color);
     this.b.quad(this.at(u, v, y(0, 0)), this.at(u + size, v, y(size, 0)), this.at(u, v + size, y(0, size)), this.at(u + size, v + size, y(size, size)));
   }
 
   /** An upright strip from (u0, v0) to (u1, v1), from height lo(u, v) up to hi(u, v). */
   wall(u0: number, v0: number, u1: number, v1: number, lo: (u: number, v: number) => number, hi: (u: number, v: number) => number, color: number): void {
-    this.b.color = new THREE.Color(color);
+    this.paint(color);
     this.b.quad(this.at(u0, v0, hi(u0, v0)), this.at(u0, v0, lo(u0, v0)), this.at(u1, v1, hi(u1, v1)), this.at(u1, v1, lo(u1, v1)));
   }
 
   /** An upright round prism of radius r, in n sides, from y0 to y1. */
   prism(u: number, v: number, r: number, y0: number, y1: number, color: number, n = 16): void {
-    this.b.color = new THREE.Color(color);
+    this.paint(color);
     const pt = (k: number) => [u + r * Math.cos((2 * Math.PI * k) / n), v + r * Math.sin((2 * Math.PI * k) / n)];
     for (let k = 0; k < n; k++) {
       const [au, av] = pt(k);
@@ -95,7 +164,7 @@ class Frame {
 
   /** Box centred at (u, v), `len` along and `wid` across, from height y0 to y1. */
   box(u: number, v: number, len: number, wid: number, y0: number, y1: number, color: number): void {
-    this.b.color = new THREE.Color(color);
+    this.paint(color);
     const l = len / 2;
     const w = wid / 2;
     const c = [
@@ -116,14 +185,14 @@ class Frame {
 
   /** A flat panel `len` long along u, its cross-section running from (v0, y0) to (v1, y1). */
   panel(u: number, len: number, v0: number, y0: number, v1: number, y1: number, color: number): void {
-    this.b.color = new THREE.Color(color);
+    this.paint(color);
     const l = len / 2;
     this.b.quad(this.at(u - l, v0, y0), this.at(u + l, v0, y0), this.at(u - l, v1, y1), this.at(u + l, v1, y1));
   }
 
   /** An upright triangle across the frame at u: base from v0 to v1 at y0, apex at (v, y1). */
   triangle(u: number, v0: number, v1: number, y0: number, v: number, y1: number, color: number): void {
-    this.b.color = new THREE.Color(color);
+    this.paint(color);
     this.b.quad(this.at(u, v0, y0), this.at(u, v1, y0), this.at(u, v, y1), this.at(u, v, y1));
   }
 
@@ -148,7 +217,7 @@ class Frame {
       for (let j = 0; j < nv; j++) {
         const c = color(i, j);
         if (c === null) continue;
-        this.b.color = new THREE.Color(c);
+        this.paint(c);
         this.b.quad(at(i, j), at(i, j + 1), at(i + 1, j), at(i + 1, j + 1));
       }
     }
@@ -156,7 +225,7 @@ class Frame {
 
   /** Hipped roof: eaves `len` × `wid` at y0 sloping up on all four sides to a ridge along u at y1. */
   hip(u: number, v: number, len: number, wid: number, y0: number, y1: number, color: number): void {
-    this.b.color = new THREE.Color(color);
+    this.paint(color);
     const l = len / 2;
     const w = wid / 2;
     const r = Math.max(l - w, 0);
@@ -197,31 +266,88 @@ export class StationLayer {
    * so the ground is hidden there and the plaza below shows.
    */
   private mask: THREE.Mesh;
+  /** glass, windows, signs and lamps: lit from within after dark, so a station stands out bright at night */
+  private glow: THREE.Mesh;
+  /** pools of lamplight on platforms and forecourts, added over the ground at night */
+  private pools: THREE.Mesh;
 
-  constructor(shadows: boolean) {
+  /** `night` is the sky's 0 (day) to 1 (night) uniform. */
+  constructor(shadows: boolean, night: { value: number }) {
     this.body = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
     this.body.castShadow = shadows;
     this.body.receiveShadow = true;
     this.body.renderOrder = -2;
+    // Floodlit after dark: walls washed in warm light, roofs a little
+    const body = this.body.material as THREE.MeshLambertMaterial;
+    body.onBeforeCompile = (shader) => {
+      shader.uniforms.uNight = night;
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uNight;')
+        .replace(
+          '#include <emissivemap_fragment>',
+          `#include <emissivemap_fragment>
+          if (uNight > 0.01) {
+            vec3 wn = (vec4(normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition))), 0.0) * viewMatrix).xyz;
+            totalEmissiveRadiance += vColor.rgb * vec3(1.0, 0.86, 0.66) * uNight * mix(0.5, 0.18, abs(wn.y));
+          }`,
+        );
+    };
+    body.customProgramCacheKey = () => 'stationFloodlit';
+    const lit = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide });
+    lit.onBeforeCompile = (shader) => {
+      shader.uniforms.uNight = night;
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uNight;')
+        .replace(
+          '#include <emissivemap_fragment>',
+          // Warm light behind the glass; signs keep their own colour, only brighter
+          `#include <emissivemap_fragment>
+          totalEmissiveRadiance += max(vColor.rgb, vec3(1.0, 0.82, 0.55) * 0.8) * uNight * 0.95;`,
+        );
+    };
+    lit.customProgramCacheKey = () => 'stationGlow';
+    this.glow = new THREE.Mesh(new THREE.BufferGeometry(), lit);
+    this.glow.castShadow = shadows;
+    this.glow.receiveShadow = true;
+    this.glow.renderOrder = -2;
+    const pool = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 });
+    pool.onBeforeCompile = (shader) => {
+      shader.uniforms.uNight = night;
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uNight;')
+        .replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( diffuse * uNight * 0.55, opacity );');
+    };
+    pool.customProgramCacheKey = () => 'stationPools';
+    this.pools = new THREE.Mesh(new THREE.BufferGeometry(), pool);
+    this.pools.renderOrder = 3;
     this.mask = new THREE.Mesh(
       new THREE.BufferGeometry(),
       new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
     );
     this.mask.renderOrder = -1;
-    this.mesh.add(this.body, this.mask);
+    this.mesh.add(this.body, this.glow, this.mask, this.pools);
+  }
+
+  /** Hide the light pools by day, when they add nothing. */
+  light(night: number): void {
+    this.pools.visible = night > 0.02;
   }
 
   /** `streets` is the road network above, which underground metro entrances must stand beside, not on. */
   rebuild(sys: RailSystem, streets: RoadNetwork): void {
     const b = new Builder(0);
     const m = new Builder(0);
+    const glow = new Builder(0);
+    const pools = new Pools();
+    const out: Out = { body: b, glow, pools };
+    const masked: Out = { ...out, mask: m };
     const colorOf = new Map<number, number>();
     for (const l of sys.transit.lines.values()) for (const id of l.stops) if (!colorOf.has(id)) colorOf.set(id, l.color);
     for (const stop of sys.transit.stops.values()) {
       const pose = stationPose(sys, stop);
       if (!pose) continue;
       const { p, d, h } = pose;
-      const f = new Frame(b, p.x, p.y, d.x, d.y);
+      const f = new Frame(out, p.x, p.y, d.x, d.y);
       const color = colorOf.get(stop.id) ?? 0x9aa5b1;
       if (sys.kind === 'metro') {
         metroStation(f, h, color);
@@ -231,14 +357,14 @@ export class StationLayer {
             const want = { x: p.x + d.x * end * 15 - d.y * end * 11, y: p.y + d.y * end * 15 + d.x * end * 11 };
             const spot = entranceSpot(streets, want, taken) ?? { x: want.x, y: want.y, dx: d.x, dy: d.y };
             taken.push(spot);
-            metroEntrance(new Frame(b, spot.x, spot.y, spot.dx, spot.dy), h, color);
+            metroEntrance(new Frame(out, spot.x, spot.y, spot.dx, spot.dy), h, color);
           }
         }
       } else {
         // The station building stands on the side of the tracks facing the town, off the roads: turn the frame
         // round if that is the other side
         const side = stop.face ?? stationSide(streets, sys.kind, pose);
-        const g = side > 0 ? new Frame(b, p.x, p.y, d.x, d.y, m) : new Frame(b, p.x, p.y, -d.x, -d.y, m);
+        const g = side > 0 ? new Frame(masked, p.x, p.y, d.x, d.y) : new Frame(masked, p.x, p.y, -d.x, -d.y);
         if (sys.kind === 'train') {
           // A region's own station where the player built one; every other station in the standard style
           if (stop.style === 'kaohsiung') kaohsiungStation(g, h, color);
@@ -251,6 +377,10 @@ export class StationLayer {
     this.body.geometry = b.geometry();
     this.mask.geometry.dispose();
     this.mask.geometry = m.geometry();
+    this.glow.geometry.dispose();
+    this.glow.geometry = glow.geometry();
+    this.pools.geometry.dispose();
+    this.pools.geometry = pools.geometry();
   }
 }
 
@@ -320,9 +450,19 @@ export function entranceSpot(
   return best;
 }
 
-/** Side platforms on both sides of the double track. */
+/** Side platforms on both sides of the double track, lamps down their outer edge. */
 function platforms(f: Frame, h: number, len: number): void {
-  for (const side of [-1, 1]) f.box(0, side * 5.6, len, 3, h - 0.2, h + 1.1, PLATFORM);
+  for (const side of [-1, 1]) {
+    f.box(0, side * 5.6, len, 3, h - 0.2, h + 1.1, PLATFORM);
+    for (let u = -len / 2 + 3; u <= len / 2 - 3; u += 6) f.pool(u, side * 5.6, h + 1.1, 2.2, 0.7);
+    for (let u = -len / 2 + 6; u <= len / 2 - 6; u += 12) f.lamp(u, side * 6.7, h + 1.1, 3.4, 2.6);
+  }
+}
+
+/** A row of lamps along a forecourt at v, from u0 to u1, with lamplight spread over the paving. */
+function forecourt(f: Frame, v: number, y: number, u0: number, u1: number): void {
+  for (let u = u0; u <= u1; u += 8) f.lamp(u, v, y, 5);
+  for (let u = u0 + 4; u < u1; u += 8) f.pool(u, v - 2.5, y, 6, 0.6);
 }
 
 function metroStation(f: Frame, h: number, color: number): void {
@@ -341,6 +481,7 @@ function metroStation(f: Frame, h: number, color: number): void {
   f.vault(0, 0, 44, 17, h + 5.4, 3.2, STEEL_WHITE);
   for (const side of [-1, 1]) {
     f.box(0, side * 8.5, 44.4, 0.5, h + 5.0, h + 5.6, color);
+    f.box(0, side * 8.3, 42, 0.2, h + 4.8, h + 5.0, LAMP);
     f.box(0, side * 7.4, 40, 0.1, h + 2.6, h + 5.0, KMRT_GLASS);
   }
   // Elevated stations get a stair and lift tower down to the street, with the orange sign on top
@@ -388,6 +529,7 @@ function trainStation(f: Frame, h: number, color: number): void {
   for (const side of [-1, 1]) {
     for (let u = -36; u <= 36; u += 12) f.box(u, side * 5.6, 0.3, 0.3, h + 1.1, h + 4.0, 0x6e757c);
     f.box(0, side * 5.6, 80, 3.6, h + 3.9, h + 4.1, color);
+    f.box(0, side * 5.6, 78, 0.3, h + 3.75, h + 3.9, LAMP);
     f.gable(0, side * 5.6, 80, 4.4, h + 4.1, h + 4.9, METAL_ROOF);
   }
   const base = Math.max(0, Math.min(h, 0));
@@ -414,6 +556,7 @@ function trainStation(f: Frame, h: number, color: number): void {
   f.box(0, front + 0.02, 2.4, 0.1, base + 11.6, base + 14, 0xf7f7f4);
   f.box(0, front + 0.08, 0.3, 0.06, base + 12.2, base + 13.4, 0x22262b);
   f.gable(0, front - 2.5, 6.6, 5.6, base + 15, base + 18, TILE);
+  forecourt(f, front + 5, base, -16, 16);
   footbridge(f, h, STONE);
   trench(f, h);
 }
@@ -465,6 +608,7 @@ function kaohsiungAtGrade(f: Frame, h: number, color: number): void {
   f.box(0, 13.6, 33, 7, base, base + 6.5, GLASS);
   f.box(0, 13.6, 33.4, 7.4, base + 6.5, base + 7, STEEL_WHITE);
   oldKaohsiungStation(f, base);
+  forecourt(f, 30, base, -16, 16);
   footbridge(f, h, STEEL_WHITE);
   trench(f, h);
 }
@@ -591,6 +735,10 @@ function kaohsiungUnderground(f: Frame, h: number, color: number): void {
   // Palms on the plaza floor, and the old station standing on it
   for (const [pu, pv] of [[-15, 27], [15, 27], [-11, 31], [11, 31], [-17, 21], [17, 21], [-6, 29], [6, 29]]) palm(f, pu, pv, pv > 30 ? floor + ((Math.floor(((pv - 30) / 7) * 10) * -floor) / 10) : floor);
   oldKaohsiungStation(f, floor);
+  // Lamps on the plaza floor and along the street at its top, light spilling down the stairs
+  for (const [lu, lv] of [[-13, 24], [13, 24], [-8, 30], [8, 30]]) f.lamp(lu, lv, floor, 5);
+  for (const [pu, pv, r] of [[0, 18, 9], [-10, 27, 7], [10, 27, 7], [0, 33, 8]]) f.pool(pu, pv, floor, r, 0.7);
+  forecourt(f, 40, 0, -24, 24);
   // The line's colour on a band round the plaza's rim
   f.box(0, 9.3, 30, 0.3, 0.2, 0.7, color);
 }
@@ -627,6 +775,7 @@ function pingtungElevated(f: Frame, h: number, color: number): void {
   f.vault(0, 0, len + 4, half * 2 + 4, h + 6, 3.2, 0xd5d8d6, 12);
   for (const side of [-1, 1]) {
     f.box(0, side * (half + 2), len + 4.4, 1.2, h + 5.2, h + 6.4, STEEL_WHITE);
+    f.box(0, side * (half + 2.7), len + 4, 0.2, h + 5.0, h + 5.2, LAMP);
     f.panel(0, len + 4.4, side * (half + 2.6), h + 5.4, side * (half + 1.4), h + 4.6, STEEL_WHITE);
   }
   for (const e of [-1, 1]) f.box(e * (len / 2 + 2), 0, 0.4, half * 2 + 4, h + 5.2, h + 6.6, color);
@@ -679,6 +828,9 @@ function pingtungElevated(f: Frame, h: number, color: number): void {
   f.box(34, 32.3, 4, 0.1, 2.6, 3.4, TR_BLUE);
   // Stair and lift up to the platforms at the far end
   f.box(46, 0, 4, 4, 0, h + 1.1, STEEL_WHITE);
+  // Lamps round the plaza, and light under the canopy along the front of the hall
+  forecourt(f, v1 - 1.5, 0, -40, 32);
+  for (let u = -12; u <= 36; u += 8) f.pool(u, half + 4.5, 0, 6, 0.8);
 }
 
 /**
@@ -704,6 +856,7 @@ function pingtungAtGrade(f: Frame, h: number, color: number): void {
   for (const side of [-1, 1]) {
     f.box(0, side * 7.4, 76, 0.1, h + 3.6, h + 5.6, GLASS);
     f.box(0, side * 7.6, 80.4, 0.4, h + 5.4, h + 5.9, color);
+    f.box(0, side * 7.9, 78, 0.2, h + 5.2, h + 5.4, LAMP);
   }
   // The hall: white walls, a glass front behind fins, and the roof rising to a crown over the middle
   f.box(0, 16.5, 32, 11, base, base + 9, STEEL_WHITE);
@@ -719,6 +872,7 @@ function pingtungAtGrade(f: Frame, h: number, color: number): void {
   f.box(0, front + 0.6, 9, 0.15, base + 6.2, base + 7.4, TR_BLUE);
   f.box(0, front + 0.7, 8, 0.05, base + 6.5, base + 7.1, 0xf7f7f4);
   // Palm trees in front
+  forecourt(f, 30, base, -16, 16);
   for (const pu of [-14, -10, 10, 14]) {
     f.box(pu, 24, 0.35, 0.35, base, base + 6, TRUNK);
     f.box(pu, 24, 3.2, 0.7, base + 5.8, base + 6.3, PALM);
@@ -734,11 +888,13 @@ function hsrStation(f: Frame, h: number, color: number): void {
   // Long roof over the tracks on slim columns
   for (let u = -54; u <= 54; u += 18) for (const side of [-1, 1]) f.box(u, side * 10, 0.6, 0.6, h + 1.1, h + 9, 0x8a9096);
   f.box(0, 0, 130, 22, h + 9, h + 9.6, 0xeef0f2);
+  for (const side of [-1, 1]) f.box(0, side * 5.6, 120, 0.4, h + 8.8, h + 9, LAMP);
   for (const side of [-1, 1]) f.box(0, side * 11, 130, 0.5, h + 8.4, h + 9.8, color);
   // Glass concourse beside the line
   const base = Math.max(0, Math.min(h, 0));
   f.box(0, 24, 60, 20, base, base + 12, GLASS);
   f.box(0, 24, 64, 23, base + 12, base + 13, 0xeef0f2);
   f.box(0, 24, 64.4, 23.4, base + 13, base + 13.4, color);
+  forecourt(f, 38, base, -28, 28);
   if (h > 2) f.box(0, 13, 10, 6, base, h + 1, CONCRETE);
 }
