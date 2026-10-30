@@ -683,7 +683,9 @@ export class World {
     this.planes.update(city.aviation);
     this.ships.update(city, simDt);
     this.taxiRanks.update(city.aviation);
-    this.arenaDecor.update(city);
+    const cam = this.rig.camera;
+    const pixels = this.renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2));
+    this.arenaDecor.update(city, dt, simDt, this.sky.night.value, pixels);
     this.signals.update(city.traffic, city.net);
     this.peopleAge += dt;
     this.waterTime.value = (this.waterTime.value + dt) % 1000;

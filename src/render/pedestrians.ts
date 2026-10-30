@@ -11,11 +11,11 @@ const MAX = 900;
 const PER_RESIDENTS = 30;
 /** One cyclist on the street per this many residents who ride to work. */
 const PER_CYCLIST = 25;
-const CLOTHES = [0xe4572e, 0x2e86ab, 0xf2f2f2, 0x3b3b3b, 0xf2b134, 0x6a994e, 0xa23b72, 0x4f8fd6, 0xd98ab0];
+export const CLOTHES = [0xe4572e, 0x2e86ab, 0xf2f2f2, 0x3b3b3b, 0xf2b134, 0x6a994e, 0xa23b72, 0x4f8fd6, 0xd98ab0];
 /** Office wear: white and pale blue shirts, grey and black jackets */
 const OFFICE = [0xf4f4f4, 0xcfe0f0, 0x6e737a, 0x2f3238, 0xe9e4da];
-const ELDER = [0x8a7f6e, 0x6b7a8f, 0x9c8f80, 0x7d6b5d, 0xa4746a];
-const KIDS = [0xf2b134, 0xe4572e, 0x4f8fd6, 0x6a994e, 0xd98ab0, 0xffffff];
+export const ELDER = [0x8a7f6e, 0x6b7a8f, 0x9c8f80, 0x7d6b5d, 0xa4746a];
+export const KIDS = [0xf2b134, 0xe4572e, 0x4f8fd6, 0x6a994e, 0xd98ab0, 0xffffff];
 const POLICE_BLUE = 0x1f2f5a;
 
 /** Who is out walking. */
@@ -101,7 +101,7 @@ function arms(top: number, len: number, out: number, sleeve: number, x = 0) {
  * Each kind of person in two parts, facing +x: clothes take each walker's colour, the rest (skin, hair, legs)
  * keeps its own. Arms and legs are separate so they can swing as the person walks.
  */
-function figure(who: Person): { clothes: THREE.BufferGeometry; rest: THREE.BufferGeometry } {
+export function figure(who: Person): { clothes: THREE.BufferGeometry; rest: THREE.BufferGeometry } {
   switch (who) {
     case Person.Woman: {
       const a = arms(1.36, 0.6, 0.27, 0.35);
@@ -197,7 +197,7 @@ function cyclist(): { clothes: THREE.BufferGeometry; rest: THREE.BufferGeometry 
 }
 
 /** Turn each vertex of a swinging limb about its joint by the instance's stride angle (radians), in the shader. */
-function swingLimbs(m: THREE.Material): THREE.Material {
+export function swingLimbs(m: THREE.Material): THREE.Material {
   m.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec3 swing;\nattribute float stride;')
