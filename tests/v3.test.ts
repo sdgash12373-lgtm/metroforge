@@ -56,7 +56,9 @@ describe('regions', () => {
     const before = city.money;
     expect(city.openRegion('pingtung').ok).toBe(true);
     expect(before - city.money).toBe(REGION_COST);
-    expect(city.outside.size).toBe(4);
+    // 國道 1 號's north end and both ends of 國道 3 號: 國道 10 號 now joins the two inside the map
+    expect(city.outside.size).toBe(3);
+    expect(city.disconnectedRoads()).toHaveLength(0);
     expect(city.buildRoad(free(p.x, p.y), null, free(q.x, q.y)).ok).toBe(true);
     expect(city.openRegion('pingtung').ok).toBe(false);
     const copy = City.deserialize(JSON.parse(JSON.stringify(city.serialize())));

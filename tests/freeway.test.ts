@@ -18,13 +18,16 @@ function fresh(terrain: 'flat' | 'plain' | 'kaohsiung' = 'flat'): City {
 }
 
 describe('the freeway a new city starts with', () => {
-  it('runs north–south on viaducts, two lanes each way, leaving the map at both ends', () => {
+  it('runs north–south on viaducts, two lanes each way, carried on to the edge of the land at both ends', () => {
     for (const terrain of ['flat', 'plain', 'kaohsiung'] as const) {
       const city = fresh(terrain);
       expect(city.outside.size).toBe(2);
       const ends = [...city.outside].map((n) => city.net.node(n));
-      expect(ends.map((n) => n.p.y).sort((a, b) => a - b)).toEqual([FREEWAY.north, FREEWAY.south]);
-      expect(ends.every((n) => n.p.x === FREEWAY.x && n.h === ELEVATED_HEIGHT)).toBe(true);
+      expect(ends.every((n) => n.h === ELEVATED_HEIGHT)).toBe(true);
+      const [north, south] = ends.sort((a, b) => a.p.y - b.p.y);
+      expect(north.p.x).toBe(FREEWAY.x);
+      expect(north.p.y).toBeLessThan(FREEWAY.north);
+      expect(south.p.y).toBeGreaterThan(FREEWAY.south);
       const main = [...city.net.segments.values()].filter((s) => s.highway && s.name === FREEWAY.name);
       expect(main.length).toBeGreaterThanOrEqual(3);
       expect(main.every((s) => s.lanes === 2 && s.lots.length === 0)).toBe(true);

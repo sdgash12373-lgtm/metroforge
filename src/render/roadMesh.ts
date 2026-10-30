@@ -148,6 +148,8 @@ export interface RoadGeometries {
   concrete: THREE.BufferGeometry;
   /** tunnel openings */
   dark: THREE.BufferGeometry;
+  /** noise barrier panels along freeways */
+  barriers: THREE.BufferGeometry;
 }
 
 export const isTunnelRamp = (net: RoadNetwork, seg: RoadSegment): boolean => {
@@ -232,7 +234,7 @@ export function nodeWidths(net: RoadNetwork): Map<number, { full: number; asphal
     for (const id of [seg.a, seg.b]) {
       const w = out.get(id) ?? { full: 0, asphalt: 0 };
       w.full = Math.max(w.full, roadWidth(seg));
-      w.asphalt = Math.max(w.asphalt, seg.oneway ? asphaltWidth({}) : asphaltWidth(seg));
+      w.asphalt = Math.max(w.asphalt, seg.ring ? asphaltWidth({}) : asphaltWidth(seg));
       out.set(id, w);
     }
   }
@@ -289,6 +291,42 @@ function laneMarks(marks: Builder, seg: RoadSegment, h: Height, [skipA, skipB]: 
   marks.color = YELLOW;
   if (lanes === 1) dashes(marks, seg.samples, skipA, MARK_WIDTH * 0.6, h, skipB);
   else for (const side of [-1, 1]) strip(marks, s, side * 0.1, side * 0.25, h);
+}
+
+/**
+ * Paint on a one-way road: edge lines, dashed lines between its lanes, and an arrow in every lane every so often
+ * pointing the way traffic goes (a → b).
+ */
+function onewayMarks(marks: Builder, seg: RoadSegment, h: Height, [skipA, skipB]: [number, number]): void {
+  const lanes = seg.lanes ?? 1;
+  const half = asphaltWidth(seg) / 2;
+  const s = trimmed(seg.samples, skipA, skipB);
+  if (s.length < 2) return;
+  marks.color = WHITE;
+  for (const side of [-1, 1]) strip(marks, s, side * (half - 0.35), side * (half - 0.2), h);
+  for (let k = 1; k < lanes; k++) dashes(marks, offsetSamples(seg.samples, -half + k * LANE_WIDTH), skipA, MARK_WIDTH * 0.6, h, skipB);
+  const len = seg.length;
+  const free = len - skipA - skipB;
+  if (free < ARROW_LENGTH + 2) return;
+  const count = Math.max(1, Math.floor(free / ARROW_EVERY));
+  for (let i = 0; i < count; i++) {
+    const d = skipA + (free * (i + 0.5)) / count - ARROW_LENGTH / 2;
+    for (let k = 0; k < lanes; k++) arrow(marks, seg.samples, d, -half + (k + 0.5) * LANE_WIDTH, h);
+  }
+}
+
+/** Length of a direction arrow painted on a one-way road, and how far apart they are. */
+const ARROW_LENGTH = 5;
+const ARROW_EVERY = 30;
+
+/** An arrow on the road starting `d` along it at `offset` across, pointing the way the samples run. */
+function arrow(marks: Builder, s: Sample[], d: number, offset: number, h: Height): void {
+  const tail = along(s, d);
+  const neck = along(s, d + ARROW_LENGTH * 0.6);
+  const tip = along(s, d + ARROW_LENGTH);
+  const pt = (f: ReturnType<typeof along>, o: number) => [f.x - f.dy * (offset + o), f.y + f.dx * (offset + o), h(f.t)];
+  marks.quad(pt(tail, -0.15), pt(tail, 0.15), pt(neck, -0.15), pt(neck, 0.15));
+  marks.quad(pt(neck, -0.6), pt(neck, 0.6), pt(tip, 0), pt(tip, 0));
 }
 
 /** Point and direction a distance along a curve. */
@@ -376,21 +414,26 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
   const junctions = findJunctions(net);
   const concrete = new Builder(0);
   const dark = new Builder(0);
+  const panels = new Builder(0);
   for (const seg of net.segments.values()) {
     const h = segHeight(net, seg);
     const raised = net.isRaised(seg);
     const full = roadWidth(seg);
     // Raised decks go with the concrete so they cast shadows on the streets below
     ribbon(raised ? concrete : walk, seg.samples, full, h);
-    ribbon(asphalt, seg.samples, seg.oneway ? asphaltWidth({}) : asphaltWidth(seg), h);
-    // One-way roads (roundabouts) have no centre line
-    if (!seg.oneway) {
+    ribbon(asphalt, seg.samples, seg.ring ? asphaltWidth({}) : asphaltWidth(seg), h);
+    // Roundabouts have no paint; one-way roads and ramps get lane lines and arrows the way traffic goes
+    if (seg.ring) {
+      // nothing
+    } else if (seg.oneway) onewayMarks(marks, seg, h, paintSkip(seg, junctions));
+    else {
       laneMarks(marks, seg, h, paintSkip(seg, junctions));
       for (const end of ['a', 'b'] as const) {
         const j = junctions.get(end === 'a' ? seg.a : seg.b);
         if (j && net.node(j.node).h >= 0) junctionMarks(marks, seg, end, j, h);
       }
     }
+    if (seg.highway) noiseBarriers(net, seg, concrete, panels, h);
     if (raised) supports(concrete, seg.samples, h, full);
     // Tunnel mouths: the ramp between street level and a tunnel
     else if (isTunnelRamp(net, seg)) portal(concrete, dark, seg.samples, (t) => net.heightAt(seg, t), full);
@@ -409,7 +452,45 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
     markings: marks.geometry(),
     concrete: concrete.geometry(),
     dark: dark.geometry(),
+    barriers: panels.geometry(),
   };
+}
+
+/** Height of a freeway's noise barrier: a low concrete parapet with panels on top. */
+const PARAPET = 0.9;
+const BARRIER = 3.2;
+/** How far back from a junction the barrier stops, to leave room for ramps to join. */
+const BARRIER_GAP = 36;
+
+/**
+ * Noise barriers (隔音牆) along both edges of a freeway: a concrete parapet with panels above it. They stop short
+ * of junctions with ramps so the ramps can be seen joining, and run on through plain joins between freeway pieces.
+ */
+function noiseBarriers(net: RoadNetwork, seg: RoadSegment, base: Builder, panels: Builder, h: Height): void {
+  const gap = (node: number) => {
+    const touching = [...net.segments.values()].filter((o) => o !== seg && (o.a === node || o.b === node));
+    return touching.length === 1 && touching[0].highway ? 0 : touching.length ? BARRIER_GAP : 0;
+  };
+  const s = trimmed(seg.samples, gap(seg.a), gap(seg.b));
+  if (s.length < 2) return;
+  const edge = roadWidth(seg) / 2 - 0.25;
+  for (const side of [-1, 1]) {
+    upright(base, s, side * edge, h, 0, PARAPET);
+    upright(panels, s, side * edge, h, PARAPET, BARRIER);
+  }
+}
+
+/** An upright strip along a curve, `offset` across it, from `lo` to `hi` above the road's height. */
+function upright(b: Builder, s: Sample[], offset: number, h: Height, lo: number, hi: number): void {
+  for (let i = 1; i < s.length; i++) {
+    const n0 = normalAt(s, i - 1);
+    const n1 = normalAt(s, i);
+    const p = [s[i - 1].x + n0.x * offset, s[i - 1].y + n0.y * offset];
+    const q = [s[i].x + n1.x * offset, s[i].y + n1.y * offset];
+    const hp = h(s[i - 1].t);
+    const hq = h(s[i].t);
+    b.quad([p[0], p[1], hp + hi], [p[0], p[1], hp + lo], [q[0], q[1], hq + hi], [q[0], q[1], hq + lo]);
+  }
 }
 
 /** Ghost road shown while drawing, rising from height ha to hb like a built ramp would. */
@@ -447,7 +528,7 @@ export function congestionColor(level: number, out: THREE.Color): THREE.Color {
 export function buildTrafficOverlay(net: RoadNetwork, level: (seg: RoadSegment, dir: 1 | -1) => number): THREE.BufferGeometry {
   const b = new Builder(0.12);
   for (const seg of net.segments.values()) {
-    const half = seg.oneway ? asphaltWidth({}) / 2 : asphaltWidth(seg) / 2;
+    const half = seg.ring ? asphaltWidth({}) / 2 : asphaltWidth(seg) / 2;
     // Right-hand traffic: travel a → b uses the right side of that direction
     const h = segHeight(net, seg);
     b.color = congestionColor(level(seg, 1), new THREE.Color());
