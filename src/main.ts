@@ -223,6 +223,23 @@ addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && menu.open && menu.inGame) menu.close();
 });
 
+// Dev builds only: lets screenshot scripts load a city and move the camera
+if (import.meta.env.DEV) {
+  Object.assign(window, {
+    __game: {
+      world,
+      get city() {
+        return city;
+      },
+      play(data: Parameters<typeof City.deserialize>[0]) {
+        menu.inGame = true;
+        menu.close();
+        setCity(City.deserialize(data));
+      },
+    },
+  });
+}
+
 function resize(): void {
   world.resize(app.clientWidth, app.clientHeight);
 }

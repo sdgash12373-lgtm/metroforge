@@ -9,7 +9,7 @@ export type LandmarkKind = 'tower85' | 'cityHall' | 'dragonTiger' | 'ferrisWheel
 export type GreenKind = 'greenBuilding' | 'plaza' | 'ecoPark';
 /** 港口 on the coastline: 貨櫃港 ships the city's industry abroad, 旅遊港 brings visitors by ferry. */
 export type PortKind = 'cargoPort' | 'cruisePort';
-export type FacilityKind = ServiceKind | LandmarkKind | GreenKind | PortKind | 'footbridge';
+export type FacilityKind = ServiceKind | LandmarkKind | GreenKind | PortKind | 'footbridge' | 'parking';
 
 export const SERVICE_KINDS: ServiceKind[] = ['park', 'school', 'police', 'fire', 'hospital'];
 export const LANDMARK_KINDS: LandmarkKind[] = ['tower85', 'cityHall', 'dragonTiger', 'ferrisWheel', 'arena', 'themePark', 'mall'];
@@ -47,6 +47,27 @@ export interface FacilitySpec {
   blurb: string;
 }
 
+/** 公有停車場: how far drivers walk from it, meters. */
+export const PARKING_REACH = 320;
+/** Spaces in one garage. */
+export const PARKING_SPACES = 240;
+/** Parking fee per hour, NT$: what a new city charges, and the most it may. */
+export const DEFAULT_PARKING_FEE = 30;
+export const MAX_PARKING_FEE = 120;
+/** Share of the shop and office jobs around a garage that come by car and look for a space. */
+export const PARKING_DRIVERS = 0.3;
+/** Hours a day a space earns: busy through the day, empty at night. */
+export const PARKING_HOURS = 8;
+
+/**
+ * Cars a garage fills at a fee: everyone who wants a space at a low fee, fewer as it rises,
+ * never more than it holds.
+ */
+export function parkedCars(wanting: number, fee: number): number {
+  const keen = Math.exp(-Math.max(0, fee - 20) / 60);
+  return Math.min(PARKING_SPACES, wanting * keen);
+}
+
 export const FACILITIES: Record<FacilityKind, FacilitySpec> = {
   park: { label: '公園', cost: 6000, upkeep: 30, w: 40, d: 40, radius: 180, need: '附近沒有公園可以散步', color: 0x5fb565, blurb: '讓附近居民更快樂，住宅升級更快' },
   school: { label: '學校', cost: 28000, upkeep: 180, w: 64, d: 44, radius: 420, need: '小孩沒有學校念', color: 0xf2b134, blurb: '高密住宅升到高等級需要學校' },
@@ -62,6 +83,7 @@ export const FACILITIES: Record<FacilityKind, FacilitySpec> = {
   greenBuilding: { label: '綠建築', cost: 40000, upkeep: 160, w: 36, d: 32, radius: 260, serves: 'park', unlock: 'greenery', color: 0x7fcf7a, blurb: '屋頂花園與垂直綠牆的辦公大樓，附近算有公園' },
   plaza: { label: '綠地廣場', cost: 15000, upkeep: 60, w: 36, d: 36, radius: 200, serves: 'park', unlock: 'greenery', color: 0x9bd77f, blurb: '草地、樹蔭和噴水池的市民廣場' },
   ecoPark: { label: '生態公園', cost: 60000, upkeep: 120, w: 80, d: 70, radius: 420, serves: 'park', unlock: 'greenery', color: 0x3f9a4a, blurb: '濕地、步道和大片樹林，範圍比公園大很多' },
+  parking: { label: '停車場', cost: 600_000, upkeep: 400, w: 40, d: 30, radius: PARKING_REACH, color: 0x2f6fb8, blurb: '公有立體停車場，收停車費增加市庫收入；附近商業、辦公和觀光客越多越常停滿' },
   footbridge: { label: '天橋', cost: 8000, upkeep: 20, w: 5, d: 30, radius: 160, unlock: 'footbridge', color: 0xd9d4c7, blurb: '跨過大馬路的行人天橋，讓附近更好走' },
   cargoPort: { label: '貨櫃港', cost: 3_000_000, upkeep: 900, w: 160, d: 120, radius: 0, color: 0xd9343a, blurb: '高雄港式貨櫃碼頭，把工業區的貨物外銷，賺取外貿收入' },
   cruisePort: { label: '旅遊港', cost: 1_500_000, upkeep: 450, w: 90, d: 80, radius: 0, tourists: 14, color: 0x3fa7d6, blurb: '東港渡船頭式客運碼頭，渡輪載觀光客來玩，增加觀光收入' },
