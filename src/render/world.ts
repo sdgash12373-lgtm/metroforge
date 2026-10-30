@@ -14,7 +14,7 @@ import { CameraRig } from './cameraRig';
 import type { PathPiece } from '../sim/transit';
 import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay, streetTreeSpots } from './roadMesh';
 import { StopLayer } from './transit';
-import { buildFacilityGeometry } from './facilities';
+import { buildFacilityGeometry, buildFacilitySigns, signAtlas } from './facilities';
 import { SignalLayer } from './signals';
 import { HILL_TREES, LOWLAND_TREES, OUTER_TREES, type TreeSpot, buildGroundGeometry, buildLockedGeometry, buildWaterGeometry, treeSpots } from './terrainMesh';
 import { FLAT, REGION_NAMES, type Terrain } from '../sim/terrain';
@@ -126,6 +126,8 @@ export class World {
   /** service areas while placing a facility */
   private readonly coverage = new THREE.Group();
   private readonly facilities: THREE.Mesh;
+  /** the services' lettered signs, lit from within so they read at night too */
+  private readonly facilitySigns: THREE.Mesh;
   private facilitiesVersion = -1;
   /** street and district names over the map */
   private readonly nameLayer: HTMLElement;
@@ -278,6 +280,8 @@ export class World {
     this.buildings.light(this.sky.night);
     addWindows(this.facilities.material as THREE.MeshLambertMaterial, this.sky.night, 0.7);
     this.facilities.receiveShadow = true;
+    this.facilitySigns = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ map: signAtlas() }));
+    this.facilities.add(this.facilitySigns);
     this.scene.add(this.facilities);
     this.scene.add(this.airports, this.planes.group, this.taxiRanks.mesh, this.signals.group);
 
@@ -765,6 +769,8 @@ export class World {
       this.facilitiesVersion = city.facilitiesVersion;
       this.facilities.geometry.dispose();
       this.facilities.geometry = buildFacilityGeometry(city.facilities.values());
+      this.facilitySigns.geometry.dispose();
+      this.facilitySigns.geometry = buildFacilitySigns(city.facilities.values());
     }
     // Painted cells still show as the brush moves, a few times a second rather than every frame
     if (city.lotsVersion !== this.lotsVersion && (!painting || now - this.buildingsAt > PAINT_REDRAW_MS)) {

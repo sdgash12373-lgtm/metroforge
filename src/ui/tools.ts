@@ -1,5 +1,5 @@
 import { angleGuides } from '../sim/angles';
-import { FACILITIES, type FacilityKind, type GreenKind, type LandmarkKind, type PortKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners, isPort } from '../sim/facilities';
+import { FACILITIES, PARKING_SPACES, type FacilityKind, type GreenKind, type LandmarkKind, type PortKind, SERVICE_KINDS, type ServiceKind, corners as facilityCorners, isPort } from '../sim/facilities';
 import { ntd } from '../sim/format';
 import { stationCovers } from '../sim/stations';
 import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
@@ -33,11 +33,12 @@ export type Tool =
   | ServiceKind
   | 'landmark'
   | 'greenery'
-  | 'footbridge';
+  | 'footbridge'
+  | 'parking';
 
 /** Tools that place a public service, landmark, green space or footbridge. */
-export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' | 'port' =>
-  t === 'landmark' || t === 'greenery' || t === 'footbridge' || t === 'port' || (SERVICE_KINDS as string[]).includes(t);
+export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' | 'port' | 'parking' =>
+  t === 'landmark' || t === 'greenery' || t === 'footbridge' || t === 'port' || t === 'parking' || (SERVICE_KINDS as string[]).includes(t);
 
 /** Train tools either lay track or plan lines through stations. */
 export type RailAction = 'station' | 'track' | 'line';
@@ -580,6 +581,7 @@ export class ToolController {
       case 'landmark':
       case 'greenery':
       case 'footbridge':
+      case 'parking':
       case 'port':
         return this.facilityHint();
       case 'streetName': {
@@ -648,6 +650,10 @@ export class ToolController {
       const t = this.city.trade;
       const trade = kind === 'cargoPort' && t.ports ? `　目前外貿出口 NT$${Math.round(t.shipped / 1e4).toLocaleString()}萬/月` : '';
       return `${spec.label} · ${ntd(spec.cost)} · 每兩週維護 ${ntd(spec.upkeep * HOUR_STEPS)}${tour}　${spec.blurb}；點海邊道路靠海的一側興建，碼頭會伸進海裡${trade}`;
+    }
+    if (kind === 'parking') {
+      const fee = this.city.parkingFee;
+      return `${spec.label} · ${ntd(spec.cost)} · 每兩週維護 ${ntd(spec.upkeep * HOUR_STEPS)} · ${PARKING_SPACES} 格 · 停車費每小時 NT$${fee}（在預算調整）　${spec.blurb}；點道路旁的空地興建，圈內的商業和辦公區越多，停的車越多`;
     }
     const where = kind === 'footbridge' ? '點馬路（離路口遠一點）蓋一座橫跨的天橋' : '點道路旁的空地興建';
     const park = spec.serves === 'park' ? '・算作公園' : '';

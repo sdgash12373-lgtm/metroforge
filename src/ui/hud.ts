@@ -3,7 +3,7 @@ import logoUrl from '../assets/logo.png';
 import { gameDate, ntd } from '../sim/format';
 import { type City, MAX_TAX, REGION_COST, ROAD_KINDS, type RoadKind, budgetTotals, freewayTown } from '../sim/city';
 import { LEVELS, ntdShort } from '../sim/levels';
-import { FACILITIES, GREEN_KINDS, LANDMARK_KINDS, PORT_KINDS, SERVICE_KINDS } from '../sim/facilities';
+import { FACILITIES, GREEN_KINDS, LANDMARK_KINDS, MAX_PARKING_FEE, PARKING_SPACES, PORT_KINDS, SERVICE_KINDS } from '../sim/facilities';
 import { RAIL_KINDS } from '../sim/rail';
 import { INCOME_BRACKETS } from '../sim/income';
 import type { Conditions } from '../sim/weather';
@@ -11,6 +11,8 @@ import { INDUSTRY_ZONES, ZONES, Zone } from '../sim/zoning';
 import { REGION_NAMES } from '../sim/terrain';
 import { BUS, LINE_COLORS, MODES, type Transit } from '../sim/transit';
 import { EditPanel } from './editPanel';
+import { Mailbox } from './mailbox';
+import { clock } from '../sim/weather';
 import { BRUSH_MAX, BRUSH_MIN, DISTRICT_MAX, DISTRICT_MIN, type Tool, type ToolController, STYLE_CHOICES, isRail } from './tools';
 
 /** Tools that share one dock button and are picked on a second row. */
@@ -36,6 +38,7 @@ const GROUPS: Record<Group, { id: Tool; label: string }[]> = {
     { id: 'landmark', label: '地標' },
     { id: 'greenery', label: '綠化' },
     { id: 'footbridge', label: '天橋' },
+    { id: 'parking', label: '停車場' },
   ],
   names: [
     { id: 'streetName', label: '路名' },
@@ -46,7 +49,7 @@ const groupOf = (t: Tool): Group | null => (Object.keys(GROUPS) as Group[]).find
 
 type DockItem = Tool | Group;
 type BudgetRow =
-  | 'res' | 'biz' | 'fuel' | 'subsidy' | 'fares' | 'air' | 'tourism' | 'trade' | 'income'
+  | 'res' | 'biz' | 'fuel' | 'subsidy' | 'fares' | 'air' | 'parking' | 'tourism' | 'trade' | 'income'
   | 'roads' | 'transit' | 'airUpkeep' | 'services' | 'admin' | 'running' | 'construction' | 'net';
 const TOOLS: { id: DockItem; label: string; key: string }[] = [
   { id: 'pan', label: '瀏覽', key: '1' },
@@ -122,6 +125,11 @@ export class Hud {
   private needsPanel: HTMLElement;
   private needsBody: HTMLElement;
   private bottomBar!: HTMLElement;
+  private parkingNote!: HTMLElement;
+  /** 市民信箱: residents' letters, popping up bottom-right */
+  private mail: Mailbox;
+  private mailBtn: HTMLButtonElement;
+  private mailBadge = el('b', 'badge');
   /** line whose editor was last opened, so picking another line can close the budget on phones */
   private editKey: string | null = null;
   speed = 1;
@@ -250,6 +258,7 @@ export class Hud {
       subsidy: row('中央補助'),
       fares: row('運輸票價（規費）'),
       air: row('機場規費'),
+      parking: row('停車費（規費）'),
       tourism: row('觀光收入（其他）'),
       trade: row('外貿收入（其他）'),
       income: row('每月收入', 'sub'),
@@ -299,6 +308,11 @@ export class Hud {
       this.fareInputs.push({ input: s.input, label: s.value, get: (c) => f.transit(c).fare });
     }
     this.budgetPanel.append(el('p', 'note', '票價越高收入越多，但搭乘的人會變少。'));
+    // Parking garages: one fee for all of them
+    const park = slider('fee-parking', '停車費（每小時）', (v) => this.city && (this.city.parkingFee = v), MAX_PARKING_FEE, 5);
+    this.fareInputs.push({ input: park.input, label: park.value, get: (c) => c.parkingFee });
+    this.parkingNote = el('p', 'note');
+    this.budgetPanel.append(this.parkingNote);
 
     this.levelPanel = el('section', 'budget level panel');
     this.levelPanel.hidden = true;
@@ -354,6 +368,18 @@ export class Hud {
       this.toast(on ? '視角已鎖定，只能移動與縮放' : '已解除視角鎖定');
     });
     sideButton('🚗', '巡查', '第一人稱開車巡查城市（電腦 WASD、手機虛擬搖桿）', () => actions.drive());
+    this.mail = new Mailbox({
+      lookAt: (p) => {
+        actions.lookAt(p);
+        // On phones the inbox covers the map: close it to show the place
+        if (window.innerWidth < 720) this.showMail(false);
+      },
+      opened: () => this.showMail(true),
+      changed: () => this.renderMailBadge(),
+    });
+    this.mailBtn = sideButton('📮', '信箱', '市民信箱：居民的心情、想法、建議和抱怨', () => this.showMail(this.mail.panel.hidden));
+    this.mailBadge.hidden = true;
+    this.mailBtn.append(this.mailBadge);
     this.compass = el('button', 'compass panel');
     this.compass.type = 'button';
     this.compass.title = '方位：點一下讓北方朝上';
@@ -367,7 +393,7 @@ export class Hud {
     this.side = side;
     bottom.append(this.hint, this.sub, this.kinds, dock);
     this.bottomBar = bottom;
-    root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.levelPanel, this.editPanel.el, this.toastEl, side, bottom);
+    root.append(top, this.warning, this.budgetPanel, this.needsPanel, this.levelPanel, this.mail.panel, this.editPanel.el, this.toastEl, this.mail.pop, side, bottom);
 
     addEventListener('keydown', (e) => {
       const body = document.body.classList;
@@ -766,6 +792,7 @@ export class Hud {
     if (on) {
       this.showNeeds(false);
       this.showLevel(false);
+      this.showMail(false);
     }
   }
 
@@ -775,6 +802,7 @@ export class Hud {
     if (on) {
       this.showBudget(false);
       this.showLevel(false);
+      this.showMail(false);
     }
     if (on && this.city) this.renderNeeds(this.city);
   }
@@ -785,9 +813,27 @@ export class Hud {
     if (on) {
       this.showBudget(false);
       this.showNeeds(false);
+      this.showMail(false);
       this.levelShown = '';
       if (this.city) this.renderLevel(this.city);
     }
+  }
+
+  private showMail(on: boolean): void {
+    if (on === !this.mail.panel.hidden) return;
+    this.mail.show(on);
+    this.mailBtn.setAttribute('aria-pressed', String(on));
+    if (on) {
+      this.showBudget(false);
+      this.showNeeds(false);
+      this.showLevel(false);
+    }
+  }
+
+  private renderMailBadge(): void {
+    const n = this.mail.unread;
+    this.mailBadge.hidden = n === 0;
+    this.mailBadge.textContent = n > 9 ? '9+' : String(n);
   }
 
   private levelBtn!: HTMLButtonElement;
@@ -1003,6 +1049,7 @@ export class Hud {
         subsidy: b.subsidy,
         fares: b.transitFares,
         air: b.airIncome,
+        parking: b.parking,
         tourism: b.tourism,
         trade: b.trade,
         income: t.income,
@@ -1026,6 +1073,10 @@ export class Hud {
         if (document.activeElement !== input) input.value = String(v);
         label.textContent = `${v}%`;
       }
+      const garages = city.parkingWanted.size;
+      this.parkingNote.textContent = garages
+        ? `${garages} 座公有停車場共 ${(garages * PARKING_SPACES).toLocaleString()} 格，現在停了 ${Math.round(city.parked).toLocaleString()} 輛。停車費越高每輛收越多，但來停的車會變少。`
+        : '在「建設 → 停車場」蓋公有停車場收停車費；停車費越高每輛收越多，但來停的車會變少。';
       for (const f of this.fareInputs) {
         const v = f.get(city);
         if (document.activeElement !== f.input) f.input.value = String(v);
@@ -1042,6 +1093,7 @@ export class Hud {
     this.warning.style.top = below;
     this.budgetPanel.style.top = shift;
     this.needsPanel.style.top = shift;
+    this.mail.panel.style.top = shift;
     this.levelPanel.style.top = shift;
     if (!this.needsPanel.hidden) this.renderNeeds(city);
     if (!this.levelPanel.hidden) this.renderLevel(city);
@@ -1053,7 +1105,7 @@ export class Hud {
       this.readyTold = city.level;
       this.toast(`可以升級成「${LEVELS[city.level + 1].name}」了！點上方的等級按鈕`);
     }
-    const open = [this.budgetPanel, this.needsPanel, this.levelPanel].find((p) => !p.hidden) ?? null;
+    const open = [this.budgetPanel, this.needsPanel, this.levelPanel, this.mail.panel].find((p) => !p.hidden) ?? null;
     this.editPanel.el.style.top = open ? `calc(${shift} + ${open.offsetHeight + 8}px)` : shift;
     this.toastEl.style.top = shift;
     // On phones the toast would sit on the editor's title: show it just below the editor
@@ -1083,7 +1135,17 @@ export class Hud {
       if (left < Infinity) right = `${window.innerWidth - left + 8}px`;
     }
     this.side.style.right = right;
-    for (const p of [this.budgetPanel, this.needsPanel, this.levelPanel, this.editPanel.el]) {
+    // Residents' letters pop up just left of the side buttons, level with their foot
+    const days = city.day + dayFraction;
+    this.mail.update(city, days, clock(days).hour);
+    const covered = this.side.classList.contains('covered');
+    this.mail.pop.hidden = covered;
+    if (!covered) {
+      const rail = this.side.getBoundingClientRect();
+      this.mail.pop.style.right = `${window.innerWidth - rail.left + 8}px`;
+      this.mail.pop.style.bottom = this.side.style.bottom;
+    }
+    for (const p of [this.budgetPanel, this.needsPanel, this.levelPanel, this.mail.panel, this.editPanel.el]) {
       if (!p.hidden) p.style.maxHeight = `${Math.max(120, floor - p.getBoundingClientRect().top)}px`;
     }
     this.stats.pop.textContent = city.stats.population.toLocaleString();

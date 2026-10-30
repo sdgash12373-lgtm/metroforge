@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import { type Facility, dims, toWorld } from '../sim/facilities';
 import { hash01 } from '../sim/geometry';
 import { Builder } from './roadMesh';
+import { SIGNS, SIGN_LABELS, type SignLabel, fire, hospital, park, parking, police, school } from './civic';
 
 type P3 = [number, number, number];
 
 /** Low-poly shapes in a facility's own frame: u along the street, v back from it (front at -d/2), z up. */
-class Kit {
+export class Kit {
   constructor(
     private b: Builder,
     private f: Facility,
@@ -63,83 +64,6 @@ class Kit {
     this.prism(u, v, 0.3 * s, 0.3 * s, 0, 2 * s, 0x7a5a3c, 5);
     this.prism(u, v, 2.2 * s, 0, 1.6 * s, 6.5 * s, 0x4f8f45, 6);
   }
-}
-
-function park(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.12, 0x8cc56a);
-  k.rect(-1.5, -d / 2, 1.5, d / 2, 0.16, 0xd9c9a3);
-  k.rect(-w / 2, -1.5, w / 2, 1.5, 0.16, 0xd9c9a3);
-  k.prism(9, 9, 6, 6, 0.1, 0.22, 0x5aa7d6, 12);
-  k.prism(0, 0, 3.5, 3.5, 0.16, 0.6, 0xbfb7a6, 10);
-  for (const [u, v, s] of [
-    [-12, -12, 1.1],
-    [-15, -5, 0.9],
-    [-7, -15, 1],
-    [-13, 12, 1.2],
-    [-6, 15, 0.9],
-    [14, -13, 1],
-    [16, -6, 0.8],
-    [8, -15, 1.1],
-    [16, 16, 0.9],
-  ]) {
-    k.tree(u, v, s);
-  }
-}
-
-function school(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0xd8d3c4);
-  // L-shaped classroom block with a red roof edge
-  k.box(-30, -18, 6, -6, 0, 12, 0xf1e6c8);
-  k.box(-30, -6, -18, 20, 0, 12, 0xf1e6c8);
-  k.box(-30.5, -18.5, 6.5, -5.5, 12, 13.2, 0xc0533a);
-  k.box(-30.5, -6, -17.5, 20.5, 12, 13.2, 0xc0533a);
-  for (let u = -27; u < 4; u += 4) k.box(u, -18.15, u + 2.4, -18.05, 3, 5, 0x6f93ad);
-  for (let u = -27; u < 4; u += 4) k.box(u, -18.15, u + 2.4, -18.05, 7.5, 9.5, 0x6f93ad);
-  // Sports field with a running track
-  k.rect(-12, -2, 30, 21, 0.14, 0xc8664a);
-  k.rect(-8, 2, 26, 17, 0.18, 0x6fb556);
-  k.prism(-14, -20, 0.15, 0.15, 0, 10, 0xdddddd, 4);
-  k.box(-14, -20.1, -11, -20, 8, 10, 0xd9343a);
-}
-
-function police(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0x9ea3a6);
-  k.box(-13, -6, 13, 12, 0, 10, 0xf2f3f4);
-  k.box(-13.2, -6.2, 13.2, 12.2, 6.5, 8, 0x2f5fa8);
-  k.box(-4, -9, 4, -6, 0, 4, 0x2f5fa8);
-  k.box(-2, 0, 2, 4, 10, 13, 0xf2f3f4);
-  // Patrol cars out front
-  for (const u of [-9, 7]) {
-    k.box(u, -14, u + 4.4, -12.2, 0, 1.1, 0xf5f5f5);
-    k.box(u + 1, -13.8, u + 3.2, -12.4, 1.1, 1.8, 0x223355);
-    k.box(u + 1.8, -13.4, u + 2.6, -12.8, 1.8, 2.1, 0xe03c31);
-  }
-}
-
-function fire(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0x9ea3a6);
-  k.box(-15, -6, 8, 12, 0, 11, 0xc8442f);
-  for (const u of [-13, -6, 1]) k.box(u, -6.15, u + 5.5, -6.05, 0, 6, 0xdedede);
-  k.box(9, -2, 14, 6, 0, 20, 0xb33a28);
-  k.box(8.6, -2.4, 14.4, 6.4, 20, 21, 0xf2f3f4);
-  // Fire engine on the apron
-  k.box(-12, -14, -3.5, -11.5, 0, 2.6, 0xd9302a);
-  k.box(-12, -14, -9.5, -11.5, 2.6, 3.4, 0xf2f2f2);
-}
-
-function hospital(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0xb7bcbf);
-  k.box(-25, -10, 25, 14, 0, 10, 0xe9eef0);
-  k.box(-14, -4, 14, 12, 10, 32, 0xf7fafb);
-  for (let z = 13; z < 31; z += 4) k.box(-14.1, -4.1, 14.1, 12.1, z, z + 1.6, 0x7fa9c4);
-  // Red cross on the roof and a helipad
-  k.box(-1.2, -1, 1.2, 9, 32, 32.6, 0xd9343a);
-  k.box(-5, 2.8, 5, 5.2, 32, 32.6, 0xd9343a);
-  k.prism(17, 2, 6, 6, 10, 10.4, 0x5f6366, 12);
-  k.box(16.2, -0.5, 16.8, 4.5, 10.4, 10.6, 0xf2f2f2);
-  k.box(17.2, -0.5, 17.8, 4.5, 10.4, 10.6, 0xf2f2f2);
-  k.box(16.2, 1.7, 17.8, 2.3, 10.4, 10.6, 0xf2f2f2);
-  k.box(-6, -15, 6, -10, 4.5, 5.2, 0xd9343a);
 }
 
 /** 85 Sky Tower: two legs joined high up into one tower, then a stepped top and a mast. */
@@ -397,6 +321,7 @@ const MODELS: Record<Facility['kind'], (k: Kit, w: number, d: number) => void> =
   plaza,
   ecoPark,
   footbridge,
+  parking,
   cargoPort,
   cruisePort,
 };
@@ -553,4 +478,111 @@ export function buildFacilityGeometry(facilities: Iterable<Facility>): THREE.Buf
     MODELS[f.kind](new Kit(b, f), w, d);
   }
   return b.geometry();
+}
+
+const ATLAS = 1024;
+/** Pixel height of a horizontal sign in the atlas; vertical signs are this wide. */
+const SIGN_PX = 128;
+
+/** Where each sign's lettering sits in the atlas, as uv corners. */
+let atlasRects: Record<SignLabel, { x0: number; y0: number; x1: number; y1: number; vertical: boolean }> | null = null;
+
+function signAspect(label: SignLabel): number {
+  for (const list of Object.values(SIGNS)) {
+    for (const s of list ?? []) if (s.label === label) return (s.u1 - s.u0) / (s.z1 - s.z0);
+  }
+  return 3;
+}
+
+/**
+ * The lettered signs of the public services drawn once into a canvas: each label filled with its
+ * colour and its characters spaced across it (stacked top to bottom on a vertical sign).
+ */
+export function signAtlas(): THREE.CanvasTexture {
+  // Lay the labels out in rows first, then size the canvas to fit them
+  const labels = Object.entries(SIGN_LABELS) as [SignLabel, (typeof SIGN_LABELS)[SignLabel]][];
+  const cells: { label: SignLabel; x: number; y: number; w: number; h: number }[] = [];
+  let x = 0;
+  let y = 0;
+  let row = 0;
+  for (const [label, spec] of labels) {
+    const a = signAspect(label);
+    const w = Math.round(spec.vertical ? SIGN_PX : Math.min(ATLAS, SIGN_PX * a));
+    const h = Math.round(spec.vertical ? Math.min(ATLAS, SIGN_PX / a) : SIGN_PX);
+    if (x + w > ATLAS) {
+      x = 0;
+      y += row + 4;
+      row = 0;
+    }
+    cells.push({ label, x, y, w, h });
+    x += w + 4;
+    row = Math.max(row, h);
+  }
+  const height = 2 ** Math.ceil(Math.log2(y + row));
+  const canvas = document.createElement('canvas');
+  canvas.width = ATLAS;
+  canvas.height = height;
+  const g = canvas.getContext('2d')!;
+  const rects = {} as NonNullable<typeof atlasRects>;
+  for (const { label, x, y, w, h } of cells) {
+    const spec = SIGN_LABELS[label];
+    const vertical = !!spec.vertical;
+    g.fillStyle = spec.bg;
+    g.fillRect(x, y, w, h);
+    g.strokeStyle = spec.fg;
+    g.globalAlpha = 0.35;
+    g.lineWidth = 4;
+    g.strokeRect(x + 6, y + 6, w - 12, h - 12);
+    g.globalAlpha = 1;
+    g.fillStyle = spec.fg;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    const chars = [...spec.text];
+    const along = vertical ? h : w;
+    const across = vertical ? w : h;
+    const size = Math.min(across * 0.66, (along * 0.84) / chars.length);
+    g.font = `700 ${Math.round(size)}px "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC", sans-serif`;
+    const step = (along - size * 0.6) / chars.length;
+    chars.forEach((c, i) => {
+      const t = size * 0.3 + step * (i + 0.5);
+      g.fillText(c, vertical ? x + w / 2 : x + t, vertical ? y + t : y + h / 2 + size * 0.04);
+    });
+    rects[label] = { x0: x / ATLAS, y0: 1 - y / height, x1: (x + w) / ATLAS, y1: 1 - (y + h) / height, vertical };
+  }
+  atlasRects = rects;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/** Every service's lettered signs, as textured quads on its facade facing the street. Call signAtlas() first. */
+export function buildFacilitySigns(facilities: Iterable<Facility>): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  for (const f of facilities) {
+    for (const s of SIGNS[f.kind] ?? []) {
+      const r = atlasRects?.[s.label];
+      if (!r) continue;
+      const i = pos.length / 3;
+      // Seen from the street (looking along +v), +u is on the viewer's left
+      for (const [u, z, tu, tv] of [
+        [s.u1, s.z1, r.x0, r.y0],
+        [s.u0, s.z1, r.x1, r.y0],
+        [s.u1, s.z0, r.x0, r.y1],
+        [s.u0, s.z0, r.x1, r.y1],
+      ]) {
+        const q = toWorld(f, u, s.v);
+        pos.push(q.x, z, q.y);
+        uv.push(tu, tv);
+      }
+      idx.push(i, i + 2, i + 1, i + 1, i + 2, i + 3);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
 }
