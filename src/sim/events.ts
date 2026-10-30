@@ -337,3 +337,22 @@ export interface ArenaAccess {
   /** what serves it, for the panel */
   modes: string[];
 }
+
+/** Made-up home and away sides for sports events, with their colours. */
+export const TEAMS: [string, string][] = [
+  ['港都飛魚', '#e8590c'],
+  ['北城雷鷹', '#1c3f8f'],
+  ['山城獵豹', '#2b8a3e'],
+  ['海線巨浪', '#0b7285'],
+  ['南方戰神', '#c92a2a'],
+  ['東岸旋風', '#5f3dc4'],
+  ['府城武士', '#343a40'],
+  ['竹風火箭', '#f08c00'],
+];
+
+/** The two sides a sports booking puts on court, fixed by its id. */
+export function matchup(e: Pick<EventOffer, 'id'>): [[string, string], [string, string]] {
+  const a = (e.id * 5) % TEAMS.length;
+  const b = (a + 1 + ((e.id * 3) % (TEAMS.length - 1))) % TEAMS.length;
+  return [TEAMS[a], TEAMS[b]];
+}
