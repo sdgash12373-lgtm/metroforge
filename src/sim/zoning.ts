@@ -119,6 +119,9 @@ export function inheritLots(target: Lot[], source: Lot[]): void {
   }
 }
 
+/** Size of the squares roads are sorted into when checking which cells they run through. */
+const BUCKET = 64;
+
 /**
  * A cell is unusable if a road runs through it, it is taken by track or an airport, it overlaps an older cell
  * (inside of curves, junction corners), or the cell in front of it is unusable.
@@ -127,11 +130,24 @@ export function recomputeBlocked(net: RoadNetwork, occupied?: (p: Vec2) => boole
   const grid = new Map<string, Lot[]>();
   const clearance = ROAD_WIDTH / 2 + CELL * 0.45;
   const segs = [...net.segments.values()];
+  // Roads by the squares their reach covers, so each cell only checks the roads near it
+  const near = new Map<string, RoadSegment[]>();
+  for (const seg of segs) {
+    const pad = clearance + (roadWidth(seg) - ROAD_WIDTH) / 2;
+    for (let i = Math.floor((seg.bbox.minX - pad) / BUCKET); i <= Math.floor((seg.bbox.maxX + pad) / BUCKET); i++) {
+      for (let j = Math.floor((seg.bbox.minY - pad) / BUCKET); j <= Math.floor((seg.bbox.maxY + pad) / BUCKET); j++) {
+        const key = `${i},${j}`;
+        const list = near.get(key);
+        if (list) list.push(seg);
+        else near.set(key, [seg]);
+      }
+    }
+  }
   for (const seg of segs) {
     for (const lot of seg.lots) {
       let blocked = (lot.front !== null && lot.front.blocked) || !!occupied?.(lot);
       if (!blocked) {
-        for (const other of segs) {
+        for (const other of near.get(`${Math.floor(lot.x / BUCKET)},${Math.floor(lot.y / BUCKET)}`) ?? []) {
           const clear = clearance + (roadWidth(other) - ROAD_WIDTH) / 2;
           if (!bboxNear(other.bbox, lot, clear)) continue;
           if (closestOnSamples(other.samples, lot).d < clear) {

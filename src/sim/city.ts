@@ -556,8 +556,15 @@ export class City {
     return changed;
   }
 
+  /**
+   * While a save loads, land changes are left to the one check of every lot at the end (in roadsChanged): doing it
+   * for every facility as it was read back made loading a big city take minutes.
+   */
+  private holdLand = false;
+
   /** Track or airports changed: zoning under them goes, and the renderer rebuilds. */
   private landChanged(): void {
+    if (this.holdLand) return;
     recomputeBlocked(this.net, (p) => this.occupied(p));
     this.lotsVersion++;
     this.zoningVersion++;
@@ -1944,6 +1951,7 @@ export class City {
 
   private static load(data: SaveData, terrain: Terrain): City {
     const city = new City(terrain);
+    city.holdLand = true;
     city.money = data.money;
     city.steps = Math.round(data.day * DAY_STEPS);
     if (data.name) city.name = data.name;
@@ -1993,8 +2001,11 @@ export class City {
         if (access) city.layAccess(access);
       }
     }
+    city.holdLand = false;
     city.restoreGate();
     city.roadsChanged();
+    // The stations just read are already accounted for: the first step needn't clear the land under them again
+    city.stationsChanged();
     city.measure();
     return city;
   }
