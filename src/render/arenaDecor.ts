@@ -5,6 +5,7 @@ import { type Facility, toWorld } from '../sim/facilities';
 import { gameDate } from '../sim/format';
 import { Builder } from './roadMesh';
 import { Kit } from './facilities';
+import { ArenaShow, EXIT_HOURS } from './arenaShow';
 
 /** How long before the doors open the arena dresses up, in game days. */
 const DRESS_DAYS = 1;
@@ -402,13 +403,28 @@ function beam(b: Builder, x0: number, y0: number, z0: number, x1: number, y1: nu
  */
 export class ArenaDecor {
   readonly group = new THREE.Group();
+  /** the crowd and the light show, which move every frame */
+  private readonly show = new ArenaShow();
+  private readonly dressing = new THREE.Group();
   private key = '';
+  /** the event dressed for, kept a while after it ends */
+  private last: Booking | undefined;
 
-  update(city: City): void {
+  constructor() {
+    this.group.add(this.dressing, this.show.group);
+  }
+
+  /** `night` 0..1 how dark it is; `pixels` the screen's pixels per unit one unit from the camera. */
+  update(city: City, dt = 0, simDt = dt, night = 0, pixels = 600): void {
     let arena: Facility | null = null;
     for (const f of city.facilities.values()) if (f.kind === 'arena') arena = arena ?? f;
     const day = city.day;
-    const show = arena ? city.events.booked.find((b) => day >= b.start - DRESS_DAYS && day < eventEnd(b)) : undefined;
+    let show = arena ? city.events.booked.find((b) => day >= b.start - DRESS_DAYS && day < eventEnd(b)) : undefined;
+    // Once it is over it leaves the bookings, but the crowd still has to go home
+    const last = this.last;
+    if (!show && arena && last && day >= last.start && day < eventEnd(last) + EXIT_HOURS / 24) show = last;
+    this.last = show;
+    this.show.update(arena, show, day, dt, simDt, night, pixels);
     const key = arena && show ? `${arena.id}:${arena.p.x}:${arena.p.y}:${show.id}` : '';
     if (key === this.key) return;
     this.key = key;
@@ -417,13 +433,13 @@ export class ArenaDecor {
   }
 
   private clear(): void {
-    for (const c of [...this.group.children]) {
+    for (const c of [...this.dressing.children]) {
       const m = c as THREE.Mesh;
       m.geometry.dispose();
       const mat = m.material as THREE.MeshBasicMaterial;
       mat.map?.dispose();
       mat.dispose();
-      this.group.remove(c);
+      this.dressing.remove(c);
     }
   }
 
@@ -433,10 +449,10 @@ export class ArenaDecor {
     ({ concert, sports, festival })[b.kind](b, d);
     const solid = new THREE.Mesh(shapes.geometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
     solid.castShadow = true;
-    this.group.add(solid, d.pics.mesh(d.paint.texture()));
+    this.dressing.add(solid, d.pics.mesh(d.paint.texture()));
     const glow = d.glow.geometry();
     if (glow.getAttribute('position')?.count) {
-      this.group.add(
+      this.dressing.add(
         new THREE.Mesh(
           glow,
           new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
