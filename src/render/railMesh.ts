@@ -2,7 +2,7 @@ import type * as THREE from 'three';
 import type { Sample } from '../sim/geometry';
 import { TRACK_OFFSET } from '../sim/rail';
 import { ROAD_WIDTH, type RoadNetwork } from '../sim/roads';
-import { Builder, type Height, isTunnelRamp, normalAt, pillar, portal, ribbon, shownHeight, strip, supports } from './roadMesh';
+import { Builder, type Height, PORTAL_DEPTH, isTunnelRamp, normalAt, pillar, ribbon, shownHeight, strip, supports } from './roadMesh';
 
 const BALLAST_WIDTH = 9.4;
 const GAUGE = 1.44;
@@ -10,14 +10,139 @@ const SLEEPER_EVERY = 1.6;
 const MAST_EVERY = 48;
 const MAST_HEIGHT = 7;
 
-export interface TrackGeometries {
+/** Inside half-width of the open cutting a track sinks through on its way into a tunnel. */
+export const CUTTING_HALF = BALLAST_WIDTH / 2 + 0.7;
+const CUTTING_WALL = 0.6;
+/** Parapet of the cutting walls above the ground. */
+const PARAPET = 1.1;
+/** Height of the ground mask over the cutting: above the ground, below track laid at street level. */
+const MASK_HEIGHT = 0.03;
+
+export interface TrackParts {
   ballast: THREE.BufferGeometry;
   sleepers: THREE.BufferGeometry;
   steel: THREE.BufferGeometry;
-  /** viaducts, pillars, portals and catenary masts */
+  /** viaducts, pillars, portals, cutting walls and catenary masts */
   concrete: THREE.BufferGeometry;
   /** tunnel openings */
   dark: THREE.BufferGeometry;
+}
+
+export interface TrackGeometries extends TrackParts {
+  /**
+   * Track sinking into a tunnel through an open cutting (引道): drawn before the ground mask, so it shows
+   * below street level through the hole the mask makes in the ground.
+   */
+  sunk: TrackParts;
+  /** the openings in the ground over the cuttings, depth only */
+  mask: THREE.BufferGeometry;
+}
+
+interface Builders {
+  ballast: Builder;
+  sleepers: Builder;
+  steel: Builder;
+  concrete: Builder;
+  dark: Builder;
+}
+
+const builders = (): Builders => ({
+  ballast: new Builder(0.06),
+  sleepers: new Builder(0.16),
+  steel: new Builder(0.3),
+  concrete: new Builder(0),
+  dark: new Builder(0),
+});
+
+const parts = (b: Builders): TrackParts => ({
+  ballast: b.ballast.geometry(),
+  sleepers: b.sleepers.geometry(),
+  steel: b.steel.geometry(),
+  concrete: b.concrete.geometry(),
+  dark: b.dark.geometry(),
+});
+
+/**
+ * The open cutting (引道) where track leaves street level for a tunnel: a concrete trough whose floor follows
+ * the track down, walls standing a parapet above the ground, and the tunnel portal where the track is deep
+ * enough to pass under the ground. The mask opens the ground over the trough, so the sinking track and a
+ * train climbing out of the dark mouth show from above.
+ */
+function cutting(b: Builders, mask: Builder, s: Sample[], depth: Height): void {
+  const { concrete, dark } = b;
+  // Up to the portal: the first sample deep enough for the tunnel to close over the track
+  let end = s.length - 1;
+  let start = 0;
+  const deep = (i: number) => depth(s[i].t) <= PORTAL_DEPTH;
+  if (deep(0)) {
+    // The ramp climbs from the tunnel: walk it backwards
+    start = s.length - 1;
+    end = 0;
+  }
+  const step = start < end ? 1 : -1;
+  let mouth = end;
+  for (let i = start; i !== end; i += step) {
+    if (deep(i)) {
+      mouth = i;
+      break;
+    }
+  }
+  const lo = Math.min(start, mouth);
+  const hi = Math.max(start, mouth);
+  const span = s.slice(lo, hi + 1);
+  if (span.length < 2) return;
+  const h: Height = (t) => depth(t);
+  const inner = CUTTING_HALF;
+  const outer = CUTTING_HALF + CUTTING_WALL;
+  // Floor, a little under the ballast
+  strip(concrete, span, -inner, inner, (t) => h(t) - 0.05);
+  for (const side of [-1, 1]) {
+    for (let i = 1; i < span.length; i++) {
+      const n0 = normalAt(span, i - 1);
+      const n1 = normalAt(span, i);
+      const p0 = span[i - 1];
+      const p1 = span[i];
+      const at = (p: Sample, n: { x: number; y: number }, off: number) => [p.x + n.x * off * side, p.y + n.y * off * side];
+      const a0 = at(p0, n0, inner);
+      const a1 = at(p1, n1, inner);
+      const b0 = at(p0, n0, outer);
+      const b1 = at(p1, n1, outer);
+      // Inner face from the floor up to the parapet, its top, and the outer face of the parapet
+      concrete.quad([a0[0], a0[1], PARAPET], [a0[0], a0[1], h(p0.t) - 0.05], [a1[0], a1[1], PARAPET], [a1[0], a1[1], h(p1.t) - 0.05]);
+      concrete.quad([a0[0], a0[1], PARAPET], [a1[0], a1[1], PARAPET], [b0[0], b0[1], PARAPET], [b1[0], b1[1], PARAPET]);
+      concrete.quad([b0[0], b0[1], PARAPET], [b0[0], b0[1], 0], [b1[0], b1[1], PARAPET], [b1[0], b1[1], 0]);
+    }
+    // The end at street level: a low cap closing the parapet
+    const p = span[start < mouth ? 0 : span.length - 1];
+    const n = normalAt(span, start < mouth ? 0 : span.length - 1);
+    const a = [p.x + n.x * inner * side, p.y + n.y * inner * side];
+    const c = [p.x + n.x * outer * side, p.y + n.y * outer * side];
+    concrete.quad([a[0], a[1], PARAPET], [a[0], a[1], 0], [c[0], c[1], PARAPET], [c[0], c[1], 0]);
+  }
+  // Open the ground over the trough
+  strip(mask, span, -outer, outer, () => MASK_HEIGHT);
+  // The portal: a headwall across the mouth from the tunnel's roof up past the parapet, the dark tunnel in it
+  const m = s[mouth];
+  const prev = s[mouth - step] ?? s[mouth];
+  const d = { x: m.x - prev.x, y: m.y - prev.y };
+  const len = Math.hypot(d.x, d.y) || 1;
+  const dx = d.x / len;
+  const dy = d.y / len;
+  const floor = depth(m.t);
+  const roof = floor + 4.6;
+  const half = outer + 1.2;
+  const nx = -dy;
+  const ny = dx;
+  // Headwall face, with wing piers either side and a coping on top
+  pillar(concrete, m.x, m.y, dx, dy, half * 2, 1.2, PARAPET + 0.5, roof);
+  for (const side of [-1, 1]) pillar(concrete, m.x + nx * (outer + 0.6) * side, m.y + ny * (outer + 0.6) * side, dx, dy, 1.2, 1.4, PARAPET + 0.5, floor - 0.1);
+  // The tunnel beyond the mouth: dark walls, roof and back, so what is inside stays out of sight until it comes out
+  const back = 0.2;
+  const fx = m.x - dx * (0.6 - back);
+  const fy = m.y - dy * (0.6 - back);
+  const L = [fx + nx * inner, fy + ny * inner];
+  const R = [fx - nx * inner, fy - ny * inner];
+  dark.quad([L[0], L[1], roof], [L[0], L[1], floor - 0.1], [R[0], R[1], roof], [R[0], R[1], floor - 0.1]);
 }
 
 /** Point, direction and normal at distance d along samples. */
@@ -35,19 +160,20 @@ function at(s: Sample[], d: number, j: { i: number }): { x: number; y: number; t
  * and track going underground passes through a portal like a road tunnel.
  */
 export function buildTrackGeometries(net: RoadNetwork, masts: boolean): TrackGeometries {
-  const ballast = new Builder(0.06);
-  const sleepers = new Builder(0.16);
-  const steel = new Builder(0.3);
-  const concrete = new Builder(0);
-  const dark = new Builder(0);
+  const main = builders();
+  const sunk = builders();
+  const mask = new Builder(0);
   for (const seg of net.segments.values()) {
-    const h: Height = shownHeight(net, seg);
     const s = seg.samples;
     const raised = net.isRaised(seg);
+    const ramp = !raised && isTunnelRamp(net, seg);
+    // Track into a tunnel sinks through its cutting, at its true height
+    const h: Height = ramp ? (t) => net.heightAt(seg, t) : shownHeight(net, seg);
+    const { ballast, sleepers, steel, concrete } = ramp ? sunk : main;
     if (raised) {
       ribbon(concrete, s, ROAD_WIDTH, (t) => h(t) - 0.02);
       supports(concrete, s, h);
-    } else if (isTunnelRamp(net, seg)) portal(concrete, dark, s, (t) => net.heightAt(seg, t));
+    } else if (ramp) cutting(sunk, mask, s, h);
     ribbon(ballast, s, BALLAST_WIDTH, h);
     for (const side of [-1, 1]) {
       const c = side * TRACK_OFFSET;
@@ -83,14 +209,8 @@ export function buildTrackGeometries(net: RoadNetwork, masts: boolean): TrackGeo
     }
   }
   for (const n of net.nodes.values()) {
-    ballast.disc(n.p.x, n.p.y, BALLAST_WIDTH / 2, n.h);
-    if (n.h > 0) concrete.disc(n.p.x, n.p.y, ROAD_WIDTH / 2, n.h - 0.02);
+    main.ballast.disc(n.p.x, n.p.y, BALLAST_WIDTH / 2, n.h);
+    if (n.h > 0) main.concrete.disc(n.p.x, n.p.y, ROAD_WIDTH / 2, n.h - 0.02);
   }
-  return {
-    ballast: ballast.geometry(),
-    sleepers: sleepers.geometry(),
-    steel: steel.geometry(),
-    concrete: concrete.geometry(),
-    dark: dark.geometry(),
-  };
+  return { ...parts(main), sunk: parts(sunk), mask: mask.geometry() };
 }
