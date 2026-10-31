@@ -3,12 +3,12 @@ import { FACILITIES, PARKING_SPACES, SCHOOL_SEATS, UNIVERSITY_SEATS, type Facili
 import { ntd } from '../sim/format';
 import { stationCovers } from '../sim/stations';
 import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
-import { BULLDOZE_REFUND, type City, HUB_LABEL, type RoadStyle } from '../sim/city';
+import { BULLDOZE_REFUND, type City, HUB_LABEL, type RoadStyle, type SaveData } from '../sim/city';
 import { LEVELS, UNLOCK } from '../sim/levels';
 import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, dist, lerp, quadPoint } from '../sim/geometry';
 import { HOUR_STEPS, ROAD_KINDS, ROUNDABOUT_RADIUS, type RoadKind, type RoundaboutSize } from '../sim/city';
-import { RAIL_SPECS, type RailKind, TRACK_OFFSET } from '../sim/rail';
+import { RAIL_KINDS, RAIL_SPECS, type RailKind, TRACK_OFFSET } from '../sim/rail';
 import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type RoadNetwork, type Snap, TUNNEL_DEPTH } from '../sim/roads';
 import { LINE_COLORS, type PathPiece, type Transit, isShared } from '../sim/transit';
 import { CELL, type Lot, ZONES, Zone, cellCenter } from '../sim/zoning';
@@ -85,7 +85,13 @@ export const BRUSH_DEFAULT = 18;
 export interface ToolEvents {
   toast(msg: string): void;
   changed(): void;
+  /** 上一步: puts back the city as it was before the last build or demolish, handing back what that cost */
+  restore?(data: SaveData, cost: number): void;
 }
+
+/** 上一步 is offered only this long after the action (game steps; 100 make an hour), so undoing never throws away much growth. */
+export const UNDO_STEPS = 600;
+
 
 /** What the active tool does with taps, drags and hover on the ground. */
 export type StationType = 'standard' | 'special' | 'twin' | 'triple';
@@ -165,6 +171,13 @@ export class ToolController {
   selectedDistrict: number | null = null;
   districtRadius = 250;
 
+  /** the city just before the action under way, kept only if the action changes something */
+  private pending: { data: SaveData; money: number; sig: string } | null = null;
+  /** zone cells painted in the brush stroke under way */
+  private painted = 0;
+  /** 上一步: the city before the last build or demolish (only the one), what that action cost, and the state it left */
+  private undoPoint: { data: SaveData; cost: number; sig: string; steps: number; label: string } | null = null;
+
   constructor(
     private city: City,
     private world: World,
@@ -173,7 +186,78 @@ export class ToolController {
 
   setCity(city: City): void {
     this.city = city;
+    this.pending = null;
+    this.undoPoint = null;
     this.cancel();
+  }
+
+  /** Everything a build or demolish can change, as one string: equal strings mean nothing was built or taken out. */
+  private editSig(): string {
+    const c = this.city;
+    return [
+      c.roadsVersion,
+      c.facilitiesVersion,
+      c.zoningVersion,
+      c.regionsVersion,
+      c.labelsVersion,
+      c.aviation.version,
+      c.transit.version,
+      ...RAIL_KINDS.map((k) => `${c.rails[k].version}/${c.rails[k].transit.version}`),
+    ].join(',');
+  }
+
+  /** Remembers the city before an action that may build or demolish. */
+  private begin(): void {
+    if (this.pending) return;
+    this.pending = { data: this.city.serialize(), money: this.city.money, sig: this.editSig() };
+  }
+
+  /** The action is done: if it changed the city, it becomes the one step 上一步 takes back. */
+  private commit(label: string, changed?: boolean): void {
+    const p = this.pending;
+    this.pending = null;
+    if (!p) return;
+    const sig = this.editSig();
+    if (changed ?? sig !== p.sig) {
+      this.undoPoint = { data: p.data, cost: p.money - this.city.money, sig, steps: this.city.steps, label };
+      this.events.changed();
+    }
+  }
+
+  /** Runs an action that may build or demolish, keeping the city from before it for 上一步. */
+  private undoable(label: string, act: () => void): void {
+    this.begin();
+    try {
+      act();
+    } finally {
+      this.commit(label);
+    }
+  }
+
+  /** Whether 上一步 can take back the last action: nothing else has changed the city since, and it was not long ago. */
+  get canUndo(): boolean {
+    const u = this.undoPoint;
+    if (!u) return false;
+    if (this.city.steps - u.steps > UNDO_STEPS || u.sig !== this.editSig()) {
+      this.undoPoint = null;
+      return false;
+    }
+    return true;
+  }
+
+  /** 上一步: puts the city back as it was before the last build or demolish, once. */
+  undo(): boolean {
+    if (!this.canUndo || !this.events.restore) {
+      this.events.toast(this.undoPoint ? '現在不能復原' : '沒有可以復原的動作');
+      return false;
+    }
+    const u = this.undoPoint!;
+    this.undoPoint = null;
+    this.events.restore(u.data, u.cost);
+    this.events.toast(
+      u.cost > 0 ? `已復原「${u.label}」，退還 ${ntd(u.cost)}` : u.cost < 0 ? `已復原「${u.label}」，收回退款 ${ntd(-u.cost)}` : `已復原「${u.label}」`,
+    );
+    return true;
   }
 
   setTool(tool: Tool): void {
@@ -263,6 +347,10 @@ export class ToolController {
   }
 
   deleteDistrict(id: number): void {
+    this.undoable('刪除區域', () => this.deleteDistrictNow(id));
+  }
+
+  private deleteDistrictNow(id: number): void {
     this.city.removeDistrict(id);
     this.selectedDistrict = null;
     this.events.toast('區域已刪除');
@@ -291,6 +379,10 @@ export class ToolController {
 
   /** Adds a flight at the airport and opens it for editing. */
   addFlight(): void {
+    this.undoable('新增航班', () => this.addFlightNow());
+  }
+
+  private addFlightNow(): void {
     const f = this.city.aviation.addFlight();
     if (!f) {
       this.events.toast('先蓋一座機場才能開航班');
@@ -307,6 +399,10 @@ export class ToolController {
   }
 
   deleteFlight(id: number): void {
+    this.undoable('取消航班', () => this.deleteFlightNow(id));
+  }
+
+  private deleteFlightNow(id: number): void {
     this.city.aviation.removeFlight(id);
     this.selectedFlight = null;
     this.events.toast('航班已取消');
@@ -427,6 +523,10 @@ export class ToolController {
 
   /** Opens the planned line. */
   finishLine(): void {
+    this.undoable('開通路線', () => this.finishLineNow());
+  }
+
+  private finishLineNow(): void {
     const t = this.transit;
     if (!t) return;
     const r = this.city.createLine(t, this.lineDraft);
@@ -442,6 +542,10 @@ export class ToolController {
   }
 
   clearLines(): void {
+    this.undoable('清除路線', () => this.clearLinesNow());
+  }
+
+  private clearLinesNow(): void {
     const t = this.transit;
     if (!t) return;
     t.clearLines();
@@ -453,6 +557,10 @@ export class ToolController {
   }
 
   deleteLine(id: number): void {
+    this.undoable('刪除路線', () => this.deleteLineNow(id));
+  }
+
+  private deleteLineNow(id: number): void {
     this.transit?.removeLine(id);
     this.selectedLine = null;
     this.events.toast('路線已刪除');
@@ -486,6 +594,10 @@ export class ToolController {
   }
 
   removeDoomedLine(): void {
+    this.undoable('拆除路線', () => this.removeDoomedLineNow());
+  }
+
+  private removeDoomedLineNow(): void {
     const d = this.doomed;
     this.doomedLine = null;
     this.lineChoices = [];
@@ -788,6 +900,11 @@ export class ToolController {
   }
 
   onTap(p: Vec2): void {
+    if (this.tool === 'pan' || this.tool === 'traffic' || this.tool === 'zone') return this.onTapNow(p);
+    this.undoable(this.tool === 'bulldoze' ? '拆除' : '建造', () => this.onTapNow(p));
+  }
+
+  private onTapNow(p: Vec2): void {
     this.hover = p;
     if (this.isRoadTool) this.tapRoad(p);
     else if (this.plansLines) this.tapLine(p);
@@ -853,11 +970,19 @@ export class ToolController {
   /** A brush stroke starts or ends; the map holds its slow redraws until the stroke is done. */
   setPainting(on: boolean): void {
     this.world.setPainting(on);
+    if (on) {
+      this.painted = 0;
+      this.begin();
+    } else this.commit('劃分區', this.painted > 0);
   }
 
   onPaint(p: Vec2): void {
     this.hover = p;
-    this.city.paint(p, this.brushRadius, this.zone, this.overwriteZones);
+    // A tap without a drag paints once, as its own stroke
+    const stroke = !!this.pending;
+    if (!stroke) this.setPainting(true);
+    this.painted += this.city.paint(p, this.brushRadius, this.zone, this.overwriteZones);
+    if (!stroke) this.setPainting(false);
     this.refresh();
   }
 

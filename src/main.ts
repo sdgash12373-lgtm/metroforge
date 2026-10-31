@@ -49,6 +49,18 @@ let hud: Hud | null = null;
 const tools = new ToolController(city, world, {
   toast: (m) => hud?.toast(m),
   changed: () => hud?.render(),
+  // 上一步: the city from before the last build or demolish, at today's time, with that action's cost given back
+  restore: (data, cost) => {
+    const back = City.deserialize(data);
+    back.money = city.money + cost;
+    back.steps = city.steps;
+    patrol.stop();
+    city = back;
+    city.maxVehicles = MAX_VEHICLES;
+    tools.setCity(city);
+    world.invalidate();
+    hud!.render();
+  },
 });
 hud = new Hud(document.getElementById('ui')!, tools, {
   toggleBuildMode: () => {
