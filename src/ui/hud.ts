@@ -150,6 +150,7 @@ export class Hud {
     private actions: HudActions,
   ) {
     const top = el('header', 'hud panel');
+    top.dataset.tour = 'top';
     this.topBar = top;
     const brand = el('div', 'brand');
     const logo = el('img');
@@ -182,6 +183,7 @@ export class Hud {
     top.append(rci);
 
     const speeds = el('div', 'speeds');
+    speeds.dataset.tour = 'speeds';
     ['❚❚', '▶', '▶▶'].forEach((label, i) => {
       const b = el('button', 'chip', label);
       b.type = 'button';
@@ -195,6 +197,7 @@ export class Hud {
     const levelBtn = el('button', 'chip level-chip', LEVELS[0].name);
     levelBtn.type = 'button';
     levelBtn.title = '城市等級';
+    levelBtn.dataset.tour = 'level';
     levelBtn.onclick = () => this.showLevel(this.levelPanel.hidden);
     this.levelBtn = levelBtn;
     top.append(levelBtn);
@@ -214,6 +217,7 @@ export class Hud {
     const menu = el('button', 'chip menu-chip');
     menu.append(el('span', '', '☰'), el('span', 'wide-only', ' 選單'));
     menu.setAttribute('aria-label', '選單');
+    menu.dataset.tour = 'menu';
     menu.type = 'button';
     menu.onclick = () => actions.openMenu();
     top.append(menu);
@@ -359,14 +363,16 @@ export class Hud {
       const b = el('button', 'tool');
       b.type = 'button';
       b.append(el('span', '', t.label), el('kbd', '', t.key));
+      b.dataset.tour = t.id;
       b.onclick = () => this.selectTool(this.toolFor(t.id));
       dock.append(b);
       this.toolButtons.set(t.id, b);
     }
     // Beside the map on the right: 拆除, the view lock, driving and the compass
     const side = el('div', 'side');
-    const sideButton = (icon: string, label: string, title: string, onClick: () => void, cls = '') => {
+    const sideButton = (icon: string, label: string, title: string, onClick: () => void, cls = '', tour = '') => {
       const b = el('button', `side-btn panel ${cls}`);
+      if (tour) b.dataset.tour = tour;
       b.type = 'button';
       b.title = title;
       b.setAttribute('aria-label', label);
@@ -375,13 +381,13 @@ export class Hud {
       side.append(b);
       return b;
     };
-    this.demolishBtn = sideButton('🗑', '拆除', `拆除道路、軌道、路線、建設和房子（${DEMOLISH_KEY.toUpperCase()}）`, () => this.toggleDemolish(), 'danger');
+    this.demolishBtn = sideButton('🗑', '拆除', `拆除道路、軌道、路線、建設和房子（${DEMOLISH_KEY.toUpperCase()}）`, () => this.toggleDemolish(), 'danger', 'demolish');
     this.lockButton = sideButton('🔒', '鎖視角', '鎖住視角的旋轉與傾斜，拉路時不會被手勢轉動（仍可移動、縮放）', () => {
       const on = actions.toggleBuildMode();
       this.lockButton.setAttribute('aria-pressed', String(on));
       this.toast(on ? '視角已鎖定，只能移動與縮放' : '已解除視角鎖定');
-    });
-    sideButton('🚗', '巡查', '第一人稱開車巡查城市（電腦 WASD、手機虛擬搖桿）', () => actions.drive());
+    }, '', 'lock');
+    sideButton('🚗', '巡查', '第一人稱開車巡查城市（電腦 WASD、手機虛擬搖桿）', () => actions.drive(), '', 'drive');
     this.mail = new Mailbox({
       lookAt: (p) => {
         actions.lookAt(p);
@@ -391,7 +397,7 @@ export class Hud {
       opened: () => this.showMail(true),
       changed: () => this.renderMailBadge(),
     });
-    this.mailBtn = sideButton('📮', '信箱', '市民信箱：居民的心情、想法、建議和抱怨', () => this.showMail(this.mail.panel.hidden));
+    this.mailBtn = sideButton('📮', '信箱', '市民信箱：居民的心情、想法、建議和抱怨', () => this.showMail(this.mail.panel.hidden), '', 'mail');
     this.mailBadge.hidden = true;
     this.mailBtn.append(this.mailBadge);
     this.events = new EventsPanel({
@@ -406,6 +412,7 @@ export class Hud {
     this.eventsBadge.hidden = true;
     this.eventsBtn.append(this.eventsBadge);
     this.compass = el('button', 'compass panel');
+    this.compass.dataset.tour = 'compass';
     this.compass.type = 'button';
     this.compass.title = '方位：點一下讓北方朝上';
     this.compass.setAttribute('aria-label', '方位圖，點一下讓北方朝上');
