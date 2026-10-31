@@ -180,7 +180,8 @@ varying float vOutside;
 
 void main() {
   // The land's edge: no sea beyond it
-  if (vOutside > 0.0 && vDepth.y < 0.02) discard;
+  // (no discard: it would stop the GPU skipping hidden sea under the land early)
+  if (vOutside > 0.0 && vDepth.y < 0.02) { gl_FragColor = vec4(0.0); return; }
   float far = distance(vWorld, cameraPosition);
   vec2 p = vWorld.xz / ${PATCH.toFixed(1)};
   vec4 a = texture2D(uNormal, p);
@@ -325,6 +326,8 @@ function surfaceGeometry(rings: number, sides: number): THREE.BufferGeometry {
   return g;
 }
 
+const focusHeight = (f: { z?: number }) => f.z ?? 0;
+
 export class Ocean {
   readonly mesh: THREE.Mesh;
   private readonly n: number;
@@ -343,6 +346,8 @@ export class Ocean {
   private readonly material: THREE.ShaderMaterial;
   private depth: THREE.DataTexture | null = null;
   private time = 0;
+  /** time since the waves were last worked out */
+  private since = 1;
 
   /** Whether this browser can run it: WebGL2 with float or half-float render targets. */
   static supported(renderer: THREE.WebGLRenderer): boolean {
@@ -353,7 +358,7 @@ export class Ocean {
     private readonly renderer: THREE.WebGLRenderer,
     detailed: boolean,
   ) {
-    this.n = detailed ? 256 : 128;
+    this.n = detailed ? 128 : 64;
     const n = this.n;
     // Full floats for the FFT where they can be drawn to, half floats otherwise
     const fft = renderer.extensions.has('EXT_color_buffer_float') ? THREE.FloatType : THREE.HalfFloatType;
@@ -400,6 +405,7 @@ export class Ocean {
       vertexShader: SURFACE_VERT,
       fragmentShader: SURFACE_FRAG,
       transparent: true,
+      depthWrite: false,
       fog: true,
       uniforms: THREE.UniformsUtils.merge([
         THREE.UniformsLib.fog,
@@ -419,7 +425,7 @@ export class Ocean {
     });
     this.material.uniforms.uDisp.value = this.disp.texture;
     this.material.uniforms.uNormal.value = this.normal.texture;
-    this.mesh = new THREE.Mesh(surfaceGeometry(detailed ? 200 : 150, detailed ? 256 : 192), this.material);
+    this.mesh = new THREE.Mesh(surfaceGeometry(detailed ? 150 : 100, detailed ? 180 : 128), this.material);
     this.mesh.position.y = WATER_LEVEL;
     this.mesh.frustumCulled = false;
     this.mesh.receiveShadow = false;
@@ -462,9 +468,20 @@ export class Ocean {
    * Moves the waves on by dt and centres the sea on `focus`. `wind` 0..1 (a typhoon is 1) raises the waves; the
    * sun's direction and colour, the sky's colour and the light level shade it.
    */
-  update(dt: number, focus: { x: number; y: number }, wind: number, sun: THREE.Vector3, sunColor: THREE.Color, sky: THREE.Color, light: number): void {
+  update(dt: number, focus: { x: number; y: number; z?: number }, wind: number, sun: THREE.Vector3, sunColor: THREE.Color, sky: THREE.Color, light: number): void {
     if (!this.mesh.visible) return;
     this.time = (this.time + dt) % LOOP;
+    this.since += dt;
+    // The waves are worked out at most 30 times a second, and less often seen from high up, where they barely show
+    const high = focusHeight(focus);
+    if (this.since >= (high > 900 ? 1 / 10 : 1 / 30)) {
+      this.since = 0;
+      this.simulate();
+    }
+    this.place(focus, wind, sun, sunColor, sky, light);
+  }
+
+  private simulate(): void {
     const r = this.renderer;
     const prev = r.getRenderTarget();
     const autoClear = r.autoClear;
@@ -487,7 +504,9 @@ export class Ocean {
     this.pass(this.normals, this.normal);
     r.setRenderTarget(prev);
     r.autoClear = autoClear;
+  }
 
+  private place(focus: { x: number; y: number; z?: number }, wind: number, sun: THREE.Vector3, sunColor: THREE.Color, sky: THREE.Color, light: number): void {
     // Snap the disc to a few meters so its vertices do not crawl over the waves as the view moves
     this.mesh.position.x = Math.round(focus.x / 8) * 8;
     this.mesh.position.z = Math.round(focus.y / 8) * 8;
