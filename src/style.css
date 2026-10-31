@@ -1049,6 +1049,10 @@ body.driving .level {
   color: #1d1a12;
   font-weight: 700;
 }
+.side-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 .side-btn.danger {
   border-color: rgba(255, 122, 107, 0.6);
   color: var(--danger);

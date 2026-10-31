@@ -106,6 +106,7 @@ export class Hud {
   private toastEl: HTMLElement;
   private toolButtons = new Map<DockItem, HTMLButtonElement>();
   private demolishBtn: HTMLButtonElement;
+  private undoBtn: HTMLButtonElement;
   private beforeDemolish: Tool = 'pan';
   private side: HTMLElement;
   /** second row under 道路 (straight, curved, roundabout) and 運輸 (bus, metro, train, high-speed, airport) */
@@ -382,6 +383,8 @@ export class Hud {
       return b;
     };
     this.demolishBtn = sideButton('🗑', '拆除', `拆除道路、軌道、路線、建設和房子（${DEMOLISH_KEY.toUpperCase()}）`, () => this.toggleDemolish(), 'danger', 'demolish');
+    this.undoBtn = sideButton('↶', '上一步', '復原上一個蓋或拆的動作，只能退回一步（Ctrl+Z）', () => this.tools.undo(), '', 'undo');
+    this.undoBtn.disabled = true;
     this.lockButton = sideButton('🔒', '鎖視角', '鎖住視角的旋轉與傾斜，拉路時不會被手勢轉動（仍可移動、縮放）', () => {
       const on = actions.toggleBuildMode();
       this.lockButton.setAttribute('aria-pressed', String(on));
@@ -434,6 +437,12 @@ export class Hud {
         actions.openMenu();
         return;
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        this.tools.undo();
+        return;
+      }
+      if (e.ctrlKey || e.metaKey) return;
       const t = TOOLS.find((x) => x.key === e.key);
       if (t) this.selectTool(this.toolFor(t.id));
       if (e.key.toLowerCase() === DEMOLISH_KEY || e.key === 'Delete') this.toggleDemolish();
@@ -477,6 +486,7 @@ export class Hud {
     const group = groupOf(tool);
     for (const [id, b] of this.toolButtons) b.setAttribute('aria-pressed', String(id === group || id === tool));
     this.demolishBtn.setAttribute('aria-pressed', String(tool === 'bulldoze'));
+    this.undoBtn.disabled = !this.tools.canUndo;
     // While a road or track is being drawn only its own options stay, so the dock doesn't cover the map
     document.body.classList.toggle('road-drawing', this.tools.drawing);
     this.kinds.hidden = !group;
@@ -1200,6 +1210,9 @@ export class Hud {
   }
 
   update(city: City, dayFraction = 0): void {
+    // 上一步 lapses a while after the action, or once something else changes the city
+    const undo = !this.tools.canUndo;
+    if (this.undoBtn.disabled !== undo) this.undoBtn.disabled = undo;
     this.city = city;
     const b = city.budget;
     const money = (v: number) => (Math.abs(v) >= 1e6 ? `NT$${ntdShort(v)}` : ntd(v));
