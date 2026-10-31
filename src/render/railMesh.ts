@@ -106,6 +106,8 @@ function cutting(b: Builders, mask: Builder, s: Sample[], depth: Height): void {
       break;
     }
   }
+  // Track coming down from a viaduct: the cutting starts where it reaches the ground
+  while (start !== mouth && depth(s[start].t) > 0.05) start += step;
   const lo = Math.min(start, mouth);
   const hi = Math.max(start, mouth);
   const span = s.slice(lo, hi + 1);
@@ -188,14 +190,16 @@ export function buildTrackGeometries(net: RoadNetwork, kind: RailKind): TrackGeo
   for (const seg of net.segments.values()) {
     const s = seg.samples;
     const raised = net.isRaised(seg);
-    const ramp = !raised && isTunnelRamp(net, seg);
+    // Into a tunnel from street level, or straight down from a viaduct
+    const ramp = isTunnelRamp(net, seg) || (raised && Math.min(net.node(seg.a).h, net.node(seg.b).h) < 0);
     // Track into a tunnel sinks through its cutting, at its true height
     const h: Height = ramp ? (t) => net.heightAt(seg, t) : shownHeight(net, seg);
     const { ballast, sleepers, steel, concrete } = ramp ? sunk : main;
     if (raised) {
       ribbon(concrete, s, ROAD_WIDTH, (t) => h(t) - 0.02);
       supports(concrete, s, h);
-    } else if (ramp) cutting(sunk, mask, s, h);
+    }
+    if (ramp) cutting(sunk, mask, s, h);
     ribbon(ballast, s, BALLAST_WIDTH, h);
     for (const side of [-1, 1]) {
       const c = side * TRACK_OFFSET;
