@@ -1,4 +1,5 @@
 import type { City } from '../sim/city';
+import { QUALITY_CHOICES, type Quality } from '../render/graphics';
 import logoUrl from '../assets/logo.png';
 import { CHANGELOG } from '../changelog';
 import { seenLatest } from './updates';
@@ -8,6 +9,10 @@ import { AUTO_SLOT, type SaveSlots, type SlotInfo, slotLabel } from '../storage/
 
 export interface Settings {
   shadows: boolean;
+  /** 畫質: 自動 keeps the frame rate up by itself */
+  quality: Quality;
+  /** frames per second shown in the corner */
+  showFps: boolean;
   /** seconds between auto-saves; 0 = off */
   autosave: number;
 }
@@ -371,6 +376,25 @@ export class Menu {
       sRow.append(b);
     }
     shadows.append(el('span', '', '陰影（重新整理後生效，關掉手機會比較順）'), sRow);
+    const quality = el('div', 'menu-field');
+    const qRow = el('div', 'menu-chips');
+    for (const [q, label] of QUALITY_CHOICES) {
+      const b = button(label, 'chip', () => set({ quality: q }));
+      b.setAttribute('aria-pressed', String(s.quality === q));
+      qRow.append(b);
+    }
+    quality.append(el('span', '', '畫質（自動：依電腦效能調整，維持每秒 50 格以上）'), qRow);
+    const fps = el('div', 'menu-field');
+    const fRow = el('div', 'menu-chips');
+    for (const [on, label] of [
+      [true, '顯示'],
+      [false, '隱藏'],
+    ] as const) {
+      const b = button(label, 'chip', () => set({ showFps: on }));
+      b.setAttribute('aria-pressed', String(s.showFps === on));
+      fRow.append(b);
+    }
+    fps.append(el('span', '', 'FPS（每秒畫面數）'), fRow);
     const auto = el('div', 'menu-field');
     const aRow = el('div', 'menu-chips');
     for (const [sec, label] of AUTOSAVE_CHOICES) {
@@ -381,6 +405,6 @@ export class Menu {
     auto.append(el('span', '', '自動存檔'), aRow);
     const row = el('div', 'menu-row');
     row.append(button('返回', 'menu-btn', () => this.back()));
-    return [el('h2', '', '設定'), shadows, auto, row];
+    return [el('h2', '', '設定'), quality, shadows, fps, auto, row];
   }
 }

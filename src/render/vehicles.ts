@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { glossy } from './skyLight';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { type Traffic, type Vehicle, isTaxi } from '../sim/traffic';
 import { GLASS, HEADLIGHT, TAILLIGHT, painted, shade, tint, wheel } from './kit';
@@ -185,6 +186,8 @@ export class VehicleLayer {
 
   constructor(shadows: boolean) {
     const mat = new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true });
+    // Lacquered paint catches the sky and the sun
+    glossy(mat, 0.4, 'paint');
     const fixed = new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true });
     const sizes = [MAX, MAX, MAX, MAX, MAX / 4, MAX / 8];
     [sedan(), suv(), hatchback(), scooter(), truck(), bus()].forEach((model, k) => {

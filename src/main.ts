@@ -27,7 +27,7 @@ function newCity(name = '我的城市', terrain: TerrainName = 'kaohsiung', regi
 }
 
 function loadSettings(coarse: boolean): Settings {
-  const defaults: Settings = { shadows: !coarse, autosave: 60 };
+  const defaults: Settings = { shadows: !coarse, autosave: 60, quality: 'auto', showFps: false };
   try {
     return { ...defaults, ...(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as Partial<Settings>) };
   } catch {
@@ -38,7 +38,14 @@ function loadSettings(coarse: boolean): Settings {
 const app = document.getElementById('app')!;
 const coarse = matchMedia('(pointer: coarse)').matches;
 let settings = loadSettings(coarse);
-const world = new World(app, settings.shadows);
+const world = new World(app, settings.shadows, settings.quality);
+// Frames per second in the corner, for checking how the game runs on a machine
+const fpsBadge = document.createElement('div');
+fpsBadge.className = 'fps-badge';
+fpsBadge.hidden = !settings.showFps;
+document.body.append(fpsBadge);
+let fpsAge = 0;
+const TIER_NAMES = { low: '低', medium: '中', high: '高' } as const;
 // The map behind the start screen until a game starts
 let city = newCity();
 // Phones get fewer vehicles to keep the frame rate up
@@ -200,6 +207,8 @@ const menu: Menu = new Menu(document.getElementById('ui')!, slots, {
   },
   settings: () => settings,
   setSettings: (s) => {
+    if (s.quality !== settings.quality) world.graphics.setQuality(s.quality);
+    fpsBadge.hidden = !s.showFps;
     settings = s;
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
@@ -315,6 +324,13 @@ function frame(now: number): void {
   hud!.setHeading(world.rig.yaw);
   hud!.updateHint();
   world.render();
+  world.graphics.govern(dt);
+  fpsAge += dt;
+  if (!fpsBadge.hidden && fpsAge > 0.5) {
+    fpsAge = 0;
+    const g = world.graphics;
+    fpsBadge.textContent = `${Math.round(g.fps)} FPS · 畫質${g.quality === 'auto' ? '自動/' : ''}${TIER_NAMES[g.tier]} · ${Math.round(g.scale * 100)}%`;
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
