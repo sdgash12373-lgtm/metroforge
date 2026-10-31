@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { SKY_GLSL, skyReflectionChunk, useSky } from './skyLight';
 
 /**
  * What a box of a building is clad in. The pattern is drawn in the shader from the box's own size, so a wall gets
@@ -31,6 +32,7 @@ export enum Skin {
 export function facadeMaterial(mat: THREE.MeshLambertMaterial, night: { value: number }): void {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uNight = night;
+    useSky(shader);
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
@@ -64,6 +66,7 @@ export function facadeMaterial(mat: THREE.MeshLambertMaterial, night: { value: n
       .replace(
         '#include <common>',
         `#include <common>
+        ${SKY_GLSL}
         uniform float uNight;
         varying float vSkin;
         varying vec3 vBox;
@@ -98,6 +101,8 @@ export function facadeMaterial(mat: THREE.MeshLambertMaterial, night: { value: n
         float hy = vBox.y * vSize.y;
         float floorY = fract(hy / 3.2);
         float lit = 0.0;
+        // how much of the sky the face mirrors: glass panes do, walls barely
+        float gloss = 0.0;
         if (side) {
           if (skin == 1 && width > 1.6) {
             // small mosaic tiles, then windows centred on the wall, as many as fit
@@ -111,6 +116,7 @@ export function facadeMaterial(mat: THREE.MeshLambertMaterial, night: { value: n
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.78, 0.8, 0.8), frame * (1.0 - pane));
             diffuseColor.rgb = mix(diffuseColor.rgb, glass, pane);
             lit = pane * step(0.42, facadeHash(floor(cell) + floor(vHome)));
+            gloss = pane * 0.45;
           } else if (skin == 2) {
             // mullions every 1.5 m, a spandrel at each floor, panes catching the sky higher up
             float mull = max(lines(u + 0.05, 1.5, 0.1), band(floorY, 0.0, 0.12));
@@ -118,6 +124,7 @@ export function facadeMaterial(mat: THREE.MeshLambertMaterial, night: { value: n
             diffuseColor.rgb = mix(diffuseColor.rgb * sheen, vec3(0.82, 0.85, 0.87), mull);
             vec2 cell = vec2(floor(u / 3.0), floor(hy / 3.2));
             lit = (1.0 - mull) * band(floorY, 0.15, 0.95) * step(0.35, facadeHash(cell + floor(vHome)));
+            gloss = (1.0 - mull) * 0.85;
           } else if (skin == 3) {
             // corrugated sheet: ridges every 25 cm, a seam every 3 m up
             float fade = clamp(1.5 - fwidth(u) * 10.0, 0.0, 1.0);
@@ -138,6 +145,7 @@ export function facadeMaterial(mat: THREE.MeshLambertMaterial, night: { value: n
             float pane = band(fx, 0.05, 0.95) * band(hy, 0.2, vSize.y - 0.45);
             diffuseColor.rgb = mix(diffuseColor.rgb * 0.9, vec3(0.3, 0.28, 0.25), pane);
             lit = pane * 1.4;
+            gloss = pane * 0.35;
           } else if (skin == 7) {
             // 鐵窗 bars with the dark balcony behind them
             float bars = lines(u, 0.14, 0.05);
@@ -171,7 +179,9 @@ export function facadeMaterial(mat: THREE.MeshLambertMaterial, night: { value: n
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
         if (uNight > 0.01) totalEmissiveRadiance += vec3(1.0, 0.78, 0.45) * lit * uNight;`,
-      );
+      )
+      // Lit windows at night stay lit over the reflection
+      .replace('#include <opaque_fragment>', `${skyReflectionChunk('gloss * (1.0 - lit * uNight)', 260)}\n#include <opaque_fragment>`);
   };
   mat.customProgramCacheKey = () => 'facade';
   mat.needsUpdate = true;

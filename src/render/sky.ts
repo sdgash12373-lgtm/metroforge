@@ -1,10 +1,13 @@
 import * as THREE from 'three';
+import { SKY, SKY_GLSL } from './skyLight';
 import type { Conditions } from '../sim/weather';
 import { clock } from '../sim/weather';
 
 const NIGHT_SKY = new THREE.Color(0x0d1630);
 const DAWN_SKY = new THREE.Color(0xe9a46e);
 const DAY_SKY = new THREE.Color(0xbcd8ea);
+const DAY_ZENITH = new THREE.Color(0x4f86c9);
+const NIGHT_ZENITH = new THREE.Color(0x050916);
 const STORM_SKY = new THREE.Color(0x7d8790);
 const FOG_SKY = new THREE.Color(0xc9ced1);
 
@@ -73,6 +76,8 @@ export class SkySystem {
     return this.now.wind;
   }
   private bolt = 0;
+  /** the sky itself: a gradient from the horizon up, with the sun's glow and stars at night */
+  private readonly dome: THREE.Mesh;
 
   constructor(
     private scene: THREE.Scene,
@@ -99,7 +104,8 @@ export class SkySystem {
     this.snow.frustumCulled = false;
     this.snow.visible = false;
     this.makeClouds();
-    scene.add(this.rain, this.snow, this.clouds);
+    this.dome = skyDome(this.night);
+    scene.add(this.rain, this.snow, this.clouds, this.dome);
   }
 
   private makeClouds(): void {
@@ -177,6 +183,13 @@ export class SkySystem {
     c.lerp(FOG_SKY.clone().multiplyScalar(0.2 + 0.8 * day), n.fog * 0.8);
     if (this.flash) c.lerp(new THREE.Color(0xe8ecff), this.flash * 0.5);
     if (!xray) (this.scene.background as THREE.Color).copy(c);
+    this.dome.visible = !xray;
+    // The shared sky light: the horizon is the fog's colour (so the land fades into it), deeper blue overhead
+    SKY.uSkyHorizon.value.copy(c);
+    const z = SKY.uSkyZenith.value.copy(NIGHT_ZENITH).lerp(DAY_ZENITH, day);
+    z.lerp(c, Math.min(1, n.cloud * 0.75 + n.fog * 0.9));
+    SKY.uSunDir.value.copy(this.sun.position).sub(this.sun.target.position).normalize();
+    SKY.uSunColor.value.copy(sunColor).multiplyScalar(day > 0.02 ? Math.max(0, gloom) * day : 0.12);
     const fog = this.scene.fog as THREE.Fog;
     fog.color.copy(c);
     const thick = Math.sqrt(Math.max(n.fog, n.precip * 0.4));
@@ -238,4 +251,44 @@ export class SkySystem {
       this.snow.scale.set(size, tall, size);
     }
   }
+}
+
+/** A dome drawn behind everything, always centred on the camera. */
+function skyDome(night: { value: number }): THREE.Mesh {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { ...SKY, uNight: night },
+    vertexShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vDir = position;
+        vec4 p = projectionMatrix * viewMatrix * vec4(cameraPosition + position * 4000.0, 1.0);
+        gl_Position = p.xyww;
+      }`,
+    fragmentShader: /* glsl */ `
+      ${SKY_GLSL}
+      uniform float uNight;
+      varying vec3 vDir;
+      float starHash(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }
+      void main() {
+        vec3 d = normalize(vDir);
+        vec3 col = skyAlong(vec3(d.x, max(d.y, 0.0), d.z));
+        // Stars on clear nights, above the haze near the horizon
+        if (uNight > 0.05 && d.y > 0.08) {
+          vec3 cell = floor(d * 320.0);
+          float s = step(0.996, starHash(cell));
+          col += vec3(0.85, 0.9, 1.0) * s * uNight * smoothstep(0.08, 0.35, d.y) * (1.0 - smoothstep(0.12, 0.3, length(uSkyZenith)));
+        }
+        gl_FragColor = vec4(col, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+    side: THREE.BackSide,
+    depthWrite: false,
+    depthTest: false,
+    fog: false,
+  });
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), mat);
+  dome.frustumCulled = false;
+  dome.renderOrder = -100;
+  return dome;
 }

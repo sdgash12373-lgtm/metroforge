@@ -30,6 +30,7 @@ import { StationLayer } from './stations';
 import { TrainLayer } from './trains';
 import { ShipLayer } from './ships';
 import { Ocean } from './ocean';
+import { Graphics, type Quality, guessTier, installAerialPerspective } from './graphics';
 import { FACILITIES } from '../sim/facilities';
 import { type RockSpot, coastOf, coastRocks, rockGeometry } from './coast';
 
@@ -117,6 +118,8 @@ export class World {
   private readonly streetTrees: THREE.InstancedMesh;
   private terrain: Terrain = FLAT;
   private readonly water: THREE.Mesh;
+  /** quality level, effects after the scene and the frame-rate governor */
+  readonly graphics: Graphics;
   /** The FFT sea, where the browser can run it (WebGL2 float targets); otherwise the plain water above */
   private readonly ocean: Ocean | null;
   /** seconds, for the ripples on the water */
@@ -185,9 +188,13 @@ export class World {
     steel: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
   };
 
-  constructor(container: HTMLElement, shadows: boolean) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  constructor(container: HTMLElement, shadows: boolean, quality: Quality) {
+    installAerialPerspective();
+    const coarse = matchMedia('(pointer: coarse)').matches;
+    const guess = guessTier(coarse);
+    // Drawn straight to the screen (multisampled) on 低; through the effects otherwise, which smooth edges themselves
+    const tier = quality === 'auto' ? guess : quality;
+    this.renderer = new THREE.WebGLRenderer({ antialias: tier === 'low', powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = shadows;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     // Gentle filmic tone mapping: bright sun and lit windows roll off softly instead of clipping, colours stay true
@@ -208,7 +215,8 @@ export class World {
     this.sun.shadow.bias = -0.0001;
     this.sun.shadow.normalBias = 0.03;
     this.scene.add(this.sun, this.sun.target);
-    this.sky = new SkySystem(this.scene, this.sun, hemi, matchMedia('(pointer: coarse)').matches);
+    this.sky = new SkySystem(this.scene, this.sun, hemi, coarse);
+    this.graphics = new Graphics(this.renderer, this.scene, this.rig.camera, this.sun, quality, guess);
 
     this.ground = new THREE.Mesh(buildGroundGeometry(FLAT), naturalGround(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
     this.ground.receiveShadow = true;
@@ -962,7 +970,7 @@ export class World {
   }
 
   resize(w: number, h: number): void {
-    this.renderer.setSize(w, h);
+    this.graphics.resize(w, h);
     this.rig.camera.aspect = w / h;
     this.rig.camera.updateProjectionMatrix();
   }
@@ -1031,7 +1039,7 @@ export class World {
     // Push the shadow test out by over half a shadow texel, which grows as the view zooms out: with a fixed
     // bias, walls lit at a glancing angle broke up into stripes (shadow acne) when seen from afar
     this.sun.shadow.normalBias = Math.max(0.03, ((span * 2) / this.sun.shadow.mapSize.x) * 0.7);
-    this.renderer.render(this.scene, this.rig.camera);
+    this.graphics.render(this.sky.night.value);
     this.placeNames();
     if (this.guides.length) {
       const el = this.renderer.domElement;
