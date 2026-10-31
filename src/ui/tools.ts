@@ -3,14 +3,14 @@ import { FACILITIES, PARKING_SPACES, SCHOOL_SEATS, UNIVERSITY_SEATS, type Facili
 import { ntd } from '../sim/format';
 import { stationCovers } from '../sim/stations';
 import { AIRPORT_COST, type Airport, Aviation, type RunwayCount } from '../sim/airport';
-import { BULLDOZE_REFUND, type City, type RoadStyle } from '../sim/city';
+import { BULLDOZE_REFUND, type City, HUB_LABEL, type RoadStyle } from '../sim/city';
 import { LEVELS, UNLOCK } from '../sim/levels';
 import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, dist, lerp, quadPoint } from '../sim/geometry';
 import { HOUR_STEPS, ROAD_KINDS, ROUNDABOUT_RADIUS, type RoadKind, type RoundaboutSize } from '../sim/city';
 import { RAIL_SPECS, type RailKind, TRACK_OFFSET } from '../sim/rail';
 import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type RoadNetwork, type Snap, TUNNEL_DEPTH } from '../sim/roads';
-import { LINE_COLORS, type PathPiece, type Transit } from '../sim/transit';
+import { LINE_COLORS, type PathPiece, type Transit, isShared } from '../sim/transit';
 import { CELL, type Lot, ZONES, Zone, cellCenter } from '../sim/zoning';
 import type { World } from '../render/world';
 
@@ -88,6 +88,20 @@ export interface ToolEvents {
 }
 
 /** What the active tool does with taps, drags and hover on the ground. */
+export type StationType = 'standard' | 'special' | 'twin' | 'triple';
+export const STATION_TYPES: [StationType, string][] = [
+  ['standard', '一般車站'],
+  ['special', '特色車站'],
+  ['twin', '雙鐵共構'],
+  ['triple', '三鐵共構'],
+];
+const STATION_HINTS: Record<StationType, string> = {
+  standard: '點在路邊蓋火車站，車站會沿著道路，自帶一段月台軌道',
+  special: '點在路邊蓋地區特色車站（高雄區：高雄車站，三鐵共構全在地下；屏東區：屏東車站。每區一座）',
+  twin: '點在路邊蓋雙鐵共構站：火車和捷運都在地下，自帶兩段地下軌道，地面是車站入口',
+  triple: '點在路邊蓋三鐵共構站：地下火車和捷運、地面高鐵，旁邊的停車場有高架道路可接快速道路',
+};
+
 export class ToolController {
   tool: Tool = 'road';
   zone: Zone = Zone.ResidentialLow;
@@ -120,8 +134,8 @@ export class ToolController {
   /** every line under the last tap, so one under another (a train beneath a bus route) can be picked in the dock */
   lineChoices: { transit: Transit; id: number }[] = [];
   railAction: RailAction = 'track';
-  /** the station tool builds the region's own station instead of a standard one */
-  specialStation = false;
+  /** what the station tool builds: a standard station, the region's own, or a 共構 station */
+  stationType: StationType = 'standard';
   /** track tools draw curves instead of straight track */
   trackCurve = false;
   trackLevel: Record<RailKind, RoadLevel> = {
@@ -201,8 +215,8 @@ export class ToolController {
     return isRail(this.tool) ? this.trackLevel[this.tool] : this.roadLevel;
   }
 
-  setSpecialStation(on: boolean): void {
-    this.specialStation = on;
+  setStationType(type: StationType): void {
+    this.stationType = type;
     this.events.changed();
     this.refresh();
   }
@@ -572,7 +586,7 @@ export class ToolController {
       case 'metro':
       case 'train':
       case 'hsr':
-        if (this.railAction === 'station') return this.specialStation ? '點在路邊蓋地區特色車站（高雄區：高雄車站、屏東區：屏東車站，每區一座）' : '點在路邊蓋火車站，車站會沿著道路，自帶一段月台軌道';
+        if (this.railAction === 'station') return STATION_HINTS[this.stationType];
         return this.railAction === 'track' ? this.drawHint(`${RAIL_SPECS[this.tool].mode.label}軌道`, '拉軌道') : this.lineHint();
       case 'airport':
         return this.airportHint();
@@ -778,9 +792,16 @@ export class ToolController {
     if (this.isRoadTool) this.tapRoad(p);
     else if (this.plansLines) this.tapLine(p);
     else if (this.tool === 'train' && this.railAction === 'station') {
-      const r = this.city.buildTrainStation(p, this.specialStation);
-      const what = r.style === 'kaohsiung' ? '高雄車站（地下化，兩端有坡道）' : r.style === 'pingtung' ? '屏東車站（高架化，兩端有坡道）' : '火車站';
-      this.events.toast(r.ok ? `${what}完成，花費 ${ntd(r.cost)}；接著用「軌道」從車站兩端拉軌道` : (r.reason ?? '這裡不能蓋車站'));
+      const type = this.stationType;
+      if (type === 'twin' || type === 'triple') {
+        const r = this.city.buildHubStation(p, type);
+        const next = type === 'twin' ? '從兩端用「地下」拉火車和捷運軌道' : '從兩端用「地下」拉火車和捷運軌道、用「地面」拉高鐵軌道，高架道路可接快速道路';
+        this.events.toast(r.ok ? `${HUB_LABEL[type]}完成，花費 ${ntd(r.cost)}；接著${next}` : (r.reason ?? '這裡不能蓋車站'));
+      } else {
+        const r = this.city.buildTrainStation(p, type === 'special');
+        const what = r.style === 'kaohsiung' ? '高雄車站（三鐵共構：火車兩端有坡道，捷運、高鐵為地下軌道）' : r.style === 'pingtung' ? '屏東車站（高架化，兩端有坡道）' : '火車站';
+        this.events.toast(r.ok ? `${what}完成，花費 ${ntd(r.cost)}；接著用「軌道」從車站兩端拉軌道` : (r.reason ?? '這裡不能蓋車站'));
+      }
     }
     else if (this.tool === 'upgradeRoad') {
       const seg = this.streetAt(p);
@@ -918,7 +939,9 @@ export class ToolController {
       }
       return;
     }
-    const stop = transit.stopAt(p, r);
+    // Tapping a 共構 station's building picks its own metro or high-speed stop
+    const hub = this.city.stationSpots().find((st) => st.kind === 'train' && isShared(st.style) && stationCovers('train', st.pose, st.side, p, 2, st.style));
+    const stop = (hub && (this.tool === 'metro' || this.tool === 'hsr') && this.city.hubPartner(this.tool, hub.stop)) || transit.stopAt(p, r);
     if (!stop) {
       const { label } = transit.mode;
       this.events.toast(transit.mode.streetsOnly ? '公車站要設在地面道路旁（高架道路不能設站）' : `${label}車站要設在${label}軌道上（坡道上不能設站）`);

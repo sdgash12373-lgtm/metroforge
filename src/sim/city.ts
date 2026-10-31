@@ -34,7 +34,7 @@ import { ntd } from './format';
 import { type Households, PEOPLE_PER_HOUSEHOLD, bracketOf, emptyHouseholds, residentIncome } from './income';
 import { type Sample, type Vec2, bboxNear, clamp, closestOnSamples, curveIntersections, dist, lerp, pointSegment, quadPoint, quadTangent, sampleQuad } from './geometry';
 import { RAIL_KINDS, type RailKind, RailSystem, TRACK_UPKEEP } from './rail';
-import { type StationPose, stationCovers, stationFront, stationPose, stationSide } from './stations';
+import { HUBS, KAOHSIUNG_SHARED, type StationPose, stationCovers, stationFront, stationPose, stationSide } from './stations';
 import { ELEVATED_HEIGHT, type LaneCount, LEVEL_TOLERANCE, MAX_GRADE, MIN_SEGMENT, ROAD_WIDTH, RoadNetwork, type RoadNode, roadWidth, type RoadSegment, type Snap, TUNNEL_DEPTH } from './roads';
 import { Weather } from './weather';
 import { type ArenaAccess, EventBook, type EventSave, type EventStep, FAVOR_START } from './events';
@@ -61,7 +61,7 @@ import {
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, FLAT_CLASSIC, PLAIN, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic, taxiTint } from './traffic';
-import { type BusStop, type StationStyle, Transit } from './transit';
+import { type BusStop, type HubStyle, type StationStyle, Transit, isHub, isShared } from './transit';
 import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, isIndustry, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
@@ -126,6 +126,9 @@ export const STATION_RAMP = 48;
 export const STATION_STREET_REACH = 40;
 /** A region's own station costs this many times an ordinary one, besides its track. */
 export const SPECIAL_STATION_COST = 3;
+/** A 共構 station's stops cost this many times their ordinary price, besides its track and road. */
+export const HUB_STATION_COST = 2;
+export const HUB_LABEL: Record<HubStyle, string> = { twin: '雙鐵共構站', triple: '三鐵共構站' };
 
 /** A station standing on a rail line: where, which side its building is on, and whether it is Kaohsiung's own. */
 export interface StationSpot {
@@ -1239,7 +1242,7 @@ export class City {
   planTrainStation(p: Vec2, special: boolean): {
     cost: number;
     reason?: string;
-    style?: StationStyle;
+    style?: 'standard' | RegionName;
     centre?: Vec2;
     d?: Vec2;
     face?: 1 | -1;
@@ -1255,7 +1258,7 @@ export class City {
     if (!best) return { cost: 0, reason: '火車站要蓋在路邊：請點在道路旁邊' };
     const region = this.terrain.region(p.x, p.y);
     if (special && !region) return { cost: 0, reason: '這裡不屬於任何地區，沒有特色車站' };
-    const style: StationStyle = special && region ? region : 'standard';
+    const style: 'standard' | RegionName = special && region ? region : 'standard';
     if (special && region && [...sys.transit.stops.values()].some((st) => st.style === region)) {
       return { cost: 0, reason: `${REGION_NAMES[region]}已經有特色車站了（每區限蓋一座）` };
     }
@@ -1290,7 +1293,22 @@ export class City {
       }
     }
     if (this.terrainProblem(a, null, b, 0, 0) && !level) return { cost: 0, reason: this.terrainProblem(a, null, b, 0, 0)! };
-    const cost = this.trackCost('train', a, null, b, level, level) + sys.spec.mode.stopCost * (style === 'standard' ? 1 : SPECIAL_STATION_COST);
+    let cost = this.trackCost('train', a, null, b, level, level) + sys.spec.mode.stopCost * (style === 'standard' ? 1 : SPECIAL_STATION_COST);
+    // Kaohsiung's is 三鐵共構: metro and high-speed tunnels come with it
+    if (style === 'kaohsiung') {
+      for (const [kind, v, half] of this.kaohsiungLines()) {
+        const ea = this.hubPoint({ p: centre, d: tan, h: 0 }, face, -half, v);
+        const eb = this.hubPoint({ p: centre, d: tan, h: 0 }, face, half, v);
+        for (const end of [ea, eb]) {
+          const locked = this.regionProblem(end);
+          if (locked) return { cost: 0, reason: locked };
+        }
+        for (let k = 0; k <= 40; k++) {
+          if (this.rails[kind].net.segmentAt(lerp(ea, eb, k / 40), 8)) return { cost: 0, reason: `這裡已經有${this.rails[kind].spec.mode.label}軌道了，請換個地方` };
+        }
+        cost += this.trackCost(kind, ea, null, eb, TUNNEL_DEPTH, TUNNEL_DEPTH) + this.rails[kind].spec.mode.stopCost * HUB_STATION_COST;
+      }
+    }
     if (cost > this.money) return { cost, reason: `資金不足，需要 ${ntd(cost)}` };
     return { cost, style, centre, d: tan, face };
   }
@@ -1321,24 +1339,195 @@ export class City {
     if (!stop) return { ok: false, cost: 0, reason: '車站蓋不起來，請換個地方' };
     stop.style = style;
     stop.face = face;
+    if (style === 'kaohsiung') {
+      for (const [kind, v, half] of this.kaohsiungLines()) {
+        const pt = (u: number) => this.hubPoint({ p: centre, d, h: 0 }, face, u, v);
+        const t = this.rails[kind];
+        t.net.addRoad({ kind: 'free', p: pt(-half) }, null, { kind: 'free', p: pt(half) }, TUNNEL_DEPTH);
+        const other = t.transit.stopAt(pt(0), 4);
+        if (other) {
+          other.style = style;
+          other.face = face;
+        }
+        this.railChanged(kind);
+      }
+    }
     this.spend(plan.cost);
     this.railChanged('train');
     return { ok: true, cost: plan.cost, style, stop: stop.id };
   }
 
+  /**
+   * Where a 共構 station built beside the street nearest p would go (see HUBS): its train track underground under
+   * the building, the metro's beside it, and for 三鐵 high-speed track at street level behind and an elevated road
+   * into the car park. Each line of track is laid level from end to end, ready for more to be drawn on.
+   */
+  planHubStation(p: Vec2, style: HubStyle): {
+    cost: number;
+    reason?: string;
+    centre?: Vec2;
+    d?: Vec2;
+    face?: 1 | -1;
+  } {
+    const hub = HUBS[style];
+    let best: { seg: RoadSegment; t: number; d: number } | null = null;
+    for (const seg of this.net.segments.values()) {
+      if (!this.net.isStreet(seg) || !bboxNear(seg.bbox, p, STATION_STREET_REACH + roadWidth(seg))) continue;
+      const c = closestOnSamples(seg.samples, p);
+      const d = c.d - roadWidth(seg) / 2;
+      if (d <= STATION_STREET_REACH && (!best || d < best.d)) best = { seg, t: c.t, d };
+    }
+    if (!best) return { cost: 0, reason: `${HUB_LABEL[style]}要蓋在路邊：請點在道路旁邊` };
+    const q = this.net.quad(best.seg);
+    const at = quadPoint(q, best.t);
+    const tan = quadTangent(q, best.t);
+    let n = { x: -tan.y, y: tan.x };
+    if ((p.x - at.x) * n.x + (p.y - at.y) * n.y < 0) n = { x: -n.x, y: -n.y };
+    const offset = hub.front + roadWidth(best.seg) / 2 + 1.5;
+    const centre = { x: at.x + n.x * offset, y: at.y + n.y * offset };
+    const face: 1 | -1 = -tan.y * -n.x + tan.x * -n.y > 0 ? 1 : -1;
+    const pt = (u: number, v: number) => this.hubPoint({ p: centre, d: tan, h: 0 }, face, u, v);
+    const lines: [RailKind, number, number, number][] = [
+      ['train', 0, hub.train, TUNNEL_DEPTH],
+      ['metro', hub.metro.v, hub.metro.half, TUNNEL_DEPTH],
+    ];
+    if (hub.hsr) lines.push(['hsr', hub.hsr.v, hub.hsr.half, 0]);
+    let cost = 0;
+    for (const [kind, v, half, h] of lines) {
+      const a = pt(-half, v);
+      const b = pt(half, v);
+      for (const end of [a, b]) {
+        const locked = this.regionProblem(end);
+        if (locked) return { cost: 0, reason: locked };
+      }
+      for (let k = 0; k <= 40; k++) {
+        if (this.rails[kind].net.segmentAt(lerp(a, b, k / 40), 8)) return { cost: 0, reason: `這裡已經有${this.rails[kind].spec.mode.label}軌道了，請換個地方` };
+      }
+      if (h === 0) {
+        const problem = this.terrainProblem(a, null, b, 0, 0);
+        if (problem) return { cost: 0, reason: problem };
+      }
+      cost += this.trackCost(kind, a, null, b, h, h) + this.rails[kind].spec.mode.stopCost * HUB_STATION_COST;
+    }
+    if (hub.road) {
+      const a = pt(hub.road.u0, hub.road.v);
+      const b = pt(hub.road.u1, hub.road.v);
+      const locked = this.regionProblem(b);
+      if (locked) return { cost: 0, reason: locked };
+      for (let k = 0; k <= 20; k++) {
+        if (this.net.segmentAt(lerp(a, b, k / 20), 10, ELEVATED_HEIGHT)) return { cost: 0, reason: '車站的高架道路會撞到其他道路，請換個地方' };
+      }
+      const problem = this.terrainProblem(a, null, b, ELEVATED_HEIGHT, ELEVATED_HEIGHT);
+      if (problem) return { cost: 0, reason: problem };
+      cost += this.roadCost(a, null, b, ELEVATED_HEIGHT, ELEVATED_HEIGHT) * 2;
+    }
+    // No street under the building, platforms or plaza, besides the one it fronts
+    const pose: StationPose = { p: centre, d: tan, h: TUNNEL_DEPTH };
+    for (const seg of this.net.segments.values()) {
+      if (seg === best.seg || !bboxNear(seg.bbox, centre, 200)) continue;
+      if (seg.samples.some((sp) => stationCovers('train', pose, face, sp, roadWidth(seg) / 2, style) && this.net.heightAt(seg, sp.t) >= 0)) {
+        return { cost: 0, reason: '車站範圍內有其他道路，請換個地方' };
+      }
+    }
+    // Nor other stations' ground
+    for (const st of this.stationSpots()) {
+      for (const [u0, u1, v0, v1] of hub.rects) {
+        for (const [u, v] of [[u0, v0], [u1, v0], [u0, v1], [u1, v1], [(u0 + u1) / 2, (v0 + v1) / 2]]) {
+          if (stationCovers(st.kind, st.pose, st.side, pt(u, v), 0, st.style)) return { cost: 0, reason: '這裡離其他車站太近，請換個地方' };
+        }
+      }
+    }
+    cost = Math.round(cost);
+    if (cost > this.money) return { cost, reason: `資金不足，需要 ${ntd(cost)}` };
+    return { cost, centre, d: tan, face };
+  }
+
+  /** The metro and high-speed tunnels that come with Kaohsiung's own station. */
+  private kaohsiungLines(): [RailKind, number, number][] {
+    return [
+      ['metro', KAOHSIUNG_SHARED.metro.v, KAOHSIUNG_SHARED.metro.half],
+      ['hsr', KAOHSIUNG_SHARED.hsr.v, KAOHSIUNG_SHARED.hsr.half],
+    ];
+  }
+
+  /** The world point at (u, v) in a station's frame, with its building on side `face`. */
+  hubPoint(pose: StationPose, face: number, u: number, v: number): Vec2 {
+    const { p, d } = pose;
+    return { x: p.x + d.x * u - d.y * v * face, y: p.y + d.y * u + d.x * v * face };
+  }
+
+  /** Builds a 共構 station beside the street nearest p (see planHubStation). */
+  buildHubStation(p: Vec2, style: HubStyle): { ok: boolean; cost: number; reason?: string; stop?: number } {
+    const plan = this.planHubStation(p, style);
+    if (plan.reason || !plan.centre || !plan.d || !plan.face) return { ok: false, cost: plan.cost, reason: plan.reason };
+    const { centre, d, face } = plan;
+    const hub = HUBS[style];
+    const pt = (u: number, v: number) => this.hubPoint({ p: centre, d, h: 0 }, face, u, v);
+    const lines: [RailKind, number, number, number][] = [
+      ['train', 0, hub.train, TUNNEL_DEPTH],
+      ['metro', hub.metro.v, hub.metro.half, TUNNEL_DEPTH],
+    ];
+    if (hub.hsr) lines.push(['hsr', hub.hsr.v, hub.hsr.half, 0]);
+    let trainStop: number | undefined;
+    for (const [kind, v, half, h] of lines) {
+      const sys = this.rails[kind];
+      sys.net.addRoad({ kind: 'free', p: pt(-half, v) }, null, { kind: 'free', p: pt(half, v) }, h);
+      const stop = sys.transit.stopAt(pt(0, v), 4);
+      if (!stop) continue;
+      stop.style = style;
+      stop.face = face;
+      if (kind === 'train') trainStop = stop.id;
+    }
+    if (hub.road) {
+      this.net.addRoad({ kind: 'free', p: pt(hub.road.u0, hub.road.v) }, null, { kind: 'free', p: pt(hub.road.u1, hub.road.v) }, ELEVATED_HEIGHT, false, { lanes: 2 });
+      this.roadsChanged();
+    }
+    this.spend(plan.cost);
+    for (const [kind] of lines) this.railChanged(kind);
+    return { ok: true, cost: plan.cost, stop: trainStop };
+  }
+
+  /** The metro or high-speed stop that belongs to the 共構 station whose train stop is `stop`. */
+  hubPartner(kind: RailKind, stop: BusStop): BusStop | null {
+    if (!isShared(stop.style)) return null;
+    let best: BusStop | null = null;
+    let bd = 60;
+    for (const st of this.rails[kind].transit.stops.values()) {
+      if (st.style !== stop.style || st === stop) continue;
+      const dd = dist(st.p, stop.p);
+      if (dd < bd) {
+        bd = dd;
+        best = st;
+      }
+    }
+    return best;
+  }
+
   /** Takes down a train station built on its own, unless a line still stops there. Its track stays. */
   private bulldozeTrainStation(p: Vec2): { ok: boolean; refund: number; reason?: string; what?: string } | null {
-    const sys = this.rails.train;
     for (const st of this.stationSpots()) {
       if (st.kind !== 'train' || !st.stop.style || !stationCovers('train', st.pose, st.side, p, 0, st.style)) continue;
-      const line = [...sys.transit.lines.values()].find((l) => l.stops.includes(st.stop.id));
-      if (line) return { ok: false, refund: 0, reason: `「${line.name}」還停靠這個車站，請先拆除路線` };
-      sys.transit.stops.delete(st.stop.id);
-      sys.transit.version++;
-      const refund = Math.round(sys.spec.mode.stopCost * BULLDOZE_REFUND);
+      // A 共構 station comes down whole: its metro and high-speed stops with it
+      const parts: [RailKind, BusStop][] = [['train', st.stop]];
+      for (const kind of ['metro', 'hsr'] as const) {
+        const other = this.hubPartner(kind, st.stop);
+        if (other) parts.push([kind, other]);
+      }
+      for (const [kind, stop] of parts) {
+        const line = [...this.rails[kind].transit.lines.values()].find((l) => l.stops.includes(stop.id));
+        if (line) return { ok: false, refund: 0, reason: `「${line.name}」還停靠這個車站，請先拆除路線` };
+      }
+      let refund = 0;
+      for (const [kind, stop] of parts) {
+        const t = this.rails[kind].transit;
+        t.stops.delete(stop.id);
+        t.version++;
+        refund += Math.round(t.mode.stopCost * BULLDOZE_REFUND);
+      }
       this.spend(-refund);
-      this.railChanged('train');
-      return { ok: true, refund, what: st.stop.style === 'standard' ? '火車站' : '特色車站' };
+      for (const [kind] of parts) this.railChanged(kind);
+      const what = isHub(st.stop.style) ? HUB_LABEL[st.stop.style] : st.stop.style === 'standard' ? '火車站' : st.stop.style === 'kaohsiung' ? '高雄車站' : '特色車站';
+      return { ok: true, refund, what };
     }
     return null;
   }

@@ -155,6 +155,8 @@ export class World {
   private buildingsAt = 0;
   private buildingsZoning = -1;
   private showEmpty = false;
+  /** street lights' pools of light, shown only after dark */
+  private lampPools: THREE.Mesh | null = null;
   private readonly materials = {
     sidewalk: new THREE.MeshLambertMaterial({ color: 0xc4c7c2, side: THREE.DoubleSide }),
     asphalt: roughAsphalt(new THREE.MeshLambertMaterial({ color: 0x4a4d52, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 })),
@@ -163,6 +165,11 @@ export class World {
     preview: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }),
     concrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
     barrier: new THREE.MeshLambertMaterial({ color: 0x9db8a8, side: THREE.DoubleSide, flatShading: true }),
+    lampPost: new THREE.MeshLambertMaterial({ color: 0x8a9096, side: THREE.DoubleSide, flatShading: true }),
+    /** street light heads: pale by day, glowing warm at night */
+    lampHead: new THREE.MeshLambertMaterial({ color: 0xdfe3e6, side: THREE.DoubleSide, flatShading: true }),
+    /** their light on the road, added over the asphalt at night */
+    lampPool: new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -4 }),
     /** viaducts of track, kept solid when the streets fade */
     railConcrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
     tunnel: new THREE.MeshBasicMaterial({ color: 0x1c1f24, side: THREE.DoubleSide }),
@@ -775,7 +782,13 @@ export class World {
       const barriers = new THREE.Mesh(g.barriers, this.materials.barrier);
       barriers.castShadow = true;
       barriers.receiveShadow = true;
-      this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings), concrete, mouths, barriers);
+      const posts = new THREE.Mesh(g.lampPosts, this.materials.lampPost);
+      posts.castShadow = true;
+      const pools = new THREE.Mesh(g.lampPools, this.materials.lampPool);
+      pools.renderOrder = 3;
+      this.lampPools = pools;
+      pools.visible = this.sky.night.value > 0.02;
+      this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings), concrete, mouths, barriers, posts, new THREE.Mesh(g.lampHeads, this.materials.lampHead), pools);
       this.updateTrees(city);
     }
     for (const k of RAIL_KINDS) this.syncRail(city, k, painting);
@@ -907,6 +920,10 @@ export class World {
     // Unlit road paint dims with the light; street lights warm the asphalt at night
     this.materials.markings.color.setScalar(this.sky.light);
     this.materials.asphalt.emissive.setHex(0x3a2a12).multiplyScalar(this.sky.night.value);
+    const night = this.sky.night.value;
+    this.materials.lampHead.emissive.setHex(0xfff1cf).multiplyScalar(night);
+    this.materials.lampPool.color.setHex(0xffd9a0).multiplyScalar(night * 0.16);
+    if (this.lampPools) this.lampPools.visible = night > 0.02;
   }
 
   render(): void {

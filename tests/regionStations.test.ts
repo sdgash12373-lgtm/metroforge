@@ -56,12 +56,19 @@ describe('train stations built before their track', () => {
     const r = city.buildTrainStation(tap, true);
     expect(r.ok).toBe(true);
     expect(r.style).toBe('kaohsiung');
-    const spot = city.stationSpots()[0];
+    const spot = city.stationSpots().find((st) => st.kind === 'train')!;
     expect(spot.style).toBe('kaohsiung');
     const p = spot.pose.p;
     const d = spot.pose.d;
     expect(heightAt(city, p)).toBe(TUNNEL_DEPTH);
     expect(heightAt(city, { x: p.x + d.x * 96, y: p.y + d.y * 96 })).toBeGreaterThan(TUNNEL_DEPTH / 4);
+    // 三鐵共構: metro and high-speed stations come with it, in tunnels
+    for (const kind of ['metro', 'hsr'] as const) {
+      const other = city.stationSpots().find((st) => st.kind === kind);
+      expect(other?.style).toBe('kaohsiung');
+      expect(other!.pose.h).toBe(TUNNEL_DEPTH);
+      expect(city.hubPartner(kind, spot.stop)).toBe(other!.stop);
+    }
     const again = city.buildTrainStation({ x: tap.x + 200, y: tap.y }, true);
     expect(again.ok).toBe(false);
     expect(again.reason).toContain('每區限蓋一座');
@@ -83,4 +90,33 @@ describe('train stations built before their track', () => {
     expect(r.ok).toBe(true);
     expect(city.rails.train.transit.stops.size).toBe(0);
   });
+});
+
+describe('共構 stations', () => {
+  for (const style of ['twin', 'triple'] as const) {
+    it(`${style}: train and metro underground${style === 'triple' ? ', high-speed at street level and an elevated road' : ''}, all taken down together`, () => {
+      const { city, tap } = cityWithStreet('kaohsiung');
+      const roads = city.net.segments.size;
+      const r = city.buildHubStation(tap, style);
+      expect(r.reason).toBeUndefined();
+      expect(r.ok).toBe(true);
+      const train = city.stationSpots().find((st) => st.kind === 'train')!;
+      expect(train.style).toBe(style);
+      expect(train.pose.h).toBe(TUNNEL_DEPTH);
+      const metro = city.hubPartner('metro', train.stop)!;
+      expect(metro).toBeTruthy();
+      expect(city.stationSpots().find((st) => st.stop === metro)!.pose.h).toBe(TUNNEL_DEPTH);
+      const hsr = city.hubPartner('hsr', train.stop);
+      if (style === 'triple') {
+        expect(city.stationSpots().find((st) => st.stop === hsr)!.pose.h).toBe(0);
+        expect(city.net.segments.size).toBeGreaterThan(roads);
+      } else expect(hsr).toBeNull();
+      // Saved and loaded, then demolished as one
+      const loaded = City.deserialize(JSON.parse(JSON.stringify(city.serialize())));
+      expect(loaded.hubPartner('metro', [...loaded.rails.train.transit.stops.values()][0])).toBeTruthy();
+      expect(city.bulldoze(train.pose.p, 4).ok).toBe(true);
+      expect(city.rails.metro.transit.stops.size).toBe(0);
+      expect(city.rails.hsr.transit.stops.size).toBe(0);
+    });
+  }
 });

@@ -155,7 +155,12 @@ export interface BusStop {
   face?: 1 | -1;
 }
 
-export type StationStyle = 'standard' | RegionName;
+/** 'twin' and 'triple' are 共構 stations: one building over train and metro (and high-speed) together. */
+export type StationStyle = 'standard' | RegionName | HubStyle;
+export type HubStyle = 'twin' | 'triple';
+export const isHub = (style?: StationStyle): style is HubStyle => style === 'twin' || style === 'triple';
+/** Stations whose metro and high-speed stops belong to the train station: 共構 ones, and Kaohsiung's (三鐵共構, all underground). */
+export const isShared = (style?: StationStyle): boolean => isHub(style) || style === 'kaohsiung';
 
 /** A piece of a line's route: one lane, from and to travel distances along it. */
 export interface PathPiece {

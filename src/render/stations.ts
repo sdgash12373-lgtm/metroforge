@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { closestOnSamples, quadPoint } from '../sim/geometry';
 import type { RailSystem } from '../sim/rail';
-import { KAOHSIUNG_STATION, PINGTUNG_STATION, stationPose, stationSide } from '../sim/stations';
+import { HUBS, KAOHSIUNG_STATION, PINGTUNG_STATION, stationPose, stationSide } from '../sim/stations';
+import { isShared } from '../sim/transit';
 import { type RoadNetwork, asphaltWidth, roadWidth } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { Builder } from './roadMesh';
@@ -351,7 +352,8 @@ export class StationLayer {
       const color = colorOf.get(stop.id) ?? 0x9aa5b1;
       if (sys.kind === 'metro') {
         metroStation(f, h, color);
-        if (h < 0) {
+        // A 共構 station's own building is the way down; no entrances of its own
+        if (h < 0 && !isShared(stop.style)) {
           const taken: { x: number; y: number }[] = [];
           for (const end of [-1, 1]) {
             const want = { x: p.x + d.x * end * 15 - d.y * end * 11, y: p.y + d.y * end * 15 + d.x * end * 11 };
@@ -369,8 +371,11 @@ export class StationLayer {
           // A region's own station where the player built one; every other station in the standard style
           if (stop.style === 'kaohsiung') kaohsiungStation(g, h, color);
           else if (stop.style === 'pingtung') pingtungStation(g, h, color);
+          else if (stop.style === 'twin') twinStation(g, h, color);
+          else if (stop.style === 'triple') tripleStation(g, h, color);
           else trainStation(g, h, color);
-        } else hsrStation(g, h, color);
+        } else if (isShared(stop.style)) hsrPlatforms(g, h, color);
+        else hsrStation(g, h, color);
       }
     }
     this.body.geometry.dispose();
@@ -881,6 +886,170 @@ function pingtungAtGrade(f: Frame, h: number, color: number): void {
   }
   footbridge(f, h, STEEL_WHITE);
   trench(f, h);
+}
+
+/** High-speed platforms under their long roof, without a concourse: the 三鐵 station's hall serves them. */
+function hsrPlatforms(f: Frame, h: number, color: number): void {
+  platforms(f, h, 124);
+  if (h < 0) {
+    // In a tunnel (Kaohsiung's): walls down the sides, the line's colour along them
+    for (const side of [-1, 1]) {
+      f.box(0, side * 11.8, 128, 0.6, h - 0.4, h + 6.4, CONCRETE);
+      f.box(0, side * 11.4, 128, 0.1, h + 3.4, h + 4.1, color);
+    }
+    return;
+  }
+  for (let u = -54; u <= 54; u += 18) for (const side of [-1, 1]) f.box(u, side * 10, 0.6, 0.6, h + 1.1, h + 9, 0x8a9096);
+  f.box(0, 0, 130, 22, h + 9, h + 9.6, 0xeef0f2);
+  for (const side of [-1, 1]) f.box(0, side * 5.6, 120, 0.4, h + 8.8, h + 9, LAMP);
+  for (const side of [-1, 1]) f.box(0, side * 11, 130, 0.5, h + 8.4, h + 9.8, color);
+  // Covered bridge from the platforms over to the hall in front
+  f.box(0, 17.5, 8, 13, h + 6, h + 9, GLASS);
+  f.box(0, 17.5, 8.6, 13.4, h + 9, h + 9.5, 0xeef0f2);
+}
+
+const PORTAL = 0xe2ddd1;
+const SOFFIT = 0xeceae4;
+const GARAGE = 0xbfc1bf;
+
+/**
+ * 雙鐵共構站, after 科工館車站: over the stairs down to both lines, a great white roof that sweeps up from the back
+ * to a high, straight front edge far out over the entrance. Under it a stone portal with the station's name in
+ * TR blue, broad steps up to a granite podium, a sloping glass wall down one side on white branching columns and
+ * leaning white columns down the other, a concrete lift tower behind and a ramp along the side.
+ */
+function twinStation(f: Frame, h: number, color: number): void {
+  platforms(f, h, 84);
+  trench(f, h);
+  const [u0, u1, v0, v1] = HUBS.twin.rects[0];
+  f.box((u0 + u1) / 2, (v0 + v1) / 2, u1 - u0, v1 - v0, -0.02, 0.05, PAVING);
+  // Granite podium the hall stands on, the escalator wells down to both lines, and the steps up at the front
+  f.box(0, 2, 40, 20, 0, 1.5, GRANITE);
+  f.box(0, 2, 39.6, 19.6, 1.5, 1.55, GRANITE_LIGHT);
+  for (const eu of [-7, 7]) f.box(eu, 1, 9, 6, 1.5, 1.58, 0x2b2f33);
+  for (let k = 0; k < 6; k++) f.box(0, 12.4 + k * 0.85, 26, 0.85, 0, 1.5 - k * 0.25, GRANITE_LIGHT);
+  for (const su of [-13.6, 13.6]) f.box(su, 14.5, 1.2, 4.6, 0, 1.6, GRANITE);
+  for (const su of [-6, 0, 6]) {
+    f.box(su, 14.6, 0.12, 4.4, 1.2, 2.2, 0xc9ccd0);
+  }
+  // The roof: high and straight at the front, sweeping down to the back
+  const roof = (_u: number, v: number) => 4.8 + 8.4 * ((v + 12) / 28) ** 2;
+  f.sheet(-24, 24, -12, 16, 12, 14, roof, () => STEEL_WHITE);
+  f.sheet(-24, 24, -12, 16, 12, 14, (u, v) => roof(u, v) - 0.7, () => SOFFIT);
+  for (const e of [-24, 24]) f.wall(e, -12, e, 16, (u, v) => roof(u, v) - 0.7, roof, STEEL_WHITE);
+  f.wall(-24, 16, 24, 16, (u, v) => roof(u, v) - 0.7, roof, STEEL_WHITE);
+  f.wall(-24, -12, 24, -12, (u, v) => roof(u, v) - 0.7, roof, STEEL_WHITE);
+  for (let u = -18; u <= 18; u += 6) for (let v = -6; v <= 12; v += 6) f.pool(u, v, 1.55, 2.4, 0.6);
+  // Stone portal at the front: two piers and the lintel carrying the name
+  const under = roof(0, 12) - 0.7;
+  for (const pu of [-15.5, 15.5]) f.box(pu, 12, 3, 2, 1.5, under, PORTAL);
+  f.box(0, 12, 34, 2, 6.8, under, PORTAL);
+  f.box(-10.5, 13.06, 2.4, 0.1, 7.2, 9, TR_BLUE);
+  f.box(-10.5, 13.12, 1.6, 0.05, 7.95, 8.25, PORTAL);
+  for (let k = 0; k < 5; k++) f.box(-7.2 + k * 2.1, 13.06, 1.6, 0.1, 8.1, 9.1, TR_BLUE);
+  f.box(1.5, 13.06, 22, 0.1, 7.2, 7.75, TR_BLUE);
+  // Glass back wall into the hall, lit from inside
+  f.box(0, -7.6, 36, 0.2, 1.5, roof(0, -7.6) - 0.7, GLASS);
+  // Left: a sloping glass wall held out on white branching columns
+  for (let v = -8; v <= 10; v += 3) {
+    const top = roof(-23, v) - 0.7;
+    f.beam(-19.5, v, 1.5, -23, v, top, 0.45, STEEL_WHITE);
+    f.beam(-21.2, v, (1.5 + top) / 2, -22, v + 1.2, top - 0.6, 0.18, STEEL_WHITE);
+    f.beam(-21.2, v, (1.5 + top) / 2, -22, v - 1.2, top - 0.6, 0.18, STEEL_WHITE);
+  }
+  f.sheet(-23.4, -20, -9, 11, 1, 10, (u, v) => 1.5 + ((u + 20) / -3.4) * (roof(-23, v) - 2.4), () => GLASS);
+  // Right: open, under pairs of white columns leaning out like a V
+  for (let v = -6; v <= 10; v += 4) {
+    const top = roof(22.5, v) - 0.7;
+    f.beam(19, v, 1.5, 22.5, v - 1.6, top, 0.5, STEEL_WHITE);
+    f.beam(19, v, 1.5, 22.5, v + 1.6, top, 0.5, STEEL_WHITE);
+  }
+  f.sheet(20.5, 23.4, -9, 11, 1, 10, (u, v) => roof(22.5, v) - 0.8 - ((23.4 - u) / 2.9) * 2.4, () => GLASS);
+  // Concrete lift and vent tower behind, with its windows, and the ramp along the side with its rails
+  f.box(-27, -17, 10, 14, 0, 9.5, 0xc4c5c1);
+  f.box(-27, -9.95, 6, 0.1, 5, 8.6, WINDOW);
+  f.box(-27, -9.95, 2.2, 0.1, 0, 3, GLASS);
+  f.sheet(-31.6, -28, -9, 17, 1, 8, (_u, v) => Math.max(0, 1.5 * (1 - (v + 9) / 26)), () => GRANITE_LIGHT);
+  for (const ru of [-31.6, -28]) f.box(ru, 4, 0.12, 26, 0.6, 1.6, 0x9a9da0);
+  // Bikes parked by the lift tower
+  for (let k = 0; k < 6; k++) f.box(-32.5, 2 + k * 1.2, 1.6, 0.25, 0, 1, k % 2 ? 0xd94b3d : 0xe9e7e2);
+  // A line-coloured band along the podium's edge, lamps along the front
+  f.box(0, 12.05, 30, 0.1, 1.5, 1.75, color);
+  forecourt(f, v1 - 1, 0, -28, 28);
+}
+
+/**
+ * 三鐵共構站, after 新左營車站: a long hall of dark glass under a broad grey roof that bows gently, long skylights
+ * ribbing its back half and white fascias all round, a lower block at the front corner, the name in TR blue across
+ * the front. Beside it the car park, open decks on concrete with cars on the roof, which the elevated road runs
+ * into; behind it the high-speed platforms, and the trains and metro below.
+ */
+function tripleStation(f: Frame, h: number, color: number): void {
+  platforms(f, h, 84);
+  trench(f, h);
+  const [hall, park] = HUBS.triple.rects;
+  const [a0, a1, b0, b1] = hall;
+  f.box((a0 + a1) / 2, (b0 + b1) / 2, a1 - a0, b1 - b0, -0.02, 0.05, PAVING);
+  // The hall: dark glass, two white floor bands, a lower block in the front corner
+  const hu0 = -56;
+  const hu1 = 44;
+  const hv0 = -20;
+  const hv1 = 26;
+  const top = 15;
+  f.box((hu0 + hu1) / 2, (hv0 + hv1) / 2, hu1 - hu0, hv1 - hv0, 0, top, 0x46596a);
+  for (const y of [5.2, 10.4]) f.box((hu0 + hu1) / 2, (hv0 + hv1) / 2, hu1 - hu0 + 0.3, hv1 - hv0 + 0.3, y, y + 0.7, 0xdfe2e2);
+  f.box((hu0 + hu1) / 2, hv1 + 0.05, hu1 - hu0 - 6, 0.1, 0.3, 5, GLASS);
+  f.box(-36, 22, 32, 14, 0, 9, 0xd9dcdc);
+  f.box(-36, 29.05, 30, 0.1, 0.4, 4.4, GLASS);
+  f.box(-36, 22, 32.6, 14.6, 9, 9.6, STEEL_WHITE);
+  // The name across the front in blue
+  for (let k = 0; k < 4; k++) f.box(-8 + k * 3, hv1 + 0.12, 2.4, 0.1, 6.4, 8.8, TR_BLUE);
+  f.box(4, hv1 + 0.12, 26, 0.1, 6.1, 6.3, TR_BLUE);
+  // The roof: bowing across the hall, overhanging it, skylights ribbing the back half, white fascia round it
+  const ru0 = hu0 - 2;
+  const ru1 = hu1 + 2;
+  const rv0 = hv0 - 2;
+  const rv1 = hv1 + 3;
+  const roof = (u: number, v: number) => top + 0.6 + 2.6 * Math.sin((Math.PI * (v - rv0)) / (rv1 - rv0)) - 0.6 * smooth(-58, -40, -u);
+  const nu = 52;
+  const nv = 16;
+  f.sheet(ru0, ru1, rv0, rv1, nu, nv, roof, (i, j) => {
+    const u = ru0 + ((ru1 - ru0) * (i + 0.5)) / nu;
+    const v = rv0 + ((rv1 - rv0) * (j + 0.5)) / nv;
+    if (i === 0 || j === 0 || i === nu - 1 || j === nv - 1) return STEEL_WHITE;
+    return u > -14 && u < 40 && v > -14 && v < 18 && i % 3 === 0 ? SKYLIGHT : 0xa7aeb2;
+  });
+  for (const [x0, y0, x1, y1] of [[ru0, rv0, ru1, rv0], [ru0, rv1, ru1, rv1], [ru0, rv0, ru0, rv1], [ru1, rv0, ru1, rv1]]) {
+    f.wall(x0, y0, x1, y1, (u, v) => roof(u, v) - 1.2, roof, STEEL_WHITE);
+  }
+  for (let u = hu0 + 6; u < hu1; u += 12) f.box(u, rv1 - 1.4, 0.6, 0.6, 0, roof(u, rv1 - 1.4) - 1, STEEL_WHITE);
+  // The car park: open decks between concrete bands, cars parked on its roof, stair towers and a spiral ramp
+  const [p0, p1, q0, q1] = park;
+  const pu = (p0 + p1) / 2;
+  const pv = (q0 + q1) / 2;
+  const deck = 8;
+  f.box(pu, pv, p1 - p0 - 1, q1 - q0 - 1, 0, deck, 0x3d4247);
+  for (const y of [0, 3.8, deck - 0.4]) {
+    f.box(pu, pv, p1 - p0, q1 - q0, y, y + 0.4, GARAGE);
+    if (y > 0) f.box(pu, pv, p1 - p0 + 0.2, q1 - q0 + 0.2, y + 0.4, y + 1.4, 0xd3d5d3);
+  }
+  for (let u = p0 + 4; u < p1; u += 8) for (const v of [q0 + 0.6, q1 - 0.6]) f.box(u, v, 0.6, 0.6, 0, deck, GARAGE);
+  const cars = [0xe9e9e6, 0x2a2d31, 0x9aa2a8, 0xb33a32, 0x31527a, 0xd8d2c4];
+  for (let row = 0; row < 4; row++) {
+    const v = q0 + 5 + row * 12.5;
+    for (const dv of [-2.4, 2.4]) {
+      for (let u = p0 + 5; u < p1 - 6; u += 2.6) {
+        const k = Math.abs(Math.round(u * 7 + v * 13 + dv * 5)) % 9;
+        if (k < cars.length) f.box(u, v + dv, 1.8, 4.2, deck, deck + 1.3, cars[k]);
+      }
+    }
+  }
+  for (const [tu, tv] of [[p0 + 3, q0 + 3], [p1 - 3, q0 + 3], [p0 + 3, q1 - 3]]) f.box(tu, tv, 5, 5, 0, deck + 3.4, 0xd7d9d7);
+  f.prism(p1 - 6, q1 - 6, 6, 0, deck, GARAGE, 16);
+  // Plaza and lamps out front, lamps on the car park roof
+  forecourt(f, b1 - 2, 0, -50, 40);
+  for (let u = p0 + 8; u < p1; u += 14) f.lamp(u, pv, deck, 5, 8);
+  f.box((hu0 + hu1) / 2, hv1 + 0.2, hu1 - hu0, 0.2, 14.4, 15, color);
 }
 
 function hsrStation(f: Frame, h: number, color: number): void {
