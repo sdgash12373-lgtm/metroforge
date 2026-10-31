@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { City, freewayTown } from '../src/sim/city';
 import { ELEVATED_HEIGHT, TUNNEL_DEPTH } from '../src/sim/roads';
 import { KAOHSIUNG } from '../src/sim/terrain';
+import { HUBS, stationCovers } from '../src/sim/stations';
 
 const free = (x: number, y: number) => ({ kind: 'free' as const, p: { x, y } });
 
@@ -117,6 +118,27 @@ describe('共構 stations', () => {
       expect(city.bulldoze(train.pose.p, 4).ok).toBe(true);
       expect(city.rails.metro.transit.stops.size).toBe(0);
       expect(city.rails.hsr.transit.stops.size).toBe(0);
+    });
+  }
+});
+
+describe('三鐵共構 on either side of the street', () => {
+  for (const side of [-1, 1]) {
+    it(`keeps its elevated road at the car park, built on the ${side < 0 ? 'north' : 'south'} side`, () => {
+      const { city, tap, y } = cityWithStreet('kaohsiung');
+      const at = side < 0 ? tap : { x: tap.x, y: y + 20 };
+      expect(city.buildHubStation(at, 'triple').ok).toBe(true);
+      const spot = city.stationSpots().find((st) => st.kind === 'train')!;
+      const road = HUBS.triple.road!;
+      // The road's inner end is at the car park's edge, which the station covers
+      const inner = city.hubPoint(spot.pose, spot.side, road.u0, road.v);
+      expect(city.net.segmentAt(inner, 3, ELEVATED_HEIGHT)).toBeTruthy();
+      expect(stationCovers('train', spot.pose, spot.side, city.hubPoint(spot.pose, spot.side, road.u0 - 4, road.v), 0, 'triple')).toBe(true);
+      // Its high-speed platforms turn with it, behind the hall
+      const hsr = city.stationSpots().find((st) => st.kind === 'hsr')!;
+      expect(hsr.pose.d.x * spot.pose.d.x + hsr.pose.d.y * spot.pose.d.y).toBeGreaterThan(0.99);
+      const behind = city.hubPoint(spot.pose, spot.side, 0, HUBS.triple.hsr!.v);
+      expect(Math.hypot(hsr.pose.p.x - behind.x, hsr.pose.p.y - behind.y)).toBeLessThan(1);
     });
   }
 });

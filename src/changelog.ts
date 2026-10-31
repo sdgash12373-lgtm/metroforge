@@ -8,6 +8,12 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '3.13.1',
+    date: '2026-10-31',
+    title: '三鐵共構修正',
+    notes: ['三鐵共構站蓋在道路另一側時，高架道路會正確接在停車場旁，不再跑到車站另一頭'],
+  },
+  {
     version: '3.13.0',
     date: '2026-10-31',
     title: '共構車站與路燈',

@@ -1343,7 +1343,8 @@ export class City {
       for (const [kind, v, half] of this.kaohsiungLines()) {
         const pt = (u: number) => this.hubPoint({ p: centre, d, h: 0 }, face, u, v);
         const t = this.rails[kind];
-        t.net.addRoad({ kind: 'free', p: pt(-half) }, null, { kind: 'free', p: pt(half) }, TUNNEL_DEPTH);
+        const [a, b] = face > 0 ? [pt(-half), pt(half)] : [pt(half), pt(-half)];
+        t.net.addRoad({ kind: 'free', p: a }, null, { kind: 'free', p: b }, TUNNEL_DEPTH);
         const other = t.transit.stopAt(pt(0), 4);
         if (other) {
           other.style = style;
@@ -1450,10 +1451,13 @@ export class City {
     ];
   }
 
-  /** The world point at (u, v) in a station's frame, with its building on side `face`. */
+  /**
+   * The world point at (u, v) in a station's frame, with its building on side `face`. A station on the -1 side is
+   * the whole station turned round, so u flips with v (as in stationCovers and the renderer).
+   */
   hubPoint(pose: StationPose, face: number, u: number, v: number): Vec2 {
     const { p, d } = pose;
-    return { x: p.x + d.x * u - d.y * v * face, y: p.y + d.y * u + d.x * v * face };
+    return { x: p.x + (d.x * u - d.y * v) * face, y: p.y + (d.y * u + d.x * v) * face };
   }
 
   /** Builds a 共構 station beside the street nearest p (see planHubStation). */
@@ -1471,7 +1475,9 @@ export class City {
     let trainStop: number | undefined;
     for (const [kind, v, half, h] of lines) {
       const sys = this.rails[kind];
-      sys.net.addRoad({ kind: 'free', p: pt(-half, v) }, null, { kind: 'free', p: pt(half, v) }, h);
+      // Laid in the street's direction, so every stop's frame turns the same way as the train's
+      const [a, b] = face > 0 ? [pt(-half, v), pt(half, v)] : [pt(half, v), pt(-half, v)];
+      sys.net.addRoad({ kind: 'free', p: a }, null, { kind: 'free', p: b }, h);
       const stop = sys.transit.stopAt(pt(0, v), 4);
       if (!stop) continue;
       stop.style = style;
