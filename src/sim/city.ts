@@ -1485,7 +1485,7 @@ export class City {
       if (kind === 'train') trainStop = stop.id;
     }
     if (hub.road) {
-      this.net.addRoad({ kind: 'free', p: pt(hub.road.u0, hub.road.v) }, null, { kind: 'free', p: pt(hub.road.u1, hub.road.v) }, ELEVATED_HEIGHT, false, { lanes: 2 });
+      this.net.addRoad({ kind: 'free', p: pt(hub.road.u0, hub.road.v) }, null, { kind: 'free', p: pt(hub.road.u1, hub.road.v) }, ELEVATED_HEIGHT, false, { highway: true, built: true, lanes: 2 });
       this.roadsChanged();
     }
     this.spend(plan.cost);
@@ -2940,6 +2940,15 @@ export class City {
       else {
         const access = city.airportAccess(a);
         if (access) city.layAccess(access);
+      }
+    }
+    // 三鐵共構 stations from v3.13 got a street for their elevated road: it is a freeway, so freeways can join it
+    for (const st of city.stationSpots()) {
+      const road = st.kind === 'train' && st.style === 'triple' ? HUBS.triple.road : undefined;
+      if (!road) continue;
+      for (const u of [road.u0 + 2, (road.u0 + road.u1) / 2, road.u1 - 2]) {
+        const hit = city.net.segmentAt(city.hubPoint(st.pose, st.side, u, road.v), 3, ELEVATED_HEIGHT);
+        if (hit && !hit.seg.highway && Math.abs(city.net.heightAt(hit.seg, hit.t) - ELEVATED_HEIGHT) < 0.5) Object.assign(hit.seg, { highway: true, built: true, lanes: 2 });
       }
     }
     city.holdLand = false;

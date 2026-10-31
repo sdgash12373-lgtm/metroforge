@@ -132,7 +132,19 @@ describe('三鐵共構 on either side of the street', () => {
       const road = HUBS.triple.road!;
       // The road's inner end is at the car park's edge, which the station covers
       const inner = city.hubPoint(spot.pose, spot.side, road.u0, road.v);
-      expect(city.net.segmentAt(inner, 3, ELEVATED_HEIGHT)).toBeTruthy();
+      const stub = city.net.segmentAt(inner, 3, ELEVATED_HEIGHT)!;
+      expect(stub.seg.highway).toBe(true);
+      // A freeway drawn on from its end joins it
+      const outer = city.hubPoint(spot.pose, spot.side, road.u1, road.v);
+      const further = city.hubPoint(spot.pose, spot.side, road.u1 + 120, road.v);
+      const snap = city.net.snapLevel(outer, 3, ELEVATED_HEIGHT);
+      const built = city.buildRoad(snap, null, { kind: 'free', p: further }, true, ELEVATED_HEIGHT, 'highway');
+      expect(built.reason).toBeUndefined();
+      expect(built.ok).toBe(true);
+      // Saves from before it was a freeway load with it as one
+      Object.assign(city.net.segmentAt(inner, 3, ELEVATED_HEIGHT)!.seg, { highway: undefined, built: undefined });
+      const old = City.deserialize(JSON.parse(JSON.stringify(city.serialize())));
+      expect(old.net.segmentAt(inner, 3, ELEVATED_HEIGHT)!.seg.highway).toBe(true);
       expect(stationCovers('train', spot.pose, spot.side, city.hubPoint(spot.pose, spot.side, road.u0 - 4, road.v), 0, 'triple')).toBe(true);
       // Its high-speed platforms turn with it, behind the hall
       const hsr = city.stationSpots().find((st) => st.kind === 'hsr')!;
