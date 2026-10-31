@@ -1,10 +1,9 @@
 import * as THREE from 'three';
-import { closestOnSamples, quadPoint } from '../sim/geometry';
 import type { RailSystem } from '../sim/rail';
 import { HUBS, KAOHSIUNG_STATION, PINGTUNG_STATION, stationPose, stationSide } from '../sim/stations';
 import { isShared } from '../sim/transit';
-import { type RoadNetwork, asphaltWidth, roadWidth } from '../sim/roads';
-import { Zone } from '../sim/zoning';
+import type { MetroExit } from '../sim/city';
+import type { RoadNetwork } from '../sim/roads';
 import { Builder } from './roadMesh';
 
 const GLASS = 0x9ec9dc;
@@ -151,6 +150,26 @@ class Frame {
       this.b.quad(this.at(au, av, y1), this.at(au, av, y0), this.at(bu, bv, y1), this.at(bu, bv, y0));
       this.b.quad(this.at(u, v, y1), this.at(u, v, y1), this.at(au, av, y1), this.at(bu, bv, y1));
     }
+  }
+
+  /** Any four-cornered face, corners as [u, v, y] in strip order (a, b along one edge, c, d along the other). */
+  face(a: number[], b: number[], c: number[], d: number[], color: number): void {
+    this.paint(color);
+    this.b.quad(this.at(a[0], a[1], a[2]), this.at(b[0], b[1], b[2]), this.at(c[0], c[1], c[2]), this.at(d[0], d[1], d[2]));
+  }
+
+  /**
+   * A leaning post `len` along u and `t` thick across, its foot centred at (u, v0, y0) and its head at (u, v1, y1),
+   * so it slants across the frame.
+   */
+  lean(u: number, len: number, t: number, v0: number, y0: number, v1: number, y1: number, color: number): void {
+    const l = len / 2;
+    const w = t / 2;
+    const c = (su: number, sv: number, top: boolean) => [u + su * l, (top ? v1 : v0) + sv * w, top ? y1 : y0];
+    this.face(c(-1, -1, true), c(-1, -1, false), c(1, -1, true), c(1, -1, false), color);
+    this.face(c(1, 1, true), c(1, 1, false), c(-1, 1, true), c(-1, 1, false), color);
+    this.face(c(-1, 1, true), c(-1, 1, false), c(-1, -1, true), c(-1, -1, false), color);
+    this.face(c(1, -1, true), c(1, -1, false), c(1, 1, true), c(1, 1, false), color);
   }
 
   /** Cut the ground away over u0..u1, v0..v1, so what is built below street level there shows from above. */
@@ -335,7 +354,7 @@ export class StationLayer {
   }
 
   /** `streets` is the road network above, which underground metro entrances must stand beside, not on. */
-  rebuild(sys: RailSystem, streets: RoadNetwork): void {
+  rebuild(sys: RailSystem, streets: RoadNetwork, exits: MetroExit[] = []): void {
     const b = new Builder(0);
     const m = new Builder(0);
     const glow = new Builder(0);
@@ -351,16 +370,14 @@ export class StationLayer {
       const f = new Frame(out, p.x, p.y, d.x, d.y);
       const color = colorOf.get(stop.id) ?? 0x9aa5b1;
       if (sys.kind === 'metro') {
-        metroStation(f, h, color);
-        // A 共構 station's own building is the way down; no entrances of its own
-        if (h < 0 && !isShared(stop.style)) {
-          const taken: { x: number; y: number }[] = [];
-          for (const end of [-1, 1]) {
-            const want = { x: p.x + d.x * end * 15 - d.y * end * 11, y: p.y + d.y * end * 15 + d.x * end * 11 };
-            const spot = entranceSpot(streets, want, taken) ?? { x: want.x, y: want.y, dx: d.x, dy: d.y };
-            taken.push(spot);
-            metroEntrance(new Frame(out, spot.x, spot.y, spot.dx, spot.dy), h, color);
-          }
+        if (stop.look === 'canopy' && h > 0) canopyStation(f, h, color);
+        else metroStation(f, h, color);
+        // Entrances at street level, where the city placed them (a 共構 station's own building is its way down)
+        for (const e of exits) {
+          if (e.stop !== stop.id) continue;
+          // Frame u along the street, v away from it
+          const flip = e.dx * -e.ny + e.dy * e.nx < 0 ? 1 : -1;
+          metroEntrance(new Frame(out, e.x, e.y, e.dx * flip, e.dy * flip), h, color);
         }
       } else {
         // The station building stands on the side of the tracks facing the town, off the roads: turn the frame
@@ -387,72 +404,6 @@ export class StationLayer {
     this.pools.geometry.dispose();
     this.pools.geometry = pools.geometry();
   }
-}
-
-/** How far around its default spot an entrance looks for a street to stand beside. */
-const ENTRANCE_REACH = 70;
-
-/**
- * A spot for a metro entrance near `want`, facing along the nearest street: on a wide sidewalk, or at the front of
- * an empty, unzoned lot, and never on a road. Null when no street is near.
- */
-export function entranceSpot(
-  net: RoadNetwork,
-  want: { x: number; y: number },
-  taken: { x: number; y: number }[] = [],
-): { x: number; y: number; dx: number; dy: number } | null {
-  // Only streets near enough to matter, to keep this quick in big cities
-  const segs = [...net.segments.values()].filter((s) => net.isStreet(s) && closestOnSamples(s.samples, want).d < ENTRANCE_REACH + 30);
-  const clear = (x: number, y: number) =>
-    segs.every((s) => closestOnSamples(s.samples, { x, y }).d > asphaltWidth(s) / 2 + 1.8) &&
-    taken.every((o) => Math.hypot(o.x - x, o.y - y) > 12);
-  let best: { x: number; y: number; dx: number; dy: number } | null = null;
-  let bestCost = Infinity;
-  for (const seg of segs) {
-    if (closestOnSamples(seg.samples, want).d > ENTRANCE_REACH) continue;
-    const q = net.quad(seg);
-    for (const lot of seg.lots) {
-      if (lot.depth !== 1) continue;
-      const n = { x: -lot.dir.y * lot.side, y: lot.dir.x * lot.side };
-      // On the sidewalk where it is wide enough, else just inside an empty lot
-      // Blocked lots have a facility or track on them
-      const free = lot.zone === Zone.None && lot.level === 0 && !lot.blocked;
-      const inLot = { x: lot.x - n.x * 1.8, y: lot.y - n.y * 1.8 };
-      const options: { x: number; y: number; cost: number }[] = [];
-      if (seg.walk) {
-        const tq = closestOnSamples(seg.samples, lot).t;
-        const c = quadPoint(q, tq);
-        const off = asphaltWidth(seg) / 2 + 2;
-        options.push({ x: c.x + n.x * off, y: c.y + n.y * off, cost: 0 });
-      }
-      if (free) options.push({ ...inLot, cost: 4 });
-      for (const o of options) {
-        const cost = Math.hypot(o.x - want.x, o.y - want.y) + o.cost;
-        if (cost >= bestCost || !clear(o.x, o.y)) continue;
-        bestCost = cost;
-        best = { x: o.x, y: o.y, dx: lot.dir.x, dy: lot.dir.y };
-      }
-    }
-  }
-  // Nothing free nearby: the front of the nearest lot, still off the roads
-  if (!best) {
-    for (const seg of segs) {
-      if (closestOnSamples(seg.samples, want).d > ENTRANCE_REACH) continue;
-      for (const lot of seg.lots) {
-        if (lot.depth !== 1 || lot.blocked) continue;
-        const n = { x: -lot.dir.y * lot.side, y: lot.dir.x * lot.side };
-        // From the lot's middle back to just off the asphalt, over the sidewalk
-        const back = roadWidth(seg) / 2 + 4 - (asphaltWidth(seg) / 2 + 2.2);
-        const x = lot.x - n.x * back;
-        const y = lot.y - n.y * back;
-        const cost = Math.hypot(x - want.x, y - want.y);
-        if (cost >= bestCost || !clear(x, y)) continue;
-        bestCost = cost;
-        best = { x, y, dx: lot.dir.x, dy: lot.dir.y };
-      }
-    }
-  }
-  return best;
 }
 
 /** Side platforms on both sides of the double track, lamps down their outer edge. */
@@ -498,34 +449,167 @@ function metroStation(f: Frame, h: number, color: number): void {
   }
 }
 
+const KMRT_BLUE = 0x1f5fae;
+const STEEL = 0xc8ccd0;
+const SHRUB = 0x4f7f3a;
+
 /**
- * A Kaohsiung MRT entrance beside a street: a glass roof that rises to a ridge like hands pressed together, on a
- * white steel frame, open at the front to the stairs, with the orange MRT sign on a white post. Frame u runs along
- * the street.
+ * An underground station's entrance at street level, after Kaohsiung MRT's: a granite plinth three cells long
+ * with steps up at the front, a glass hall over the stairs down with the station's white name board, and a white
+ * shell roof that stands tall over the steps on two splayed legs and sweeps down to the plinth at the back. The
+ * blue exit column stands by the steps. Frame u runs along the street (steps at +u), v away from it.
  */
 function metroEntrance(f: Frame, h: number, color: number): void {
-  const len = 5.6;
-  const half = 1.8;
-  const ridge = 4.2;
-  f.box(0, 0, len + 0.6, half * 2 + 0.6, 0, 0.18, GRANITE);
-  // Stairs going down, seen through the glass
-  f.box(0.4, 0, len - 1.4, half * 2 - 0.8, 0.18, 0.22, 0x3a3f45);
-  // Glass sides leaning in to the ridge, and the back closed
-  for (const side of [-1, 1]) f.panel(0, len, side * half, 0.18, 0, ridge, KMRT_GLASS);
-  f.triangle(-len / 2, -half, half, 0.18, 0, ridge, KMRT_GLASS);
-  // White steel ribs over the glass and along the ridge
-  for (const u of [-len / 2, 0, len / 2]) {
-    for (const side of [-1, 1]) f.panel(u, 0.22, side * (half + 0.05), 0.18, 0, ridge + 0.06, STEEL_WHITE);
+  const L = 12;
+  const W = 3.6;
+  const top = 0.75;
+  const stairs = 3.2;
+  // Plinth, its paving, and the steps up at the front between granite cheeks
+  f.box(-stairs / 2, 0, L * 2 - stairs, W * 2, 0, top, GRANITE);
+  f.box(-stairs / 2, 0, L * 2 - stairs - 0.3, W * 2 - 0.3, top, top + 0.03, GRANITE_LIGHT);
+  for (let k = 0; k < 4; k++) {
+    const u = L - stairs + (k + 0.5) * (stairs / 4);
+    f.box(u, 0, stairs / 4, 5.2, 0, top * (1 - k / 4), GRANITE_LIGHT);
   }
-  f.box(0, 0, len + 0.3, 0.3, ridge - 0.1, ridge + 0.2, STEEL_WHITE);
-  // A band in the line's colour over the opening
-  f.box(len / 2 + 0.05, 0, 0.12, 1.6, ridge - 1.6, ridge - 1.1, color);
-  // Sign post: white, the orange MRT sign on top, the line's colour beneath
-  f.box(len / 2 + 1.2, half + 0.4, 0.3, 0.3, 0.18, 3.2, STEEL_WHITE);
-  f.box(len / 2 + 1.2, half + 0.4, 0.5, 0.9, 3.2, 3.9, KMRT_ORANGE);
-  f.box(len / 2 + 1.2, half + 0.4, 0.52, 0.92, 2.9, 3.2, color);
+  for (const side of [-1, 1]) {
+    f.box(L - stairs / 2, side * 3.1, stairs, 1.0, 0, top + 0.25, GRANITE);
+    // Steel handrails down the steps
+    f.beam(L - stairs, side * 2.4, top + 0.95, L - 0.1, side * 2.4, 0.95, 0.07, STEEL);
+    for (const u of [L - stairs + 0.2, L - 0.3]) f.box(u, side * 2.4, 0.06, 0.06, top * (1 - (u - (L - stairs)) / stairs), top * (1 - (u - (L - stairs)) / stairs) + 0.95, STEEL);
+    // Low hedges along the plinth's sides
+    f.box(-5.5, side * (W - 0.35), 11, 0.6, top, top + 0.55, SHRUB);
+  }
+  // Glass hall over the stairs down: dark glass between slim frames, a door at the front
+  const h0 = top;
+  const h1 = top + 3.3;
+  const back = -8;
+  const front = 6.2;
+  f.box((back + front) / 2, 0, front - back, 5.6, h0, h1, KMRT_GLASS);
+  for (let u = back; u <= front + 0.01; u += (front - back) / 8) for (const side of [-1, 1]) f.box(u, side * 2.82, 0.12, 0.12, h0, h1, 0xd9dcdf);
+  f.box(front + 0.06, 0, 0.1, 2.4, h0, h0 + 2.4, 0x2d3a46);
+  // The name board over the door, white with the line's colour beneath and the orange MRT mark at one end
+  f.box(front + 0.12, 0, 0.18, 4.6, h1 - 0.85, h1 - 0.15, 0xf7f7f4);
+  f.box(front + 0.13, 0, 0.18, 4.6, h1 - 1.0, h1 - 0.85, color);
+  f.box(front + 0.24, 1.75, 0.08, 0.55, h1 - 0.75, h1 - 0.25, KMRT_ORANGE);
+  // The shell roof: tall and wide over the steps, sweeping down to the plinth at the back
+  const roofFront = 8.6;
+  const t = (u: number) => (u + L) / (roofFront + L);
+  const half = (u: number) => 3.35 + 0.65 * t(u);
+  const rise = (u: number) => top + 0.12 + 5.35 * Math.pow(Math.sin((t(u) * Math.PI) / 2), 0.75);
+  const y = (u: number, v: number) => rise(u) + 0.3 * (1 - (v / half(u)) ** 2);
+  const n = 18;
+  const m = 6;
+  const pt = (i: number, j: number, under = 0) => {
+    const u = -L + ((roofFront + L) * i) / n;
+    const v = -half(u) + (2 * half(u) * j) / m;
+    return [u, v, y(u, v) - under];
+  };
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < m; j++) {
+      f.face(pt(i, j), pt(i, j + 1), pt(i + 1, j), pt(i + 1, j + 1), STEEL_WHITE);
+      f.face(pt(i, j + 1, 0.35), pt(i, j, 0.35), pt(i + 1, j + 1, 0.35), pt(i + 1, j, 0.35), 0xe4e7e9);
+    }
+    // The shell's edges
+    for (const j of [0, m]) f.face(pt(i, j), pt(i, j, 0.35), pt(i + 1, j), pt(i + 1, j, 0.35), STEEL_WHITE);
+  }
+  for (let j = 0; j < m; j++) f.face(pt(n, j), pt(n, j + 1), pt(n, j, 0.35), pt(n, j + 1, 0.35), STEEL_WHITE);
+  // Two splayed legs carry the front of the shell, standing on the plinth beside the steps
+  for (const side of [-1, 1]) f.lean(roofFront - 0.6, 1.1, 0.6, side * 3.0, 0, side * (half(roofFront) - 0.3), rise(roofFront) - 0.2, STEEL_WHITE);
+  // The blue exit column by the steps, the orange MRT mark near its top
+  f.box(L - 0.5, -W + 0.3, 0.6, 0.6, 0, 3.0, 0xf2f3f1);
+  f.box(L - 0.5, -W + 0.3, 0.62, 0.62, 3.0, 4.6, KMRT_BLUE);
+  f.box(L - 0.18, -W + 0.3, 0.04, 0.36, 3.9, 4.3, KMRT_ORANGE);
+  f.box(L - 0.5, -W + 0.3, 0.64, 0.64, 2.75, 2.95, color);
   // Stair shaft down to the hall, seen in the see-through view
-  f.box(0, 0, len - 1.4, half * 2 - 0.8, h + 3.9, -0.2, CONCRETE);
+  if (h < 0) f.box(-1, 0, 12, 4, h + 3.9, -0.2, CONCRETE);
+}
+
+/** Height of a large elevated station's sail roof over (u, v), above track height h. */
+function sail(h: number, u: number, v: number): number {
+  const edge = Math.min(1, Math.abs(v) / 15);
+  const mast = (1 + Math.cos((2 * Math.PI * u) / 15)) / 2;
+  const end = Math.max(0, (Math.abs(u) - 46) / 10);
+  return h + 6.4 + 2.6 * edge ** 1.6 + 1.1 * mast * (1 - edge) - 1.6 * end * end;
+}
+
+/**
+ * A large elevated metro station (4 × 15 cells): platforms on a deck held up by white splayed columns, under a white
+ * sail roof that sweeps up at its long edges and is hung from a row of tall masts with cables, and glass-covered
+ * escalators climbing to the platforms from the street on either side. A glass concourse stands under the deck.
+ */
+function canopyStation(f: Frame, h: number, color: number): void {
+  platforms(f, h, 100);
+  // Deck under the platforms, and low glass screens along them
+  f.box(0, 0, 100, 18.6, h - 1.3, h - 0.2, CONCRETE);
+  for (const side of [-1, 1]) {
+    f.box(0, side * 8.9, 100, 0.12, h + 1.1, h + 2.5, KMRT_GLASS);
+    f.box(0, side * 9.05, 100.4, 0.5, h - 1.3, h - 0.5, color);
+  }
+  // White splayed columns under the deck
+  for (let u = -45; u <= 45; u += 15) for (const side of [-1, 1]) f.lean(u, 1.0, 0.9, side * 6.2, 0, side * 8.4, h - 1.3, STEEL_WHITE);
+  // Glass concourse at street level under the middle of the deck
+  f.box(0, 0, 44, 13, 0, 4.6, KMRT_GLASS);
+  f.box(0, 0, 44.6, 13.6, 4.6, 5.1, STEEL_WHITE);
+  for (let u = -22; u <= 22; u += 4.4) for (const side of [-1, 1]) f.box(u, side * 6.55, 0.18, 0.18, 0, 4.6, 0xd9dcdf);
+  // The sail roof, its underside a shade darker
+  const nu = 56;
+  const nv = 12;
+  const pt = (i: number, j: number, under = 0) => {
+    const u = -56 + (112 * i) / nu;
+    const v = -15 + (30 * j) / nv;
+    return [u, v, sail(h, u, v) - under];
+  };
+  for (let i = 0; i < nu; i++) {
+    for (let j = 0; j < nv; j++) {
+      f.face(pt(i, j), pt(i, j + 1), pt(i + 1, j), pt(i + 1, j + 1), STEEL_WHITE);
+      f.face(pt(i, j + 1, 0.2), pt(i, j, 0.2), pt(i + 1, j + 1, 0.2), pt(i + 1, j, 0.2), 0xdde2e5);
+    }
+    for (const j of [0, nv]) f.face(pt(i, j), pt(i, j, 0.25), pt(i + 1, j), pt(i + 1, j, 0.25), STEEL_WHITE);
+  }
+  // Struts from the platforms up to the roof
+  for (let u = -45; u <= 45; u += 15) {
+    for (const side of [-1, 1]) {
+      for (const du of [-3, 3]) f.beam(u, side * 7.4, h + 1.1, u + du, side * 11, sail(h, u + du, side * 11) - 0.2, 0.35, STEEL_WHITE);
+      f.box(u, side * 7.4, 0.4, 0.4, h + 1.1, h + 2.2, STEEL_WHITE);
+    }
+  }
+  // Masts in a row along the middle, rising well above the roof, with cables down to it
+  for (let u = -45; u <= 45; u += 15) {
+    const base = sail(h, u, 0);
+    f.prism(u, 0, 0.32, base - 0.3, h + 18, STEEL_WHITE, 8);
+    f.prism(u, 0, 0.13, h + 18, h + 21, STEEL_WHITE, 6);
+    for (const du of [-6, 6]) for (const side of [-1, 1]) f.beam(u, 0, h + 17.4, u + du, side * 11, sail(h, u + du, side * 11), 0.07, 0xd9dde0);
+  }
+  // Glass escalator tubes from the street up to the platforms, one on each side at opposite ends
+  for (const side of [-1, 1]) {
+    const u0 = side * 20;
+    const u1 = side * 50;
+    const v0 = side * 10.5;
+    const v1 = side * 14.5;
+    const vm = (v0 + v1) / 2;
+    const y = (u: number) => (h * (u1 - u)) / (u1 - u0);
+    const lo = (u: number) => y(u);
+    const hi = (u: number) => y(u) + 3;
+    f.sheet(Math.min(u0, u1), Math.max(u0, u1), Math.min(v0, v1), Math.max(v0, v1), 10, 1, (u) => y(u), () => 0x5d646b);
+    f.sheet(Math.min(u0, u1), Math.max(u0, u1), Math.min(v0, v1), Math.max(v0, v1), 10, 1, (u) => hi(u), () => KMRT_GLASS);
+    for (const v of [v0, v1]) f.wall(u0, v, u1, v, (u) => lo(u), (u) => hi(u), KMRT_GLASS);
+    // White ribs over the tube
+    for (let k = 0; k <= 10; k++) {
+      const u = u0 + ((u1 - u0) * k) / 10;
+      for (const v of [v0, v1]) f.box(u, v, 0.2, 0.2, y(u), y(u) + 3, STEEL_WHITE);
+      f.box(u, vm, 0.2, 4.2, y(u) + 2.9, y(u) + 3.15, STEEL_WHITE);
+    }
+    // Columns under it, the landing that joins it to the platform, and the street end
+    for (const u of [0.25, 0.5, 0.75].map((k) => u0 + (u1 - u0) * k)) f.box(u, vm, 0.8, 0.8, 0, y(u) - 0.1, CONCRETE);
+    f.box(u0 - side * 2.5, side * 11.5, 5, 6, h - 1.3, h - 0.2, CONCRETE);
+    f.box(u0 - side * 2.5, side * 11.5, 5, 6, h - 0.2, h + 3, KMRT_GLASS);
+    f.box(u0 - side * 2.5, side * 11.5, 5.4, 6.4, h + 3, h + 3.4, STEEL_WHITE);
+    // The exit column at the street end
+    f.box(u1 + side * 3, vm, 0.6, 0.6, 0, 3.0, 0xf2f3f1);
+    f.box(u1 + side * 3, vm, 0.62, 0.62, 3.0, 4.6, KMRT_BLUE);
+    f.box(u1 + side * 3, vm, 0.66, 0.66, 2.75, 2.95, color);
+    f.box(u1 + side * 3, vm, 0.7, 0.4, 3.9, 4.3, KMRT_ORANGE);
+  }
 }
 
 function trainStation(f: Frame, h: number, color: number): void {

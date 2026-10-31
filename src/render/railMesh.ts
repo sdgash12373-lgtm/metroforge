@@ -1,6 +1,7 @@
 import type * as THREE from 'three';
 import type { Sample } from '../sim/geometry';
-import { TRACK_OFFSET } from '../sim/rail';
+import * as THREE_ from 'three';
+import { type RailKind, TRACK_OFFSET } from '../sim/rail';
 import { ROAD_WIDTH, type RoadNetwork } from '../sim/roads';
 import { Builder, type Height, PORTAL_DEPTH, isTunnelRamp, normalAt, pillar, ribbon, shownHeight, strip, supports } from './roadMesh';
 
@@ -46,13 +47,31 @@ interface Builders {
   dark: Builder;
 }
 
-const builders = (): Builders => ({
-  ballast: new Builder(0.06),
-  sleepers: new Builder(0.16),
-  steel: new Builder(0.3),
-  concrete: new Builder(0),
-  dark: new Builder(0),
-});
+/**
+ * How each kind of track looks, so they are told apart at a glance: Taiwan Railway's on brown ballast with timber-
+ * coloured sleepers, the high-speed line on pale concrete slabs, the metro on a dark bed with a yellow third rail.
+ */
+export const TRACK_LOOK: Record<RailKind, { bed: number; ties: number; rail: number; every: number; tieLen: number; masts: boolean; third: boolean; tunnel: number }> = {
+  train: { bed: 0x968d82, ties: 0x6b5a48, rail: 0xa7adb3, every: SLEEPER_EVERY, tieLen: 0.28, masts: true, third: false, tunnel: 0xd2603c },
+  hsr: { bed: 0xcfcdc6, ties: 0x9da2a6, rail: 0xb8bec4, every: 5.1, tieLen: 4.8, masts: true, third: false, tunnel: 0xf2a33a },
+  metro: { bed: 0x76828a, ties: 0x8b8f93, rail: 0xa7adb3, every: SLEEPER_EVERY, tieLen: 0.28, masts: false, third: true, tunnel: 0x2fbf7f },
+};
+const THIRD_RAIL = 0xe8b830;
+
+const builders = (kind: RailKind): Builders => {
+  const look = TRACK_LOOK[kind];
+  const b = {
+    ballast: new Builder(0.06),
+    sleepers: new Builder(0.16),
+    steel: new Builder(0.3),
+    concrete: new Builder(0),
+    dark: new Builder(0),
+  };
+  b.ballast.color = new THREE_.Color(look.bed);
+  b.sleepers.color = new THREE_.Color(look.ties);
+  b.steel.color = new THREE_.Color(look.rail);
+  return b;
+};
 
 const parts = (b: Builders): TrackParts => ({
   ballast: b.ballast.geometry(),
@@ -159,9 +178,12 @@ function at(s: Sample[], d: number, j: { i: number }): { x: number; y: number; t
  * Double track: a ballast bed with sleepers and two pairs of rails. Raised track stands on a viaduct,
  * and track going underground passes through a portal like a road tunnel.
  */
-export function buildTrackGeometries(net: RoadNetwork, masts: boolean): TrackGeometries {
-  const main = builders();
-  const sunk = builders();
+export function buildTrackGeometries(net: RoadNetwork, kind: RailKind): TrackGeometries {
+  const look = TRACK_LOOK[kind];
+  const masts = look.masts;
+  const main = builders(kind);
+  const sunk = builders(kind);
+  const third = new THREE_.Color(THIRD_RAIL);
   const mask = new Builder(0);
   for (const seg of net.segments.values()) {
     const s = seg.samples;
@@ -178,16 +200,24 @@ export function buildTrackGeometries(net: RoadNetwork, masts: boolean): TrackGeo
     for (const side of [-1, 1]) {
       const c = side * TRACK_OFFSET;
       for (const r of [c - GAUGE / 2, c + GAUGE / 2]) strip(steel, s, r - 0.08, r + 0.08, h);
+      // The metro's third rail, under its yellow cover, outside each track
+      if (look.third) {
+        const rail = steel.color;
+        steel.color = third;
+        const r = c + side * (GAUGE / 2 + 0.7);
+        strip(steel, s, r - 0.16, r + 0.16, h);
+        steel.color = rail;
+      }
     }
     const j = { i: 1 };
-    for (let d = SLEEPER_EVERY / 2; d < seg.length; d += SLEEPER_EVERY) {
+    for (let d = look.every / 2; d < seg.length; d += look.every) {
       const p = at(s, d, j);
       const hh = h(p.t);
       for (const side of [-1, 1]) {
         const cx = p.x - p.dy * TRACK_OFFSET * side;
         const cy = p.y + p.dx * TRACK_OFFSET * side;
-        const ux = p.dx * 0.14;
-        const uy = p.dy * 0.14;
+        const ux = p.dx * (look.tieLen / 2);
+        const uy = p.dy * (look.tieLen / 2);
         const vx = -p.dy * 1.3;
         const vy = p.dx * 1.3;
         sleepers.quad([cx - ux - vx, cy - uy - vy, hh], [cx - ux + vx, cy - uy + vy, hh], [cx + ux - vx, cy + uy - vy, hh], [cx + ux + vx, cy + uy + vy, hh]);

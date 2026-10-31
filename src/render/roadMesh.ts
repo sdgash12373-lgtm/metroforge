@@ -49,6 +49,7 @@ export class Builder {
       const a = (k / sides) * Math.PI * 2;
       this.pos.push(x + Math.cos(a) * r, this.y + h, z + Math.sin(a) * r);
     }
+    if (this.color) for (let k = 0; k <= sides; k++) this.col.push(this.color.r, this.color.g, this.color.b);
     for (let k = 0; k < sides; k++) this.idx.push(i, i + 1 + ((k + 1) % sides), i + 1 + k);
   }
 

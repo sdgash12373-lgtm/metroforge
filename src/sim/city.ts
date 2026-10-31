@@ -61,7 +61,7 @@ import {
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
 import { FLAT, FLAT_CLASSIC, PLAIN, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
 import { type RoadPoint, Traffic, taxiTint } from './traffic';
-import { type BusStop, type HubStyle, type StationStyle, Transit, isHub, isShared } from './transit';
+import { type BusStop, type HubStyle, type MetroLook, type StationShape, type StationStyle, Transit, isHub, isShared } from './transit';
 import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, isIndustry, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
@@ -131,12 +131,37 @@ export const HUB_STATION_COST = 2;
 export const HUB_LABEL: Record<HubStyle, string> = { twin: '雙鐵共構站', triple: '三鐵共構站' };
 
 /** A station standing on a rail line: where, which side its building is on, and whether it is Kaohsiung's own. */
+/**
+ * An underground metro station's entrance at street level: three cells in a row along a street, in the first row
+ * of lots. It keeps its place when lots are zoned or built on (what stood there is cleared for it).
+ */
+export interface MetroExit {
+  /** the metro stop it leads down to */
+  stop: number;
+  /** centre of the middle cell */
+  x: number;
+  y: number;
+  /** along the street, from the first cell to the third */
+  dx: number;
+  dy: number;
+  /** away from the street */
+  nx: number;
+  ny: number;
+  /** the three cells' centres */
+  cells: Vec2[];
+}
+
+/** How far around its default spot an entrance looks for a street to stand beside. */
+export const EXIT_REACH = 70;
+/** Cells an entrance takes along its street. */
+export const EXIT_CELLS = 3;
+
 export interface StationSpot {
   kind: RailKind;
   pose: StationPose;
   side: 1 | -1;
-  /** a region's own station, which covers more ground */
-  style?: StationStyle;
+  /** a region's own station, which covers more ground; or a metro station's look */
+  style?: StationShape;
   stop: BusStop;
 }
 
@@ -417,7 +442,7 @@ interface NetSave {
 /** Stops (id, x, y), lines (id, color, stop ids, name) and the fare of one kind of transport. */
 interface TransitSave {
   /** id, x, y; then for a train station built on its own, its style and the side its building is on */
-  stops?: ([number, number, number] | [number, number, number, StationStyle, 1 | -1])[];
+  stops?: ([number, number, number] | [number, number, number, StationStyle | 0, 1 | -1] | [number, number, number, StationStyle | 0, 1 | -1, MetroLook])[];
   lines?: ([number, number, number[]] | [number, number, number[], string])[];
   fare?: number;
 }
@@ -431,7 +456,7 @@ export interface SaveData extends NetSave {
   taxes?: TaxRates;
   /** v3: bus stops (id, x, y), lines (id, color, stop ids, name) and the fare */
   /** id, x, y; then for a train station built on its own, its style and the side its building is on */
-  stops?: ([number, number, number] | [number, number, number, StationStyle, 1 | -1])[];
+  stops?: TransitSave['stops'];
   lines?: ([number, number, number[]] | [number, number, number[], string])[];
   busFare?: number;
   /** v4: track networks and lines of the metro, trains and high-speed rail */
@@ -618,6 +643,7 @@ export class City {
   /** bumped when a region is opened */
   regionsVersion = 0;
   private stationCache: { key: string; spots: StationSpot[] } | null = null;
+  private exitCache: { key: string; exits: MetroExit[] } | null = null;
   private stationsSeen: number[] = [];
 
   constructor(readonly terrain: Terrain = FLAT) {
@@ -695,8 +721,17 @@ export class City {
 
   /** Water, hillside, track, a station or an airfield on this spot, so nothing can be built on it. */
   occupied(p: Vec2): boolean {
+    for (const e of this.metroExits()) {
+      if (Math.abs(p.x - e.x) > CELL * 2 || Math.abs(p.y - e.y) > CELL * 2) continue;
+      if (e.cells.some((c) => Math.hypot(c.x - p.x, c.y - p.y) < CELL * 0.45)) return true;
+    }
+    return this.occupiedByWorks(p);
+  }
+
+  /** Everything that keeps a spot from being built on except metro entrances, which find their places around it. */
+  private occupiedByWorks(p: Vec2): boolean {
     if (!this.open(p) || !buildable(this.terrain, p)) return true;
-    for (const st of this.stationSpots()) if (stationCovers(st.kind, st.pose, st.side, p, CELL * 0.45, st.stop.style)) return true;
+    for (const st of this.stationSpots()) if (stationCovers(st.kind, st.pose, st.side, p, CELL * 0.45, st.style)) return true;
     // Footbridges stand on the sidewalks and leave the lots beside them free
     for (const f of this.facilities.values()) if (f.kind !== 'footbridge' && footprintContains(f, p, 2)) return true;
     for (const a of this.aviation.airports.values()) if (Aviation.contains(a, p, 2)) return true;
@@ -766,17 +801,99 @@ export class City {
       const used = new Set<number>();
       for (const l of sys.transit.lines.values()) for (const id of l.stops) used.add(id);
       // Stations built on their own stand before any line stops there
-      for (const st of sys.transit.stops.values()) if (st.style) used.add(st.id);
+      for (const st of sys.transit.stops.values()) if (st.style || st.look) used.add(st.id);
       for (const id of used) {
         const stop = sys.transit.stops.get(id);
         const pose = stop && stationPose(sys, stop);
         if (!stop || !pose) continue;
         const side = stop.face ?? (kind === 'metro' ? 1 : stationSide(this.net, kind, pose));
-        spots.push({ kind, pose, side, style: stop.style, stop });
+        spots.push({ kind, pose, side, style: stop.style ?? stop.look, stop });
       }
     }
     this.stationCache = { key, spots };
     return spots;
+  }
+
+  /**
+   * Entrances of underground metro stations: two per station, one off each end on opposite sides, each in the
+   * three cells of a street's first row nearest where it wants to be. They depend on the streets and the stations
+   * only, so zoning never moves them.
+   */
+  metroExits(): MetroExit[] {
+    const key = `${this.roadsVersion}:${this.rails.metro.version}.${this.rails.metro.transit.version}:${this.regionsVersion}`;
+    if (this.exitCache?.key === key) return this.exitCache.exits;
+    // Guard against asking while working them out (occupiedByWorks never does, but be safe)
+    this.exitCache = { key, exits: [] };
+    const exits: MetroExit[] = [];
+    const streets = [...this.net.segments.values()].filter((s) => this.net.isStreet(s));
+    for (const st of this.stationSpots()) {
+      if (st.kind !== 'metro' || st.pose.h >= 0 || isShared(st.stop.style)) continue;
+      const { p, d } = st.pose;
+      for (const end of [-1, 1]) {
+        const want = { x: p.x + d.x * end * 15 - d.y * end * 11, y: p.y + d.y * end * 15 + d.x * end * 11 };
+        const e = this.exitSpot(streets, want, exits);
+        if (e) exits.push({ ...e, stop: st.stop.id });
+      }
+    }
+    this.exitCache = { key, exits };
+    return exits;
+  }
+
+  /** The run of three free first-row cells along one street nearest `want`, clear of the entrances in `taken`. */
+  private exitSpot(streets: RoadSegment[], want: Vec2, taken: MetroExit[]): Omit<MetroExit, 'stop'> | null {
+    const near = streets.filter((s) => bboxNear(s.bbox, want, EXIT_REACH + roadWidth(s)) && closestOnSamples(s.samples, want).d < EXIT_REACH);
+    const others = streets.filter((s) => bboxNear(s.bbox, want, EXIT_REACH + 40));
+    // A cell is free when no other road, track, station, facility or airport takes it
+    const free = (seg: RoadSegment, lot: Lot) => {
+      if (this.occupiedByWorks(lot)) return false;
+      if (taken.some((e) => e.cells.some((c) => Math.hypot(c.x - lot.x, c.y - lot.y) < CELL * 0.8))) return false;
+      for (const o of others) {
+        if (o === seg) continue;
+        const clear = ROAD_WIDTH / 2 + CELL * 0.45 + (roadWidth(o) - ROAD_WIDTH) / 2;
+        if (bboxNear(o.bbox, lot, clear) && closestOnSamples(o.samples, lot).d < clear) return false;
+      }
+      return true;
+    };
+    let best: Omit<MetroExit, 'stop'> | null = null;
+    let bestCost = Infinity;
+    for (const seg of near) {
+      for (const side of [-1, 1]) {
+        const row = seg.lots.filter((l) => l.depth === 1 && l.side === side).sort((a, b) => a.s - b.s);
+        for (let i = 0; i + EXIT_CELLS <= row.length; i++) {
+          const run = row.slice(i, i + EXIT_CELLS);
+          // Neighbouring cells only, a cell apart
+          if (run.some((l, k) => k > 0 && Math.abs(l.s - run[k - 1].s - CELL) > 0.6)) continue;
+          const mid = run[1];
+          const cost = Math.hypot(mid.x - want.x, mid.y - want.y);
+          if (cost >= bestCost || !run.every((l) => free(seg, l))) continue;
+          const a = run[0];
+          const c = run[EXIT_CELLS - 1];
+          const len = Math.hypot(c.x - a.x, c.y - a.y) || 1;
+          const dx = (c.x - a.x) / len;
+          const dy = (c.y - a.y) / len;
+          // Away from the street: the side the lot is on
+          const n = { x: -mid.dir.y * mid.side, y: mid.dir.x * mid.side };
+          bestCost = cost;
+          best = { x: mid.x, y: mid.y, dx, dy, nx: n.x, ny: n.y, cells: run.map((l) => ({ x: l.x, y: l.y })) };
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Builds a metro station in the large elevated style (white sail roof on masts, 4 × 15 cells): only on elevated
+   * track. What stood on its ground is cleared for it.
+   */
+  setMetroLook(stop: BusStop, look: MetroLook): { ok: boolean; reason?: string } {
+    const sys = this.rails.metro;
+    const pose = stationPose(sys, stop);
+    if (!pose || pose.h <= 0) return { ok: false, reason: '大型高架站要蓋在高架捷運軌道上' };
+    if (stop.look === look) return { ok: true };
+    stop.look = look;
+    sys.transit.version++;
+    this.landChanged();
+    return { ok: true };
   }
 
   /** Whether any rail system's track or stations changed since last asked (without allocating: it runs every step). */
@@ -2117,6 +2234,8 @@ export class City {
     if (!plan.ok) return { ok: false, cost, reason: transit.mode.streetsOnly ? '有些站之間沒有道路相連' : '有些車站之間沒有軌道相連' };
     this.spend(cost);
     transit.addLine(stops);
+    // New stations take their ground (and metro entrances theirs) now, even while the game is paused
+    if (transit !== this.transit) this.landChanged();
     return { ok: true, cost };
   }
 
@@ -3051,19 +3170,26 @@ function loadNet(net: RoadNetwork, data: NetSave, lots: boolean): void {
 
 function saveTransit(t: Transit): TransitSave {
   return {
-    stops: [...t.stops.values()].map((s) => (s.style ? [s.id, round2(s.p.x), round2(s.p.y), s.style, s.face ?? 1] : [s.id, round2(s.p.x), round2(s.p.y)])),
+    stops: [...t.stops.values()].map((s) =>
+      s.look
+        ? [s.id, round2(s.p.x), round2(s.p.y), s.style ?? 0, s.face ?? 1, s.look]
+        : s.style
+          ? [s.id, round2(s.p.x), round2(s.p.y), s.style, s.face ?? 1]
+          : [s.id, round2(s.p.x), round2(s.p.y)],
+    ),
     lines: [...t.lines.values()].map((l) => [l.id, l.color, [...l.stops], l.name]),
     fare: t.fare,
   };
 }
 
 function loadTransit(t: Transit, data: TransitSave): void {
-  for (const [id, x, y, style, face] of data.stops ?? []) {
+  for (const [id, x, y, style, face, look] of data.stops ?? []) {
     const stop = t.addStop(id, { x, y });
     if (style) {
       stop.style = style;
       stop.face = face;
     }
+    if (look) stop.look = look;
   }
   for (const [id, color, stops, name] of data.lines ?? []) t.addLine(stops, id, color, name);
   if (data.fare !== undefined) t.fare = data.fare;

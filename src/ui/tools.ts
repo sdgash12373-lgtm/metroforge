@@ -140,6 +140,8 @@ export class ToolController {
   /** every line under the last tap, so one under another (a train beneath a bus route) can be picked in the dock */
   lineChoices: { transit: Transit; id: number }[] = [];
   railAction: RailAction = 'track';
+  /** metro stations tapped while planning a line: the usual kind, or the large elevated one with a sail roof */
+  metroLook: 'standard' | 'canopy' = 'standard';
   /** what the station tool builds: a standard station, the region's own, or a 共構 station */
   stationType: StationType = 'standard';
   /** track tools draw curves instead of straight track */
@@ -482,7 +484,9 @@ export class ToolController {
     // Underground metro lines must stay visible to be picked for removal too
     const pickingLines = this.tool === 'bulldoze' && this.demolishLines;
     this.world.setXray((this.isRoadTool && this.level === 'tunnel') || (this.tool === 'metro' && this.railAction === 'line') || pickingLines);
-    this.world.setUndergroundView(this.tool === 'bulldoze' && !this.demolishLines);
+    // Laying track underground: every kind's tunnels marked in its own colour, so the right one is joined
+    const railTunnel = isRail(this.tool) && this.railAction === 'track' && this.level === 'tunnel';
+    this.world.setUndergroundView((this.tool === 'bulldoze' && !this.demolishLines) || railTunnel);
     // Metro runs over and under the city: buildings and streets would hide the track being laid
     this.world.setDeclutter(this.tool === 'metro');
   }
@@ -821,6 +825,9 @@ export class ToolController {
       const what = isRail(this.tool) || this.drawKind === 'street' ? '' : `${ROAD_KINDS[this.drawKind].label} `;
       return `${what}${kind}約 ${len} 公尺 · ${ntd(cost)}　點一下完成；再點起點或按右鍵結束${verb}`;
     }
+    if (this.level === 'tunnel' && !start && isRail(this.tool)) {
+      return `地下${what}：地面標出各種地下軌道，紅棕色是火車、橘色是高鐵、綠色是捷運；只有同一種軌道才接得起來`;
+    }
     if (this.level === 'elevated' && !start) {
       return `高架${what}：從地面接出會自動做成匝道（至少 ${Math.ceil(ELEVATED_HEIGHT / MAX_GRADE)} 公尺），跨過地面不會形成路口`;
     }
@@ -839,6 +846,8 @@ export class ToolController {
     const t = this.transit!;
     const { label } = t.mode;
     const n = this.lineDraft.length;
+    if (this.tool === 'metro' && this.metroLook === 'canopy' && n === 0 && this.selectedLine === null)
+      return '大型高架站：點高架捷運軌道設站（白色膜頂、佔地 4×15 格，地上原有的房子會拆掉讓出空間），已有的高架站點一下也會改建';
     if (n === 1) return `已設 1 站（每站 ${ntd(t.mode.stopCost)}）；沿著路線點下一站`;
     if (n > 1) return t.mode.reverses ? `已設 ${n} 站；點「完成路線」開通，列車在兩端折返` : `已設 ${n} 站；點第一站或「完成路線」讓公車繞回起點`;
     const picked = this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
@@ -1072,9 +1081,27 @@ export class ToolController {
       this.events.toast(transit.mode.streetsOnly ? '公車站要設在地面道路旁（高架道路不能設站）' : `${label}車站要設在${label}軌道上（坡道上不能設站）`);
       return;
     }
+    if (this.tool === 'metro' && this.metroLook === 'canopy' && !hub) {
+      const r = this.city.setMetroLook(stop, 'canopy');
+      if (!r.ok) {
+        // A new stop made by this tap goes again
+        const used = this.lineDraft.includes(stop.id) || [...transit.lines.values()].some((l) => l.stops.includes(stop.id));
+        if (!used && !stop.style) {
+          transit.stops.delete(stop.id);
+          transit.version++;
+        }
+        this.events.toast(r.reason ?? '這裡不能蓋大型高架站');
+        return;
+      }
+    }
     if (stop.id === this.lineDraft[this.lineDraft.length - 1]) return;
     this.lineDraft.push(stop.id);
     this.draftPath = transit.plan(this.lineDraft, false).path;
+  }
+
+  setMetroLook(look: 'standard' | 'canopy'): void {
+    this.metroLook = look;
+    this.events.changed();
   }
 
   /** Pushes the current previews (ghost road, snap ring, brush) to the 3D view. */
