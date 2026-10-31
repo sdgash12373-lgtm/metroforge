@@ -31,6 +31,8 @@ export interface MenuActions {
   settings(): Settings;
   setSettings(s: Settings): void;
   toast(msg: string): void;
+  /** plays the 新手導引 tour over the game */
+  tutorial(): void;
 }
 
 type View = 'home' | 'pause' | 'new' | 'load' | 'save' | 'settings';
@@ -187,6 +189,10 @@ export class Menu {
       button('存檔', 'menu-btn', () => this.show('save')),
       button('讀取存檔', 'menu-btn', () => this.show('load')),
       button('設定', 'menu-btn', () => this.show('settings')),
+      button('新手導引', 'menu-btn', () => {
+        this.close();
+        this.actions.tutorial();
+      }),
       button('回到開始畫面', 'menu-btn', async () => {
         await this.actions.quit();
         this.inGame = false;
@@ -227,6 +233,7 @@ export class Menu {
         this.inGame = true;
         this.close();
         this.actions.play(city, null);
+        this.actions.tutorial();
       }),
     );
     return [el('h2', '', '新遊戲'), label, terrainField, row];

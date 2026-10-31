@@ -10,6 +10,7 @@ import { latestTicker, markSeen, seenLatest, watchForNewVersion } from './ui/upd
 import { attachInput } from './ui/input';
 import { type Tool, ToolController } from './ui/tools';
 import { DriveMode } from './ui/drive';
+import { Tutorial } from './ui/tutorial';
 
 /** Seconds per simulation step at normal speed; DAY_STEPS of them make a 20-minute day. */
 const TICK_SECONDS = 0.5;
@@ -195,6 +196,19 @@ const menu: Menu = new Menu(document.getElementById('ui')!, slots, {
     }
   },
   toast: (m) => hud!.toast(m),
+  tutorial: () => {
+    if (tutorial.open) return;
+    // The clock stands still while the tour talks
+    speedBeforeTour = hud!.speed;
+    hud!.speed = 0;
+    hud!.render();
+    tutorial.start();
+  },
+});
+let speedBeforeTour = 1;
+const tutorial = new Tutorial(document.getElementById('ui')!, () => {
+  hud!.speed = speedBeforeTour;
+  hud!.render();
 });
 // The start screen shows the last city played, if there is one
 const latest = await slots.latest();
