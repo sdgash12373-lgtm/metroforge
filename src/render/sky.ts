@@ -68,6 +68,10 @@ export class SkySystem {
   private skyColor = new THREE.Color();
   /** smoothed weather, so the sky changes gradually */
   private now = { precip: 0, cloud: 0.1, fog: 0, wind: 0.15, snow: 0 };
+  /** 0 calm .. 1 typhoon, eased like the rest of the weather */
+  get wind(): number {
+    return this.now.wind;
+  }
   private bolt = 0;
 
   constructor(

@@ -29,6 +29,7 @@ import { TRACK_LOOK, buildTrackGeometries } from './railMesh';
 import { StationLayer } from './stations';
 import { TrainLayer } from './trains';
 import { ShipLayer } from './ships';
+import { Ocean } from './ocean';
 
 /** Everything drawn for one kind of train. */
 interface RailLayer {
@@ -114,6 +115,8 @@ export class World {
   private readonly streetTrees: THREE.InstancedMesh;
   private terrain: Terrain = FLAT;
   private readonly water: THREE.Mesh;
+  /** The FFT sea, where the browser can run it (WebGL2 float targets); otherwise the plain water above */
+  private readonly ocean: Ocean | null;
   /** seconds, for the ripples on the water */
   private readonly waterTime = { value: 0 };
   /** veil over the parts of the map not opened yet */
@@ -219,6 +222,11 @@ export class World {
     this.locked.renderOrder = 1;
     this.locked.visible = false;
     this.scene.add(this.ground, this.water, this.locked);
+    this.ocean = Ocean.supported(this.renderer) ? new Ocean(this.renderer, !matchMedia('(pointer: coarse)').matches) : null;
+    if (this.ocean) {
+      this.ocean.mesh.visible = false;
+      this.scene.add(this.ocean.mesh);
+    }
     this.scene.add(this.roadGroup);
     this.buildings = new BuildingLayer(shadows);
     this.scene.add(this.buildings.group);
@@ -458,7 +466,7 @@ export class World {
     const m = this.ground.material as THREE.MeshLambertMaterial;
     if (m.transparent === on) return;
     this.xray = on;
-    this.water.visible = !on && this.terrain !== FLAT;
+    this.showWater();
     m.transparent = on;
     m.opacity = on ? 0.3 : 1;
     m.depthWrite = !on;
@@ -740,6 +748,13 @@ export class World {
 
   private cityRef: City | null = null;
 
+  /** The FFT sea, or the plain water where it cannot run; neither on flat land or in the see-through view. */
+  private showWater(): void {
+    const on = this.terrain !== FLAT && !this.xray;
+    this.water.visible = on && !this.ocean;
+    if (this.ocean) this.ocean.mesh.visible = on;
+  }
+
   /** Reshapes the ground, sea and forests for the land a city stands on. */
   private setTerrain(terrain: Terrain): void {
     this.terrain = terrain;
@@ -747,7 +762,8 @@ export class World {
     this.ground.geometry = buildGroundGeometry(terrain);
     this.water.geometry.dispose();
     this.water.geometry = buildWaterGeometry(terrain);
-    this.water.visible = terrain !== FLAT && !this.xray;
+    this.ocean?.setTerrain(terrain);
+    this.showWater();
     this.rig.bounds = terrain.bounds;
     this.lockedVersion = -1;
     this.trees.spots = treeSpots(terrain);
@@ -937,9 +953,18 @@ export class World {
     }
   }
 
+  private readonly oceanSun = new THREE.Vector3();
+  private readonly oceanSunColor = new THREE.Color();
+
   /** Time of day and the weather where the camera looks. */
   updateSky(days: number, w: Conditions, dt: number): void {
     this.sky.update(days, w, dt, this.rig.target, this.rig.distance, this.xray);
+    if (this.ocean) {
+      this.oceanSun.copy(this.sun.position).sub(this.sun.target.position);
+      this.oceanSunColor.copy(this.sun.color).multiplyScalar(this.sun.intensity / 2.1);
+      const eye = this.rig.camera.position;
+      this.ocean.update(dt, { x: eye.x, y: eye.z }, this.sky.wind, this.oceanSun, this.oceanSunColor, (this.scene.fog as THREE.Fog).color, this.sky.light);
+    }
     // Unlit road paint dims with the light; street lights warm the asphalt at night
     this.materials.markings.color.setScalar(this.sky.light);
     this.materials.asphalt.emissive.setHex(0x3a2a12).multiplyScalar(this.sky.night.value);
