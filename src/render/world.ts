@@ -17,7 +17,7 @@ import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeome
 import { StopLayer } from './transit';
 import { buildFacilityGeometry, buildFacilitySigns, signAtlas } from './facilities';
 import { SignalLayer } from './signals';
-import { HILL_TREES, LOWLAND_TREES, OUTER_TREES, type TreeSpot, buildGroundGeometry, buildLockedGeometry, buildWaterGeometry, treeSpots } from './terrainMesh';
+import { HILL_TREES, LOWLAND_TREES, OUTER_TREES, type TreeSpot, buildGroundGeometry, buildLockedGeometry, buildWaterGeometry, cornerHeights, treeSpots } from './terrainMesh';
 import { FLAT, REGION_NAMES, type Terrain } from '../sim/terrain';
 import { LEVELS, UNLOCK } from '../sim/levels';
 import { VehicleLayer } from './vehicles';
@@ -30,6 +30,8 @@ import { StationLayer } from './stations';
 import { TrainLayer } from './trains';
 import { ShipLayer } from './ships';
 import { Ocean } from './ocean';
+import { FACILITIES } from '../sim/facilities';
+import { type RockSpot, coastOf, coastRocks, rockGeometry } from './coast';
 
 /** Everything drawn for one kind of train. */
 interface RailLayer {
@@ -412,6 +414,25 @@ export class World {
       n++;
     }
     this.trees.trunks.count = n;
+    if (this.rocks) {
+      let r = 0;
+      const works = [...city.facilities.values()].map((f) => ({ p: f.p, r: Math.hypot(FACILITIES[f.kind].w, FACILITIES[f.kind].d) / 2 + 6 }));
+      for (const t of this.rockSpots) {
+        // Piers, ports and coast roads clear the rocks off
+        if (works.some((f) => Math.hypot(f.p.x - t.x, f.p.y - t.y) < f.r)) continue;
+        const here = roads.get(key(Math.floor(t.x / ROAD_CELL), Math.floor(t.y / ROAD_CELL)));
+        if (here?.some((s) => bboxNear(s.bbox, t, roadWidth(s) / 2 + 3) && closestOnSamples(s.samples, t).d < roadWidth(s) / 2 + 3)) continue;
+        this.rockQ.setFromEuler(this.rockE.set(t.tilt, t.turn, t.tilt * 0.6));
+        m.compose(this.rockP.set(t.x, t.h - 0.25 * t.sy, t.y), this.rockQ, this.rockS.set(t.s, t.sy, t.s * (0.8 + 0.4 * ((t.turn * 7) % 1))));
+        this.rocks.setMatrixAt(r, m);
+        this.rocks.setColorAt(r, t.color);
+        r++;
+      }
+      this.rocks.count = r;
+      this.rocks.instanceMatrix.needsUpdate = true;
+      if (this.rocks.instanceColor) this.rocks.instanceColor.needsUpdate = true;
+      this.rocks.computeBoundingSphere();
+    }
     this.trees.crowns.count = n;
     this.trees.trunks.instanceMatrix.needsUpdate = true;
     this.trees.crowns.instanceMatrix.needsUpdate = true;
@@ -767,6 +788,18 @@ export class World {
     this.rig.bounds = terrain.bounds;
     this.lockedVersion = -1;
     this.trees.spots = treeSpots(terrain);
+    this.rockSpots = terrain === FLAT ? [] : coastRocks(terrain, coastOf(terrain, cornerHeights(terrain)));
+    if (this.rocks) {
+      this.scene.remove(this.rocks);
+      this.rocks.dispose();
+      this.rocks = null;
+    }
+    if (this.rockSpots.length) {
+      this.rocks = new THREE.InstancedMesh(rockGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }), this.rockSpots.length);
+      this.rocks.castShadow = this.sun.castShadow;
+      this.rocks.receiveShadow = true;
+      this.scene.add(this.rocks);
+    }
   }
 
   sync(city: City): void {
@@ -953,6 +986,13 @@ export class World {
     }
   }
 
+  private readonly rockQ = new THREE.Quaternion();
+  private readonly rockE = new THREE.Euler();
+  private readonly rockP = new THREE.Vector3();
+  private readonly rockS = new THREE.Vector3();
+  /** Boulders along rocky shores */
+  private rocks: THREE.InstancedMesh | null = null;
+  private rockSpots: RockSpot[] = [];
   private readonly oceanSun = new THREE.Vector3();
   private readonly oceanSunColor = new THREE.Color();
 
@@ -963,7 +1003,7 @@ export class World {
       this.oceanSun.copy(this.sun.position).sub(this.sun.target.position);
       this.oceanSunColor.copy(this.sun.color).multiplyScalar(this.sun.intensity / 2.1);
       const eye = this.rig.camera.position;
-      this.ocean.update(dt, { x: eye.x, y: eye.z }, this.sky.wind, this.oceanSun, this.oceanSunColor, (this.scene.fog as THREE.Fog).color, this.sky.light);
+      this.ocean.update(dt, { x: eye.x, y: eye.z, z: eye.y }, this.sky.wind, this.oceanSun, this.oceanSunColor, (this.scene.fog as THREE.Fog).color, this.sky.light);
     }
     // Unlit road paint dims with the light; street lights warm the asphalt at night
     this.materials.markings.color.setScalar(this.sky.light);

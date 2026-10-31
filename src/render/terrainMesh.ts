@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { hash01 } from '../sim/geometry';
+import { BEACH, CELL_STEP, coastOf } from './coast';
 import { HALF_MAP, type RegionName, type Terrain, WATER_LEVEL, buildable } from '../sim/terrain';
 
 /** Ground triangles are this many meters across. */
-const STEP = 20;
+const STEP = CELL_STEP;
 /** trees in the lowland woods, and on hills and mountains, and across the land beyond the old square */
 export const LOWLAND_TREES = 6000;
 export const HILL_TREES = 6000;
@@ -17,6 +18,7 @@ const HILL = new THREE.Color(0x76a052);
 const FOREST = new THREE.Color(0x4d7a3c);
 const ROCK = new THREE.Color(0x8d8b7c);
 const PEAK = new THREE.Color(0xc4c0b2);
+const SHORE_ROCK = new THREE.Color(0x8a8272);
 
 function landColor(h: number, out: THREE.Color): THREE.Color {
   if (h < -2.5) return out.copy(SEABED);
@@ -31,7 +33,7 @@ function landColor(h: number, out: THREE.Color): THREE.Color {
 /** Ground heights at the cell corners, kept per terrain: the ground, the water and the veil all ask for them. */
 const corners = new WeakMap<Terrain, (x: number, y: number) => number>();
 
-function cornerHeights(terrain: Terrain): (x: number, y: number) => number {
+export function cornerHeights(terrain: Terrain): (x: number, y: number) => number {
   let h = corners.get(terrain);
   if (h) return h;
   const b = terrain.bounds;
@@ -75,24 +77,111 @@ function cellTriangles(x: number, y: number, h: (x: number, y: number) => number
  */
 export function buildGroundGeometry(terrain: Terrain): THREE.BufferGeometry {
   const pos: number[] = [];
-  const h = cornerHeights(terrain);
-  eachCell(terrain, (x, y) => cellTriangles(x, y, h, pos));
   const colors: number[] = [];
+  const h = cornerHeights(terrain);
+  const coast = coastOf(terrain, h);
+  const b = terrain.bounds;
   const c = new THREE.Color();
-  for (let i = 0; i < pos.length; i += 9) {
-    const ys = [pos[i + 1], pos[i + 4], pos[i + 7]];
+  const flatColour = (start: number) => {
+    const ys = [pos[start + 1], pos[start + 4], pos[start + 7]];
     const lo = Math.min(...ys);
     const hi = Math.max(...ys);
     landColor(lo < 0 ? lo : (lo + hi) / 2, c);
-    const v = hash01(pos[i] + pos[i + 3], pos[i + 2] + pos[i + 8]);
+    const v = hash01(pos[start] + pos[start + 3], pos[start + 2] + pos[start + 8]);
     c.offsetHSL((v - 0.5) * 0.02, 0, (v - 0.5) * 0.03);
     for (let k = 0; k < 3; k++) colors.push(c.r, c.g, c.b);
-  }
+  };
+  eachCell(terrain, (x, y) => {
+    const i = Math.round((x - b.minX) / STEP);
+    const j = Math.round((y - b.minY) / STEP);
+    const n = coast.level(i, j);
+    if (n === 1) {
+      const at = pos.length;
+      cellTriangles(x, y, h, pos);
+      flatColour(at);
+      flatColour(at + 9);
+      return;
+    }
+    // Near the shore: split finer, heights from the smoothed coast and colours blended by the distance to the
+    // waterline. Where a neighbour is split differently, the shared edge stays the straight line between the
+    // corners, so no gap opens
+    const step = STEP / n;
+    const other = (di: number, dj: number) => coast.level(i + di, j + dj) !== n;
+    const vh: number[] = [];
+    const vc: number[] = [];
+    for (let cc = 0; cc <= n; cc++) {
+      for (let a = 0; a <= n; a++) {
+        const px = x + a * step;
+        const py = y + cc * step;
+        const left = a === 0 && other(-1, 0);
+        const right = a === n && other(1, 0);
+        const down = cc === 0 && other(0, -1);
+        const up = cc === n && other(0, 1);
+        const corner = (a === 0 || a === n) && (cc === 0 || cc === n);
+        let height: number;
+        let d = 99;
+        if (corner && (left || right || down || up || other(a ? 1 : -1, cc ? 1 : -1))) height = h(px, py);
+        else if (left || right) height = THREE.MathUtils.lerp(h(px, y), h(px, y + STEP), cc / n);
+        else if (down || up) height = THREE.MathUtils.lerp(h(x, py), h(x + STEP, py), a / n);
+        else {
+          height = coast.height(px, py);
+          d = coast.last.d;
+        }
+        if (d === 99) d = coast.distance(px, py);
+        vh.push(height);
+        shoreColour(px, py, height, d, coast.rocky(px, py), c);
+        vc.push(c.r, c.g, c.b);
+      }
+    }
+    const V = (a: number, cc: number) => cc * (n + 1) + a;
+    const put = (k: number, a: number, cc: number) => {
+      pos.push(x + a * step, vh[k], y + cc * step);
+      colors.push(vc[k * 3], vc[k * 3 + 1], vc[k * 3 + 2]);
+    };
+    for (let cc = 0; cc < n; cc++) {
+      for (let a = 0; a < n; a++) {
+        put(V(a, cc), a, cc);
+        put(V(a, cc + 1), a, cc + 1);
+        put(V(a + 1, cc), a + 1, cc);
+        put(V(a, cc + 1), a, cc + 1);
+        put(V(a + 1, cc + 1), a + 1, cc + 1);
+        put(V(a + 1, cc), a + 1, cc);
+      }
+    }
+  });
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   g.computeVertexNormals();
   return g;
+}
+
+const WET_SAND = new THREE.Color(0xb3a57a);
+const shoreTmp = new THREE.Color();
+
+/**
+ * The ground's colour near the water, blended smoothly: grass down to a strip of sand (or bare rock on a rocky
+ * stretch) along the waterline, wet darker sand just under it, seabed further out.
+ */
+function shoreColour(x: number, y: number, h: number, d: number, rocky: number, out: THREE.Color): void {
+  const wobble = (hash01(Math.floor(x / 7), Math.floor(y / 7)) - 0.5) * 3;
+  if (h >= WATER_LEVEL) {
+    landColor(Math.max(h, 0.05), out);
+    if (d < 90) {
+      const shore = shoreTmp.copy(SAND).lerp(SHORE_ROCK, rocky);
+      out.lerp(shore, 1 - smoothstepN(BEACH - 4, BEACH, d + wobble));
+    }
+  } else {
+    const shore = shoreTmp.copy(WET_SAND).lerp(SHORE_ROCK, rocky).multiplyScalar(rocky > 0.5 ? 0.8 : 1);
+    out.copy(SEABED).lerp(shore, 1 - smoothstepN(-1.2, -3.2, h));
+  }
+  const v = hash01(x * 0.37, y * 0.41);
+  out.offsetHSL((v - 0.5) * 0.015, 0, (v - 0.5) * (0.025 + rocky * 0.06));
+}
+
+function smoothstepN(a: number, b: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
 }
 
 /** The water surface: only over cells with some ground below it. */
