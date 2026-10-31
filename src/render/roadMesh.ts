@@ -150,6 +150,12 @@ export interface RoadGeometries {
   dark: THREE.BufferGeometry;
   /** noise barrier panels along freeways */
   barriers: THREE.BufferGeometry;
+  /** street light poles and arms along ground-level streets */
+  lampPosts: THREE.BufferGeometry;
+  /** their lamp heads, lit at night */
+  lampHeads: THREE.BufferGeometry;
+  /** pools of their light on the road, added over it at night */
+  lampPools: THREE.BufferGeometry;
 }
 
 export const isTunnelRamp = (net: RoadNetwork, seg: RoadSegment): boolean => {
@@ -415,6 +421,9 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
   const concrete = new Builder(0);
   const dark = new Builder(0);
   const panels = new Builder(0);
+  const posts = new Builder(0);
+  const heads = new Builder(0);
+  const pools = new Builder(0.12);
   for (const seg of net.segments.values()) {
     const h = segHeight(net, seg);
     const raised = net.isRaised(seg);
@@ -434,6 +443,7 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
       }
     }
     if (seg.highway) noiseBarriers(net, seg, concrete, panels, h);
+    if (net.isStreet(seg)) streetLights(seg, posts, heads, pools);
     if (raised) supports(concrete, seg.samples, h, full);
     // Tunnel mouths: the ramp between street level and a tunnel
     else if (isTunnelRamp(net, seg)) portal(concrete, dark, seg.samples, (t) => net.heightAt(seg, t), full);
@@ -453,7 +463,76 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
     concrete: concrete.geometry(),
     dark: dark.geometry(),
     barriers: panels.geometry(),
+    lampPosts: posts.geometry(),
+    lampHeads: heads.geometry(),
+    lampPools: pools.geometry(),
   };
+}
+
+/** Street lights: one every LAMP_SPACING along a street, on alternate sides, and on both sides of wide roads. */
+const LAMP_SPACING = 32;
+const LAMP_HEIGHT = 8.5;
+/** how far the arm reaches out over the road from the pole */
+const LAMP_ARM = 2.6;
+/** no lamps this close to a segment's ends, where junctions are */
+const LAMP_END = 10;
+
+/**
+ * Taiwan's grey street lights: a slim pole at the kerb, a short arm out over the road with a flat LED head at its
+ * tip, and a pool of warm light on the asphalt beneath at night.
+ */
+function streetLights(seg: RoadSegment, posts: Builder, heads: Builder, pools: Builder): void {
+  const len = seg.length;
+  if (len < LAMP_END * 2 + 4) return;
+  const both = (seg.lanes ?? 1) > 1;
+  const kerb = asphaltWidth(seg) / 2 + 0.6;
+  const s = seg.samples;
+  const count = Math.max(1, Math.floor((len - LAMP_END * 2) / LAMP_SPACING) + 1);
+  const step = count > 1 ? (len - LAMP_END * 2) / (count - 1) : 0;
+  let i = 1;
+  for (let k = 0; k < count; k++) {
+    const at = count > 1 ? LAMP_END + k * step : len / 2;
+    while (i < s.length - 1 && s[i].s < at) i++;
+    const a = s[i - 1];
+    const b = s[i];
+    const f = (at - a.s) / Math.max(1e-6, b.s - a.s);
+    const x = a.x + (b.x - a.x) * f;
+    const y = a.y + (b.y - a.y) * f;
+    const n = normalAt(s, i);
+    for (const side of both ? [1, -1] : [k % 2 ? 1 : -1]) {
+      const px = x + n.x * kerb * side;
+      const py = y + n.y * kerb * side;
+      // The arm reaches back over the road
+      const ex = px - n.x * LAMP_ARM * side;
+      const ey = py - n.y * LAMP_ARM * side;
+      bar(posts, px, py, px, py, 0, LAMP_HEIGHT, 0.24);
+      bar(posts, px, py, ex, ey, LAMP_HEIGHT - 0.12, LAMP_HEIGHT + 0.06, 0.14);
+      const hx = ex - n.x * 0.5 * side;
+      const hy = ey - n.y * 0.5 * side;
+      bar(heads, ex + n.x * 0.1 * side, ey + n.y * 0.1 * side, hx, hy, LAMP_HEIGHT - 0.28, LAMP_HEIGHT - 0.04, 0.42);
+      pools.disc((ex + hx) / 2, (ey + hy) / 2, 5.5, 0, 12);
+    }
+  }
+}
+
+/** A bar `w` thick from (ax, ay) to (bx, by) between heights z0 and z1; with both ends the same, an upright post. */
+function bar(b: Builder, ax: number, ay: number, bx: number, by: number, z0: number, z1: number, w: number): void {
+  const len = Math.hypot(bx - ax, by - ay);
+  const h = w / 2;
+  const c =
+    len < 0.01
+      ? [[ax - h, ay - h], [ax + h, ay - h], [ax + h, ay + h], [ax - h, ay + h]]
+      : (() => {
+          const nx = (-(by - ay) / len) * h;
+          const ny = ((bx - ax) / len) * h;
+          return [[ax - nx, ay - ny], [bx - nx, by - ny], [bx + nx, by + ny], [ax + nx, ay + ny]];
+        })();
+  for (let k = 0; k < 4; k++) {
+    const p = c[k];
+    const q = c[(k + 1) % 4];
+    b.quad([p[0], p[1], z1], [p[0], p[1], z0], [q[0], q[1], z1], [q[0], q[1], z0]);
+  }
+  b.quad([c[0][0], c[0][1], z1], [c[1][0], c[1][1], z1], [c[3][0], c[3][1], z1], [c[2][0], c[2][1], z1]);
 }
 
 /** Height of a freeway's noise barrier: a low concrete parapet with panels on top. */

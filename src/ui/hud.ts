@@ -16,7 +16,7 @@ import { Mailbox } from './mailbox';
 import { EventsPanel } from './events';
 import { EVENT_KINDS } from '../sim/events';
 import { clock } from '../sim/weather';
-import { BRUSH_MAX, BRUSH_MIN, DISTRICT_MAX, DISTRICT_MIN, type Tool, type ToolController, STYLE_CHOICES, isRail } from './tools';
+import { BRUSH_MAX, BRUSH_MIN, DISTRICT_MAX, DISTRICT_MIN, STATION_TYPES, type Tool, type ToolController, STYLE_CHOICES, isRail } from './tools';
 
 /** Tools that share one dock button and are picked on a second row. */
 type Group = 'roads' | 'transport' | 'build' | 'names';
@@ -565,14 +565,12 @@ export class Hud {
       option(t.tool === 'train' ? '路線' : '車站路線', t.railAction === 'line', () => t.setRailAction('line'));
       this.sub.append(el('span', 'divider'));
       if (t.railAction === 'station') {
-        option('一般車站', !t.specialStation, () => {
-          t.setSpecialStation(false);
-          this.render();
-        });
-        option('特色車站', t.specialStation, () => {
-          t.setSpecialStation(true);
-          this.render();
-        });
+        for (const [type, label] of STATION_TYPES) {
+          option(label, t.stationType === type, () => {
+            t.setStationType(type);
+            this.render();
+          });
+        }
       } else if (t.railAction === 'track') {
         option('直線', !t.trackCurve, () => t.setTrackCurve(false));
         option('曲線', t.trackCurve, () => t.setTrackCurve(true));
