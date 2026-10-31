@@ -3,7 +3,6 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import type { RailKind, RailSystem } from '../sim/rail';
 import { TRAIN_CARS } from '../sim/traffic';
 import { GLASS, painted } from './kit';
-import { PORTAL_DEPTH } from './roadMesh';
 
 const MAX_CARS = 240;
 /** Brushed-steel 捷運 cars, white 台鐵 EMUs, and the 高鐵 700T's white */
@@ -79,6 +78,8 @@ export class TrainLayer {
       m.count = 0;
       m.frustumCulled = false;
       m.castShadow = shadows;
+      // Before the masks that open the ground over cuttings and sunken stations, so trains show down there
+      m.renderOrder = -9;
       this.group.add(m);
     }
   }
@@ -97,8 +98,8 @@ export class TrainLayer {
         const hy = front.p.y - back.p.y;
         const h = (front.h + back.h) / 2;
         this.q.setFromAxisAngle(this.up, Math.atan2(-hy, hx));
-        // Ramps into tunnels are drawn at street level up to the portal
-        this.p.set((front.p.x + back.p.x) / 2, (h > PORTAL_DEPTH ? Math.max(0, h) : h) + 0.1, (front.p.y + back.p.y) / 2);
+        // Track into tunnels sinks through an open cutting, so trains follow it down
+        this.p.set((front.p.x + back.p.x) / 2, h + 0.1, (front.p.y + back.p.y) / 2);
         this.m.compose(this.p, this.q, this.one);
         this.bodies.setMatrixAt(n, this.m);
         this.bands.setMatrixAt(n, this.m);

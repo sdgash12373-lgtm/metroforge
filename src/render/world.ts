@@ -173,6 +173,8 @@ export class World {
     /** viaducts of track, kept solid when the streets fade */
     railConcrete: new THREE.MeshLambertMaterial({ color: 0xb9b6ae, side: THREE.DoubleSide, flatShading: true }),
     tunnel: new THREE.MeshBasicMaterial({ color: 0x1c1f24, side: THREE.DoubleSide }),
+    // Writes depth only, over openings in the ground (track cuttings): the ground drawn after it is hidden there
+    groundMask: new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
     ballast: new THREE.MeshLambertMaterial({ color: 0x968d82, side: THREE.DoubleSide }),
     sleepers: new THREE.MeshLambertMaterial({ color: 0x6b5a48, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }),
     steel: new THREE.MeshLambertMaterial({ color: 0xa7adb3, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
@@ -849,6 +851,23 @@ export class World {
       // Layered bottom to top, for when track is drawn over the streets without depth testing
       [concrete, ballast, sleepers, steel].forEach((m, i) => (m.renderOrder = 3 + i));
       layer.tracks.add(ballast, sleepers, steel, concrete, new THREE.Mesh(g.dark, this.materials.tunnel));
+      // Track sinking into a tunnel: drawn before the mask that opens the ground over its cutting, and the ground
+      const m = this.materials;
+      const sunk = [
+        new THREE.Mesh(g.sunk.concrete, m.railConcrete),
+        new THREE.Mesh(g.sunk.dark, m.tunnel),
+        new THREE.Mesh(g.sunk.ballast, m.ballast),
+        new THREE.Mesh(g.sunk.sleepers, m.sleepers),
+        new THREE.Mesh(g.sunk.steel, m.steel),
+      ];
+      sunk.forEach((mesh, i) => {
+        mesh.renderOrder = -8 + i;
+        mesh.receiveShadow = true;
+      });
+      sunk[0].castShadow = true;
+      const mask = new THREE.Mesh(g.mask, m.groundMask);
+      mask.renderOrder = -1;
+      layer.tracks.add(...sunk, mask);
       layer.tunnels.geometry.dispose();
       layer.tunnels.geometry = buildTunnelOverlay(sys.net);
     }
