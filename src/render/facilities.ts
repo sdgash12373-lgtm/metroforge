@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { type Facility, dims, toWorld } from '../sim/facilities';
 import { hash01 } from '../sim/geometry';
 import { Builder } from './roadMesh';
+import { ecoPark, greenBuilding, plaza } from './greenery';
 import { arena, cityHall, dragonTiger, ferrisWheel, tower85 } from './landmarks';
 import type { SignSpec } from './civic';
 import { MARKET_LABELS, MARKET_SIGNS, nightMarket, youbike } from './market';
@@ -14,10 +15,16 @@ export class Kit {
   constructor(
     private b: Builder,
     private f: Facility,
+    private flip = 1,
   ) {}
 
+  /** The same frame mirrored along the street, so a model can be laid out left to right as seen from the street. */
+  fromStreet(): Kit {
+    return new Kit(this.b, this.f, -this.flip);
+  }
+
   private w(p: P3): number[] {
-    const q = toWorld(this.f, p[0], p[1]);
+    const q = toWorld(this.f, p[0] * this.flip, p[1]);
     return [q.x, q.y, p[2]];
   }
 
@@ -67,58 +74,6 @@ export class Kit {
     this.prism(u, v, 0.3 * s, 0.3 * s, 0, 2 * s, 0x7a5a3c, 5);
     this.prism(u, v, 2.2 * s, 0, 1.6 * s, 6.5 * s, 0x4f8f45, 6);
   }
-}
-
-/** Glass offices stepping back in green terraces, with a garden on the roof. */
-function greenBuilding(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.1, 0xa7c49a);
-  const glass = 0x7fb0c6;
-  const steps = [
-    [-14, -10, 14, 12, 0, 14],
-    [-12, -6, 12, 12, 14, 28],
-    [-10, -2, 10, 12, 28, 42],
-  ];
-  for (const [u0, v0, u1, v1, z0, z1] of steps) {
-    k.box(u0, v0, u1, v1, z0, z1, glass);
-    for (let z = z0 + 3.5; z < z1; z += 3.5) k.box(u0 - 0.1, v0 - 0.1, u1 + 0.1, v1 + 0.1, z, z + 0.6, 0xe8efe9);
-    // Planted terrace in front of the next step up
-    k.box(u0 - 0.4, v0 - 0.4, u1 + 0.4, v0 + 4, z1, z1 + 1, 0x5aa04e);
-  }
-  // Green wall up one side
-  k.box(14, -10, 14.6, 12, 0, 14, 0x4f8f45);
-  for (const [u, v] of [[-6, 6], [5, 8], [0, 3]]) k.tree(u, v, 0.55);
-  k.box(-6, 6, 6, 9, 42, 43, 0x5aa04e);
-  for (const u of [-13, -6, 6, 13]) k.tree(u, -14, 0.7);
-}
-
-/** Paved square with lawns, a fountain and shade trees. */
-function plaza(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.12, 0xd9cfbd);
-  for (const [su, sv] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) k.rect(su * 4, sv * 4, su * 16, sv * 16, 0.16, 0x86c062);
-  k.prism(0, 0, 4.5, 4.5, 0.1, 0.9, 0xbfb7a6, 12);
-  k.prism(0, 0, 3.8, 3.8, 0.9, 1, 0x6fb7e0, 12);
-  k.prism(0, 0, 0.5, 0.2, 1, 3.4, 0xe6f4fb, 6);
-  for (const [u, v] of [[-12, -12], [12, -12], [-12, 12], [12, 12], [-16, 0], [16, 0], [0, 16]]) k.tree(u, v, 0.9);
-}
-
-/** Wetland, ponds and woods with a boardwalk through them. */
-function ecoPark(k: Kit, w: number, d: number): void {
-  k.rect(-w / 2, -d / 2, w / 2, d / 2, 0.12, 0x7fb860);
-  k.prism(-12, 6, 18, 18, 0.1, 0.24, 0x4f97bf, 14, 0.3);
-  k.prism(20, -8, 10, 10, 0.1, 0.24, 0x4f97bf, 10);
-  k.box(-36, -2, 36, 1, 0.3, 0.7, 0xa47c55);
-  k.box(-2, -d / 2, 1, -2, 0.3, 0.7, 0xa47c55);
-  // Reeds at the water's edge, a bird hide on the pond
-  for (let a = 0; a < 12; a++) k.prism(-12 + Math.cos(a) * 17, 6 + Math.sin(a) * 17, 0.6, 0.1, 0, 1.6, 0x9abf5a, 4);
-  k.box(-14, 4, -9, 8, 0.6, 3.5, 0x8a6a48);
-  const trees: [number, number, number][] = [];
-  for (let i = 0; i < 40; i++) {
-    const u = ((i * 37) % 76) - 38;
-    const v = ((i * 53) % 66) - 33;
-    if (Math.hypot(u + 12, v - 6) < 20 || Math.hypot(u - 20, v + 8) < 12 || Math.abs(v) < 4) continue;
-    trees.push([u, v, 0.8 + ((i * 7) % 5) * 0.12]);
-  }
-  for (const [u, v, sc] of trees) k.tree(u, v, sc);
 }
 
 /** A walkway over the road on two piers, with stairs down to each kerb. */
