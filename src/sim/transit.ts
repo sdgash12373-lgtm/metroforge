@@ -153,14 +153,20 @@ export interface BusStop {
   style?: StationStyle;
   /** which side of the track its building stands on, when built on its own */
   face?: 1 | -1;
+  /** an elevated metro station built in the large style: a white sail roof on masts, 4 × 15 cells */
+  look?: MetroLook;
 }
+
+export type MetroLook = 'canopy';
 
 /** 'twin' and 'triple' are 共構 stations: one building over train and metro (and high-speed) together. */
 export type StationStyle = 'standard' | RegionName | HubStyle;
+/** What a station looks like and covers: its style, or for a metro station its look. */
+export type StationShape = StationStyle | MetroLook;
 export type HubStyle = 'twin' | 'triple';
-export const isHub = (style?: StationStyle): style is HubStyle => style === 'twin' || style === 'triple';
+export const isHub = (style?: StationShape): style is HubStyle => style === 'twin' || style === 'triple';
 /** Stations whose metro and high-speed stops belong to the train station: 共構 ones, and Kaohsiung's (三鐵共構, all underground). */
-export const isShared = (style?: StationStyle): boolean => isHub(style) || style === 'kaohsiung';
+export const isShared = (style?: StationShape): boolean => isHub(style) || style === 'kaohsiung';
 
 /** A piece of a line's route: one lane, from and to travel distances along it. */
 export interface PathPiece {

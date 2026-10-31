@@ -1,7 +1,7 @@
 import { type Vec2, bboxNear, closestOnSamples, quadPoint, quadTangent, tAtLength } from './geometry';
 import type { RailKind, RailSystem } from './rail';
 import { type RoadNetwork, roadWidth } from './roads';
-import { type BusStop, type HubStyle, type StationStyle, isHub } from './transit';
+import { type BusStop, type HubStyle, type StationShape, type StationStyle, isHub } from './transit';
 
 /** Where a station stands on its track: the point, the heading, and the track's height. */
 export interface StationPose {
@@ -36,6 +36,9 @@ const BUILDING: Record<RailKind, Rect[]> = {
   hsr: [[-32.2, 32.2, 12.3, 35.7]],
   metro: [[-3.7, 4.5, 8.2, 13.5]],
 };
+
+/** Ground a large elevated metro station covers (its sail roof, stairs and escalators): 15 × 4 cells. */
+export const CANOPY_STATION: Rect = [-60, 60, -16, 16];
 
 /** Ground Kaohsiung's underground train stations cover: their park roof, towers and sunken plaza. */
 export const KAOHSIUNG_STATION: Rect = [-60, 60, -28, 38];
@@ -91,7 +94,8 @@ export function stationFront(style?: StationStyle): number {
  * The parts of a station that stand on the ground: at street level, or raised over it. A region's own train station
  * (`style`) covers more: Kaohsiung's spreads its roof and sunken plaza over the tracks, Pingtung's its plaza in front.
  */
-export function stationRects(kind: RailKind, h: number, style?: StationStyle): Rect[] {
+export function stationRects(kind: RailKind, h: number, style?: StationShape): Rect[] {
+  if (kind === 'metro' && style === 'canopy' && h > 0) return [CANOPY_STATION];
   // A 共構 station's train stop carries the whole building; its metro and high-speed stops add nothing
   if (isHub(style)) return kind === 'train' ? HUBS[style].rects : [];
   if (style === 'kaohsiung' && kind !== 'train') return [];
@@ -103,7 +107,7 @@ export function stationRects(kind: RailKind, h: number, style?: StationStyle): R
 }
 
 /** Whether `pt` is within `margin` of the ground a station covers, with its building on side `side` (±1). */
-export function stationCovers(kind: RailKind, pose: StationPose, side: number, pt: Vec2, margin: number, style?: StationStyle): boolean {
+export function stationCovers(kind: RailKind, pose: StationPose, side: number, pt: Vec2, margin: number, style?: StationShape): boolean {
   const dx = pt.x - pose.p.x;
   const dy = pt.y - pose.p.y;
   // A building on the -1 side is the station turned round, so u flips with v

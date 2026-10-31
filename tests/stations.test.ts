@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { City } from '../src/sim/city';
+import { City, EXIT_CELLS } from '../src/sim/city';
 import { closestOnSamples } from '../src/sim/geometry';
-import { asphaltWidth } from '../src/sim/roads';
+import { ELEVATED_HEIGHT, TUNNEL_DEPTH, asphaltWidth } from '../src/sim/roads';
 import { CAR_LINE, CROSSWALK, SCOOTER_LINE, findJunctions } from '../src/sim/signals';
 import { Zone } from '../src/sim/zoning';
-import { entranceSpot } from '../src/render/stations';
 import { stationCovers, stationSide } from '../src/sim/stations';
 
 const free = (x: number, y: number) => ({ kind: 'free' as const, p: { x, y } });
@@ -22,46 +21,109 @@ const offAsphalt = (city: City, p: { x: number; y: number }) =>
   Math.min(...[...city.net.segments.values()].map((s) => closestOnSamples(s.samples, p).d - asphaltWidth(s) / 2));
 
 describe('metro entrances', () => {
-  it('stand beside the street, not on it, when the station is under a road', () => {
+  /** Crossroads with an underground metro line under the east-west road, stations at x = ±100. */
+  function metroCity(): City {
     const city = crossroads();
-    for (const want of [
-      { x: 40, y: 0 },
-      { x: 0, y: -60 },
-      { x: 3, y: 3 },
-    ]) {
-      const spot = entranceSpot(city.net, want)!;
-      expect(spot).not.toBeNull();
-      expect(offAsphalt(city, spot)).toBeGreaterThan(1.8);
-      expect(Math.hypot(spot.x - want.x, spot.y - want.y)).toBeLessThan(20);
+    city.buildTrack('metro', free(-180, 0), null, free(180, 0), TUNNEL_DEPTH, true);
+    const t = city.rails.metro.transit;
+    const a = t.stopAt({ x: -100, y: 0 }, 8)!;
+    const b = t.stopAt({ x: 100, y: 0 }, 8)!;
+    expect(city.createLine(t, [a.id, b.id]).ok).toBe(true);
+    return city;
+  }
+  const lotsOf = (city: City) => [...city.net.segments.values()].flatMap((s) => s.lots);
+
+  it('take three first-row cells in a row beside a street, two per station', () => {
+    const city = metroCity();
+    const exits = city.metroExits();
+    expect(exits.length).toBe(4);
+    for (const e of exits) {
+      expect(e.cells.length).toBe(EXIT_CELLS);
+      for (const c of e.cells) expect(offAsphalt(city, c)).toBeGreaterThan(1.8);
+      // A cell apart, in a line
+      expect(Math.hypot(e.cells[2].x - e.cells[0].x, e.cells[2].y - e.cells[0].y)).toBeCloseTo(16, 0);
+      for (const c of e.cells) expect(city.occupied(c)).toBe(true);
+    }
+    // No two entrances share a cell
+    const cells = exits.flatMap((e) => e.cells);
+    for (let i = 0; i < cells.length; i++) for (let j = i + 1; j < cells.length; j++) expect(Math.hypot(cells[i].x - cells[j].x, cells[i].y - cells[j].y)).toBeGreaterThan(4);
+  });
+
+  it('are skipped by the zoning brush and stay put when everything around is zoned', () => {
+    const city = metroCity();
+    const before = JSON.stringify(city.metroExits().map((e) => e.cells));
+    city.paint({ x: 0, y: 0 }, 300, Zone.Commercial, true);
+    expect(JSON.stringify(city.metroExits().map((e) => e.cells))).toBe(before);
+    for (const e of city.metroExits()) {
+      for (const c of e.cells) {
+        const lot = lotsOf(city).find((l) => Math.hypot(l.x - c.x, l.y - c.y) < 0.1)!;
+        expect(lot.blocked).toBe(true);
+        expect(lot.zone).toBe(Zone.None);
+      }
     }
   });
 
-  it('still keep off the roads when every lot is zoned', () => {
+  it('clear the buildings that stood where a station is added later', () => {
     const city = crossroads();
     city.paint({ x: 0, y: 0 }, 300, Zone.Commercial);
-    const spot = entranceSpot(city.net, { x: 40, y: 0 })!;
-    expect(offAsphalt(city, spot)).toBeGreaterThan(1.8);
+    for (const l of lotsOf(city)) if (l.zone) l.level = 3;
+    city.buildTrack('metro', free(-180, 0), null, free(180, 0), TUNNEL_DEPTH, true);
+    const t = city.rails.metro.transit;
+    const a = t.stopAt({ x: -100, y: 0 }, 8)!;
+    const b = t.stopAt({ x: 100, y: 0 }, 8)!;
+    city.createLine(t, [a.id, b.id]);
+    const exits = city.metroExits();
+    expect(exits.length).toBe(4);
+    for (const e of exits) {
+      for (const c of e.cells) {
+        const lot = lotsOf(city).find((l) => Math.hypot(l.x - c.x, l.y - c.y) < 0.1)!;
+        expect(lot.blocked).toBe(true);
+        expect(lot.level).toBe(0);
+      }
+    }
   });
 
-  it('never go inside a facility on a roadside lot', () => {
+  it('never stand on a facility', () => {
     const city = new City();
     city.money = 1e9;
     city.buildRoad(free(-200, 0), null, free(200, 0), true);
-    const spot = city.facilitySpot('police', { x: 40, y: 22 });
+    const spot = city.facilitySpot('police', { x: -85, y: 22 });
     const police = city.buildFacility('police', spot.p, spot.angle, true).facility!;
-    const at = entranceSpot(city.net, { x: 40, y: 4 })!;
-    const blocked = city.net.segments.values().next().value!.lots.filter((l) => l.blocked);
-    expect(blocked.length).toBeGreaterThan(0);
-    // Not on any lot the station blocks
-    for (const l of blocked) expect(Math.hypot(l.x - at.x, l.y - at.y)).toBeGreaterThan(3);
-    expect(Math.hypot(police.p.x - at.x, police.p.y - at.y)).toBeGreaterThan(10);
+    city.buildTrack('metro', free(-180, 0), null, free(180, 0), TUNNEL_DEPTH, true);
+    const t = city.rails.metro.transit;
+    city.createLine(t, [t.stopAt({ x: -100, y: 0 }, 8)!.id, t.stopAt({ x: 100, y: 0 }, 8)!.id]);
+    for (const e of city.metroExits()) for (const c of e.cells) expect(Math.hypot(police.p.x - c.x, police.p.y - c.y)).toBeGreaterThan(8);
+  });
+});
+
+describe('large elevated metro stations', () => {
+  it('cover 15 × 4 cells and clear what stood there', () => {
+    const city = new City();
+    city.money = 1e9;
+    city.buildRoad(free(-200, 0), null, free(200, 0), true);
+    city.paint({ x: 0, y: 0 }, 300, Zone.Commercial);
+    for (const l of [...city.net.segments.values()].flatMap((s) => s.lots)) if (l.zone) l.level = 2;
+    city.buildTrack('metro', free(-180, 30), null, free(180, 30), ELEVATED_HEIGHT, true);
+    const t = city.rails.metro.transit;
+    const stop = t.stopAt({ x: 0, y: 30 }, 8)!;
+    expect(city.setMetroLook(stop, 'canopy').ok).toBe(true);
+    const spot = city.stationSpots().find((s) => s.stop === stop)!;
+    expect(stationCovers('metro', spot.pose, spot.side, { x: 55, y: 30 + 14 }, 0, spot.style)).toBe(true);
+    expect(stationCovers('metro', spot.pose, spot.side, { x: 65, y: 30 }, 0, spot.style)).toBe(false);
+    const lot = [...city.net.segments.values()].flatMap((s) => s.lots).find((l) => Math.abs(l.x - 20) < 5 && l.y > 12 && l.y < 44)!;
+    expect(lot.blocked).toBe(true);
+    expect(lot.level).toBe(0);
+    // Saved and loaded back
+    const back = City.deserialize(JSON.parse(JSON.stringify(city.serialize())));
+    expect(back.rails.metro.transit.stops.get(stop.id)!.look).toBe('canopy');
   });
 
-  it('keep two entrances of one station apart', () => {
-    const city = crossroads();
-    const a = entranceSpot(city.net, { x: 40, y: 0 })!;
-    const b = entranceSpot(city.net, { x: 40, y: 0 }, [a])!;
-    expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(12);
+  it('only stand on elevated track', () => {
+    const city = new City();
+    city.money = 1e9;
+    city.buildTrack('metro', free(-180, 30), null, free(180, 30), TUNNEL_DEPTH, true);
+    const stop = city.rails.metro.transit.stopAt({ x: 0, y: 30 }, 8)!;
+    expect(city.setMetroLook(stop, 'canopy').ok).toBe(false);
   });
 });
 

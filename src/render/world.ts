@@ -25,7 +25,7 @@ import { PedestrianLayer } from './pedestrians';
 import { RAIL_KINDS, type RailKind, TRACK_OFFSET } from '../sim/rail';
 import type { RoadNetwork, RoadSegment } from '../sim/roads';
 import { airportMaterial, buildAirportGeometry, PlaneLayer, TaxiRank } from './airport';
-import { buildTrackGeometries } from './railMesh';
+import { TRACK_LOOK, buildTrackGeometries } from './railMesh';
 import { StationLayer } from './stations';
 import { TrainLayer } from './trains';
 import { ShipLayer } from './ships';
@@ -175,9 +175,9 @@ export class World {
     tunnel: new THREE.MeshBasicMaterial({ color: 0x1c1f24, side: THREE.DoubleSide }),
     // Writes depth only, over openings in the ground (track cuttings): the ground drawn after it is hidden there
     groundMask: new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
-    ballast: new THREE.MeshLambertMaterial({ color: 0x968d82, side: THREE.DoubleSide }),
-    sleepers: new THREE.MeshLambertMaterial({ color: 0x6b5a48, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }),
-    steel: new THREE.MeshLambertMaterial({ color: 0xa7adb3, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
+    ballast: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }),
+    sleepers: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 }),
+    steel: new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }),
   };
 
   constructor(container: HTMLElement, shadows: boolean) {
@@ -271,7 +271,11 @@ export class World {
         stations: new StationLayer(shadows, this.sky.night),
         trains: new TrainLayer(kind, shadows),
         lines: new THREE.Mesh(new THREE.BufferGeometry(), pathMaterial()),
-        tunnels: new THREE.Mesh(new THREE.BufferGeometry(), this.tunnels.material),
+        // Each kind's tunnels in its own colour (train red-brown, high-speed orange, metro green)
+        tunnels: new THREE.Mesh(
+          new THREE.BufferGeometry(),
+          new THREE.MeshBasicMaterial({ color: TRACK_LOOK[kind].tunnel, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }),
+        ),
         version: -1,
         transitVersion: -1,
         roadsVersion: -1,
@@ -840,7 +844,7 @@ export class World {
         (child as THREE.Mesh).geometry.dispose();
         layer.tracks.remove(child);
       }
-      const g = buildTrackGeometries(sys.net, kind !== 'metro');
+      const g = buildTrackGeometries(sys.net, kind);
       const ballast = new THREE.Mesh(g.ballast, this.materials.ballast);
       ballast.receiveShadow = true;
       const concrete = new THREE.Mesh(g.concrete, this.materials.railConcrete);
@@ -876,7 +880,7 @@ export class World {
       layer.transitVersion = sys.transit.version;
       layer.roadsVersion = city.roadsVersion;
       layer.zoningVersion = city.zoningVersion;
-      layer.stations.rebuild(sys, city.net);
+      layer.stations.rebuild(sys, city.net, kind === 'metro' ? city.metroExits() : []);
       layer.lines.geometry.dispose();
       layer.lines.geometry = buildLinePaths(sys.net, [...sys.transit.lines.values()], 1.4, TRACK_OFFSET);
     }

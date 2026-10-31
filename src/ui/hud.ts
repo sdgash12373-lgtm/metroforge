@@ -585,7 +585,15 @@ export class Hud {
         option('直線', !t.trackCurve, () => t.setTrackCurve(false));
         option('曲線', t.trackCurve, () => t.setTrackCurve(true));
         this.levelOptions(option, '結束拉軌');
-      } else this.renderLineDock(option);
+      } else {
+        // Metro stations on elevated track can be built large: a white sail roof on masts
+        if (t.tool === 'metro') {
+          option('一般站', t.metroLook === 'standard', () => t.setMetroLook('standard'));
+          option('大型高架站', t.metroLook === 'canopy', () => t.setMetroLook('canopy'));
+          this.sub.append(el('span', 'divider'));
+        }
+        this.renderLineDock(option);
+      }
     } else if (this.tools.tool === 'airport') {
       this.renderAirportDock(option);
     } else if (this.tools.tool === 'bulldoze') {
