@@ -108,4 +108,17 @@ describe('整地', () => {
     expect(t.water(lake.x, lake.y)).toBe(true);
     expect(t.sea(lake.x, lake.y)).toBe(false);
   });
+
+  it('takes a port on the edge of reclaimed land', () => {
+    const city = rich();
+    city.level = 3;
+    for (let x = -1900; x <= -1700; x += 40) {
+      brush(city, 'raise', x, -150, 80, 12);
+      brush(city, 'level', x, -150, 80, 12);
+    }
+    expect(city.terrain.sea(-1900, -150)).toBe(false);
+    expect(city.buildRoad(free(-1900, -320), null, free(-1900, -100)).ok).toBe(true);
+    const spot = city.facilitySpot('cruisePort', { x: -1920, y: -220 });
+    expect(city.facilityProblem('cruisePort', spot.p, spot.angle)).toBeNull();
+  });
 });

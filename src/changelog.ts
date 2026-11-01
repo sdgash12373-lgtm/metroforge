@@ -8,6 +8,15 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '3.19.2',
+    date: '2026-11-01',
+    title: '填海造陸可蓋港口',
+    notes: [
+      '填海造陸的新海岸線現在算海岸：港口（貨運港、旅遊港）可以蓋在填出來的陸地邊上，碼頭伸進海裡',
+      '在海面上拉平面道路時，提示改為「這裡是水面」，不再誤說是地洞',
+    ],
+  },
+  {
     version: '3.19.1',
     date: '2026-11-01',
     title: '澎湖旅遊港',

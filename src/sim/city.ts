@@ -404,6 +404,8 @@ export interface CityStats {
 
 /** Facility ends at most this far from a road's edge. */
 const FACILITY_ROAD_GAP = 4;
+/** A port's yard may run over shore this high (meters): the slope down from the land to the sea. */
+const PORT_SHORE = 2;
 /** A new airport's access road reaches this far for a street, meters. */
 export const AIRPORT_ROAD_REACH = 400;
 /** An airport's access road has two lanes each way. */
@@ -1276,7 +1278,7 @@ export class City {
       if (h < -1) continue;
       // Through a tunnel bore the hill is no obstacle, at street level or on a viaduct
       if (land?.bores.length && land.bored(p) && !terrain.water(p.x, p.y)) continue;
-      if (h <= 1 && land?.touched(p.x, p.y) && terrain.height(p.x, p.y) < -0.3) return '這裡是挖下去的地洞，地面蓋不了（先填平，或用高架跨過）';
+      if (h <= 1 && land?.touched(p.x, p.y) && terrain.height(p.x, p.y) < -0.3 && !terrain.water(p.x, p.y)) return '這裡是挖下去的地洞，地面蓋不了（先填平，或用高架跨過）';
       if (h <= 1) {
         if (terrain.water(p.x, p.y)) return '這裡是水面，地面蓋不了（改用高架跨過，或從地下穿過）';
         if (terrain.height(p.x, p.y) > 0.05) return '這裡是山坡地，地面蓋不了（改用隧道穿過）';
@@ -2207,7 +2209,9 @@ export class City {
         const fromRoad = (v + d / 2) / d;
         const sea = t.sea(q.x, q.y);
         const land = buildable(t, q);
-        if (!land && !sea) return '港口不能蓋在山坡或河流上，要蓋在平坦的海岸線';
+        // The shore's own strip between land and sea (beach, or the edge of land 整地 has reclaimed) is neither,
+        // and fine; only a hillside or inland water stops a port
+        if (!land && !sea && (t.water(q.x, q.y) || t.height(q.x, q.y) > PORT_SHORE)) return '港口不能蓋在山坡或河流上，要蓋在平坦的海岸線';
         if (fromRoad >= 1 - PORT_BERTH && !sea) return '港口要蓋在海岸線上（靠路的一側在陸地，碼頭伸進海裡）';
         if (fromRoad <= PORT_LAND && land) ashore++;
       }
