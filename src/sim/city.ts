@@ -794,6 +794,13 @@ export class City {
     }
     // Cities without an outside connection (old saves) treat every road as connected
     const roots = this.outside.size ? [...this.outside] : [...this.net.nodes.keys()];
+    // Ferries bring people in too: the streets at a 旅遊港 count as a way in, so an island with one grows
+    for (const f of this.facilities.values()) {
+      if (f.kind !== 'cruisePort') continue;
+      const at = this.portRoad(f);
+      const seg = at && this.net.segments.get(at.seg);
+      if (seg) roots.push(seg.a, seg.b);
+    }
     const stack = roots.filter((n) => this.net.nodes.has(n));
     for (const n of stack) this.connected.add(n);
     while (stack.length) {
@@ -2290,13 +2297,16 @@ export class City {
     this.facilities.set(f.id, f);
     this.facilitiesVersion++;
     this.landChanged();
+    if (kind === 'cruisePort') this.computeConnectivity();
     return f;
   }
 
   removeFacility(id: number): void {
-    if (!this.facilities.delete(id)) return;
+    const f = this.facilities.get(id);
+    if (!f || !this.facilities.delete(id)) return;
     this.facilitiesVersion++;
     this.landChanged();
+    if (f.kind === 'cruisePort') this.computeConnectivity();
   }
 
   facilityAt(p: Vec2, pad = 0): Facility | null {

@@ -125,6 +125,7 @@ describe('整地', () => {
   it('takes a port off a street along the very edge of reclaimed land', () => {
     const city = rich();
     city.level = 3;
+    city.buildFreeway('kaohsiung');
     for (let x = -1900; x <= -1700; x += 40) {
       brush(city, 'raise', x, -150, 80, 12);
       brush(city, 'level', x, -150, 80, 12);
@@ -132,8 +133,16 @@ describe('整地', () => {
     // The last land going south (into the sea) at x = -1800, and a street right along it
     let edge = -150;
     while (!city.terrain.sea(-1800, edge + 2)) edge += 2;
-    expect(city.buildRoad(free(-1860, edge - 8), null, free(-1740, edge - 8)).ok).toBe(true);
+    const road = city.buildRoad(free(-1860, edge - 8), null, free(-1740, edge - 8));
+    expect(road.ok).toBe(true);
     const spot = city.facilitySpot('cruisePort', { x: -1800, y: edge + 20 });
     expect(city.facilityProblem('cruisePort', spot.p, spot.angle)).toBeNull();
+    // Not joined to any road out of town, yet the ferries make it a way in: the street can grow
+    const seg = road.segs![0];
+    expect(city.isConnected(seg)).toBe(false);
+    expect(city.buildFacility('cruisePort', spot.p, spot.angle).ok).toBe(true);
+    expect(city.isConnected(seg)).toBe(true);
+    const copy = City.deserialize(city.serialize());
+    expect(copy.isConnected(copy.net.segments.get(seg.id)!)).toBe(true);
   });
 });

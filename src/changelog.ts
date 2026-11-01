@@ -8,6 +8,15 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '3.19.4',
+    date: '2026-11-02',
+    title: '離島旅遊港帶來居民',
+    notes: [
+      '旅遊港也算對外交通：只接到旅遊港、沒有道路連到市區的離島（或填海造出的島），分區也會有人進來發展',
+      '拆掉旅遊港後，沒有其他對外道路的島會恢復成「未連接道路」',
+    ],
+  },
+  {
     version: '3.19.3',
     date: '2026-11-02',
     title: '填海港口與開場畫面',
