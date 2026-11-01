@@ -172,6 +172,8 @@ uniform vec3 uSky;
 uniform float uLight;
 uniform float uTime;
 uniform float uAmp;
+uniform sampler2D uDepth;
+uniform vec4 uBounds;
 varying vec3 vWorld;
 varying vec2 vDepth;
 varying float vHeight;
@@ -179,9 +181,16 @@ varying float vOutside;
 #include <fog_pars_fragment>
 
 void main() {
-  // The land's edge: no sea beyond it
-  // (no discard: it would stop the GPU skipping hidden sea under the land early)
-  if (vOutside > 0.0 && vDepth.y < 0.02) { gl_FragColor = vec4(0.0); return; }
+  // Land off the map, round its edges and past them, goes on as plain dimmed ground, like a locked region (worked
+  // out per pixel: the sea disc's big outer triangles would blur it into steps)
+  vec2 uvB = (vWorld.xz - uBounds.xy) / (uBounds.zw - uBounds.xy);
+  if (texture2D(uDepth, clamp(uvB, vec2(0.5 / ${DEPTH_RES}.0), vec2(1.0 - 0.5 / ${DEPTH_RES}.0))).b > 0.5) {
+    gl_FragColor = vec4(vec3(0.15, 0.23, 0.10) * max(uLight, 0.12), 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+    #include <fog_fragment>
+    return;
+  }
   float far = distance(vWorld, cameraPosition);
   vec2 p = vWorld.xz / ${PATCH.toFixed(1)};
   vec4 a = texture2D(uNormal, p);
@@ -443,7 +452,10 @@ export class Ocean {
         const depth = WATER_LEVEL - terrain.height(x, y);
         const o = (j * res + i) * 4;
         data[o] = Math.round(255 * Math.min(1, Math.max(0, depth / FULL_DEPTH)));
-        data[o + 1] = depth > 0 && terrain.sea(x, y) ? 255 : 0;
+        const sea = depth > 0 && terrain.sea(x, y);
+        data[o + 1] = sea ? 255 : 0;
+        // Land off the map (no region, so no ground is drawn there)
+        data[o + 2] = !sea && terrain.region(x, y) === null ? 255 : 0;
         data[o + 3] = 255;
       }
     }
@@ -474,7 +486,7 @@ export class Ocean {
     this.since += dt;
     // The waves are worked out at most 30 times a second, and less often seen from high up, where they barely show
     const high = focusHeight(focus);
-    if (this.since >= (high > 900 ? 1 / 10 : 1 / 30)) {
+    if (this.since >= (high > 4000 ? 1 / 4 : high > 900 ? 1 / 10 : 1 / 30)) {
       this.since = 0;
       this.simulate();
     }
@@ -510,6 +522,9 @@ export class Ocean {
     // Snap the disc to a few meters so its vertices do not crawl over the waves as the view moves
     this.mesh.position.x = Math.round(focus.x / 8) * 8;
     this.mesh.position.z = Math.round(focus.y / 8) * 8;
+    // From high over the whole map the sea stretches out to its horizon
+    const spread = Math.max(1, (focusHeight(focus) * 2.2) / REACH);
+    this.mesh.scale.set(spread, 1, spread);
     const u = this.material.uniforms;
     u.uAmp.value = 0.75 + 1.6 * wind;
     u.uSunDir.value.copy(sun).normalize();

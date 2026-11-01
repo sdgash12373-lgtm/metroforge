@@ -217,6 +217,8 @@ export class DriveMode {
     this.world.rig.driving = true;
     this.savedNear = this.world.rig.camera.near;
     this.world.rig.camera.near = 0.3;
+    // Zoomed far out the far plane reaches tens of kilometres; from the street that would cost depth precision
+    this.world.rig.camera.far = 6000;
     this.world.rig.camera.updateProjectionMatrix();
     this.root.hidden = false;
     document.body.classList.add('driving');

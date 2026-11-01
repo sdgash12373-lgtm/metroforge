@@ -79,16 +79,17 @@ export function buildGroundGeometry(terrain: Terrain, open?: ReadonlySet<RegionN
   const pos: number[] = [];
   const colors: number[] = [];
   const h = cornerHeights(terrain);
-  const coast = coastOf(terrain, h);
+  const coast = coastOf(terrain, h, open);
   const b = terrain.bounds;
-  // Regions not opened yet lie under the veil: their shores keep the plain cells, which saves most of the ground's
-  // triangles on a big map (rivers and island coasts are long)
+  // Regions not opened yet are shaded darker, and their shores keep the plain cells (their coast isn't worked
+  // out), which saves most of the ground's triangles on a big map: rivers and island coasts are long
   const level = (i: number, j: number) => {
     const n = coast.level(i, j);
     if (n === 1 || !open) return n;
     const r = terrain.region(b.minX + (i + 0.5) * STEP, b.minY + (j + 0.5) * STEP);
     return r && !open.has(r) ? 1 : n;
   };
+  let shut = false;
   const c = new THREE.Color();
   const flatColour = (start: number) => {
     const ys = [pos[start + 1], pos[start + 4], pos[start + 7]];
@@ -97,11 +98,16 @@ export function buildGroundGeometry(terrain: Terrain, open?: ReadonlySet<RegionN
     landColor(lo < 0 ? lo : (lo + hi) / 2, c);
     const v = hash01(pos[start] + pos[start + 3], pos[start + 2] + pos[start + 8]);
     c.offsetHSL((v - 0.5) * 0.02, 0, (v - 0.5) * 0.03);
+    if (shut) c.lerp(LOCKED, LOCKED_SHADE);
     for (let k = 0; k < 3; k++) colors.push(c.r, c.g, c.b);
   };
   eachCell(terrain, (x, y) => {
     const i = Math.round((x - b.minX) / STEP);
     const j = Math.round((y - b.minY) / STEP);
+    if (open) {
+      const r = terrain.region(x + STEP / 2, y + STEP / 2);
+      shut = !!r && !open.has(r);
+    }
     const n = level(i, j);
     if (n === 1) {
       const at = pos.length;
@@ -206,16 +212,9 @@ export function buildWaterGeometry(terrain: Terrain): THREE.BufferGeometry {
   return g;
 }
 
-/** A veil over the regions not opened yet, just above the ground. */
-export function buildLockedGeometry(terrain: Terrain, open: ReadonlySet<RegionName>): THREE.BufferGeometry {
-  const pos: number[] = [];
-  const ground = cornerHeights(terrain);
-  const h = (x: number, y: number) => Math.max(WATER_LEVEL, ground(x, y)) + 1.2;
-  eachCell(terrain, (x, y) => cellTriangles(x, y, h, pos), (r) => !open.has(r));
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  return g;
-}
+/** Regions not opened yet are drawn this much towards a dark slate. */
+const LOCKED = new THREE.Color(0x1d2630);
+const LOCKED_SHADE = 0.38;
 
 export interface TreeSpot {
   x: number;

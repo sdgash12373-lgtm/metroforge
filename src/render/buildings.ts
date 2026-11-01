@@ -195,6 +195,12 @@ export class BuildingLayer {
     this.tiles.renderOrder = 1;
   }
 
+  /** Seen from high over the map, benches, parked cars, lawns and shop signs are under a pixel: they are left out. */
+  farView(far: boolean): void {
+    this.decor.visible = !far;
+    this.signs.visible = !far;
+  }
+
   /** Draw the facades, and light windows, shop fronts and signs at night. */
   light(night: { value: number }): void {
     facadeMaterial(this.material, night);
