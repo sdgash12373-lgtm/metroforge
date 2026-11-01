@@ -127,19 +127,21 @@ const BUCKET = 64;
  * (inside of curves, junction corners), or the cell in front of it is unusable.
  */
 export function recomputeBlocked(net: RoadNetwork, occupied?: (p: Vec2) => boolean): void {
-  const grid = new Map<string, Lot[]>();
+  // Numeric keys for the squares: this runs over every cell in town whenever a road changes
+  const key = (i: number, j: number) => (i + 32768) * 65536 + (j + 32768);
+  const grid = new Map<number, Lot[]>();
   const clearance = ROAD_WIDTH / 2 + CELL * 0.45;
   const segs = [...net.segments.values()];
   // Roads by the squares their reach covers, so each cell only checks the roads near it
-  const near = new Map<string, RoadSegment[]>();
+  const near = new Map<number, RoadSegment[]>();
   for (const seg of segs) {
     const pad = clearance + (roadWidth(seg) - ROAD_WIDTH) / 2;
     for (let i = Math.floor((seg.bbox.minX - pad) / BUCKET); i <= Math.floor((seg.bbox.maxX + pad) / BUCKET); i++) {
       for (let j = Math.floor((seg.bbox.minY - pad) / BUCKET); j <= Math.floor((seg.bbox.maxY + pad) / BUCKET); j++) {
-        const key = `${i},${j}`;
-        const list = near.get(key);
+        const k = key(i, j);
+        const list = near.get(k);
         if (list) list.push(seg);
-        else near.set(key, [seg]);
+        else near.set(k, [seg]);
       }
     }
   }
@@ -147,7 +149,7 @@ export function recomputeBlocked(net: RoadNetwork, occupied?: (p: Vec2) => boole
     for (const lot of seg.lots) {
       let blocked = (lot.front !== null && lot.front.blocked) || !!occupied?.(lot);
       if (!blocked) {
-        for (const other of near.get(`${Math.floor(lot.x / BUCKET)},${Math.floor(lot.y / BUCKET)}`) ?? []) {
+        for (const other of near.get(key(Math.floor(lot.x / BUCKET), Math.floor(lot.y / BUCKET))) ?? []) {
           const clear = clearance + (roadWidth(other) - ROAD_WIDTH) / 2;
           if (!bboxNear(other.bbox, lot, clear)) continue;
           if (closestOnSamples(other.samples, lot).d < clear) {
@@ -161,8 +163,10 @@ export function recomputeBlocked(net: RoadNetwork, occupied?: (p: Vec2) => boole
       if (!blocked) {
         search: for (let i = -1; i <= 1; i++) {
           for (let j = -1; j <= 1; j++) {
-            for (const o of grid.get(`${gx + i},${gy + j}`) ?? []) {
-              if (Math.hypot(o.x - lot.x, o.y - lot.y) < CELL * 0.8) {
+            for (const o of grid.get(key(gx + i, gy + j)) ?? []) {
+              const dx = o.x - lot.x;
+              const dy = o.y - lot.y;
+              if (dx * dx + dy * dy < CELL * CELL * 0.64) {
                 blocked = true;
                 break search;
               }
@@ -174,10 +178,10 @@ export function recomputeBlocked(net: RoadNetwork, occupied?: (p: Vec2) => boole
       if (blocked) {
         lot.level = 0;
       } else {
-        const key = `${gx},${gy}`;
-        const cell = grid.get(key);
+        const k = key(gx, gy);
+        const cell = grid.get(k);
         if (cell) cell.push(lot);
-        else grid.set(key, [lot]);
+        else grid.set(k, [lot]);
       }
     }
   }

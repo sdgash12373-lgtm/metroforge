@@ -9,16 +9,21 @@ function rng(seed = 3) {
   return () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 }
 
-const ctx = (day: number, extra: Partial<EventContext> = {}): EventContext => ({ day, arena: true, happiness: 60, population: 50000, transit: 0, ...extra });
+type Extra = Partial<EventContext> & { arena?: boolean; transit?: number };
+/** One arena (id 0) unless `arena` is false, its fans `transit` share by train or bus. */
+const ctx = (day: number, extra: Extra = {}): EventContext => {
+  const { arena = true, transit = 0, ...rest } = extra;
+  return { day, arenas: arena ? [{ id: 0, transit }] : [], happiness: 60, population: 50000, ...rest };
+};
 
 /** Runs the book from `from` to `to` game days, returning the money it made and the cars it sent. */
-function run(book: EventBook, from: number, to: number, extra: Partial<EventContext> = {}, r = rng()) {
+function run(book: EventBook, from: number, to: number, extra: Extra = {}, r = rng()) {
   let money = 0;
   let cars = 0;
   for (let d = from; d < to; d += 1 / DAY_STEPS) {
     const s = book.step(ctx(d, extra), 1 / DAY_STEPS, r);
     money += s.money;
-    cars += s.cars;
+    for (const c of s.cars.values()) cars += c;
   }
   return { money, cars };
 }
@@ -149,5 +154,37 @@ describe('巨蛋活動', () => {
     city.tick(r);
     expect(city.events.history[0].name).toBe(o.name);
     expect(city.budget.events).toBe(city.events.history[0].net);
+  });
+
+  it('one arena per region: each keeps its own diary, so two halls on one night do not clash', () => {
+    const book = new EventBook();
+    book.offers.push({ id: 1, kind: 'concert', name: 'A', start: 1.8, hours: 4, cost: 2_000_000, capacity: 15000, keen: 85, expires: 1.5, arena: 10 });
+    book.offers.push({ id: 2, kind: 'concert', name: 'B', start: 1.8, hours: 4, cost: 2_000_000, capacity: 15000, keen: 85, expires: 1.5, arena: 20 });
+    book.accept(1);
+    expect(book.clashesWith(2)).toHaveLength(0);
+    book.accept(2);
+    const cars = new Map<number, number>();
+    const r = rng();
+    for (let d = 1; d < 2.2; d += 1 / DAY_STEPS) {
+      const s = book.step({ day: d, arenas: [{ id: 10, transit: 0 }, { id: 20, transit: 0.7 }], happiness: 60, population: 50000 }, 1 / DAY_STEPS, r);
+      for (const [id, c] of s.cars) cars.set(id, (cars.get(id) ?? 0) + c);
+    }
+    expect(book.history.every((h) => !h.clash && h.attendance === expectedAttendance(15000, 85))).toBe(true);
+    expect(cars.get(20)!).toBeLessThan(cars.get(10)! * 0.4);
+    // New offers go to the arena with the least on its books
+    const fresh = new EventBook();
+    fresh.booked.push({ id: 9, kind: 'sports', name: 'X', start: 9, hours: 3, cost: 1, capacity: 1, keen: 50, expires: 8, arena: 10 });
+    for (let d = 0; d < 0.5; d += 1 / DAY_STEPS) fresh.step({ day: d, arenas: [{ id: 10, transit: 0 }, { id: 20, transit: 0 }], happiness: 60, population: 50000 }, 1 / DAY_STEPS, r);
+    expect(fresh.offers[0].arena).toBe(20);
+  });
+
+  it('refuses a second arena in the same region', () => {
+    const city = new City();
+    city.money = 1e9;
+    city.buildRoad(free(-400, 0), null, free(400, 0), true);
+    const a = city.facilitySpot('arena', { x: 200, y: -60 });
+    expect(city.buildFacility('arena', a.p, a.angle).ok).toBe(true);
+    const b = city.facilitySpot('arena', { x: -200, y: -60 });
+    expect(city.facilityProblem('arena', b.p, b.angle)).toContain('每一區');
   });
 });

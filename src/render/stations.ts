@@ -178,7 +178,18 @@ class Frame {
   }
 
   /** A point at (u, v) and height y. */
+  /** -1 draws the frame mirrored along u (both sides of every face are drawn, so turning them over is harmless) */
+  private flip = 1;
+
+  /** The same frame drawn mirror-wise along u. */
+  mirrored(): Frame {
+    const f = new Frame(this.out, this.x, this.z, this.dx, this.dz);
+    f.flip = -this.flip;
+    return f;
+  }
+
   private at(u: number, v: number, y: number): number[] {
+    u *= this.flip;
     return [this.x + this.dx * u - this.dz * v, this.z + this.dz * u + this.dx * v, y];
   }
 
@@ -390,6 +401,7 @@ export class StationLayer {
           else if (stop.style === 'pingtung') pingtungStation(g, h, color);
           else if (stop.style === 'twin') twinStation(g, h, color);
           else if (stop.style === 'triple') tripleStation(g, h, color);
+          else if (stop.style === 'tripleLeft') tripleStation(g.mirrored(), h, color);
           else trainStation(g, h, color);
         } else if (isShared(stop.style)) hsrPlatforms(g, h, color);
         else hsrStation(g, h, color);

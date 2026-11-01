@@ -154,3 +154,31 @@ describe('三鐵共構 on either side of the street', () => {
     });
   }
 });
+
+describe('三鐵共構 exit on the left or right', () => {
+  for (const side of [-1, 1]) {
+    it(`puts the car park and elevated road where asked, facing the station from the street (${side < 0 ? 'north' : 'south'} side)`, () => {
+      for (const style of ['triple', 'tripleLeft'] as const) {
+        const { city, tap, y } = cityWithStreet('kaohsiung');
+        const at = side < 0 ? tap : { x: tap.x, y: y + 20 };
+        const r = city.buildHubStation(at, style);
+        expect(r.reason).toBeUndefined();
+        const spot = city.stationSpots().find((st) => st.kind === 'train')!;
+        expect(spot.style).toBe(style);
+        // Standing on the street, looking at the station: its right hand (north is -y, so turn clockwise on the map)
+        const look = { x: spot.pose.p.x - at.x, y: spot.pose.p.y - y };
+        const right = { x: -look.y, y: look.x };
+        const road = HUBS[style].road!;
+        const mid = city.hubPoint(spot.pose, spot.side, (road.u0 + road.u1) / 2, road.v);
+        const stub = city.net.segmentAt(mid, 3, ELEVATED_HEIGHT);
+        expect(stub?.seg.highway).toBe(true);
+        const toward = (mid.x - spot.pose.p.x) * right.x + (mid.y - spot.pose.p.y) * right.y;
+        if (style === 'triple') expect(toward).toBeGreaterThan(0);
+        else expect(toward).toBeLessThan(0);
+        // Saved and loaded as built
+        const loaded = City.deserialize(JSON.parse(JSON.stringify(city.serialize())));
+        expect(loaded.stationSpots().find((st) => st.kind === 'train')!.style).toBe(style);
+      }
+    });
+  }
+});

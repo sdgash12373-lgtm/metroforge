@@ -82,6 +82,19 @@ export const HUBS: Record<HubStyle, HubSpec> = {
     hsr: { v: -36, half: 82 },
     road: { v: 10, u0: 104, u1: 150 },
   },
+  // The same, its car park and elevated road on the other side
+  tripleLeft: {
+    rects: [
+      [-48, 60, -24, 40],
+      [-104, -48, -18, 34],
+      [-66, 66, -48, -24],
+    ],
+    front: 40,
+    train: 70,
+    metro: { v: -12, half: 30 },
+    hsr: { v: -36, half: 82 },
+    road: { v: 10, u0: -104, u1: -150 },
+  },
 };
 
 /** How far from the track a train station's building reaches on its own side: where the street it fronts must run. */

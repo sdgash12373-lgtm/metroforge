@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { type Quad, type Sample, type Vec2, normalize, sampleQuad } from '../sim/geometry';
-import { LANE_WIDTH, ROAD_WIDTH, type RoadNetwork, type RoadSegment, asphaltWidth, roadWidth } from '../sim/roads';
+import { LANE_WIDTH, ROAD_WIDTH, type RoadNetwork, type RoadNode, type RoadSegment, asphaltWidth, roadWidth } from '../sim/roads';
 import { CAR_LINE, CROSSWALK, type Junction, SCOOTER_LINE, TURN_BOX, findJunctions } from '../sim/signals';
 import { LANE_OFFSET } from '../sim/traffic';
 import type { PathPiece } from '../sim/transit';
@@ -55,12 +55,49 @@ export class Builder {
 
   geometry(): THREE.BufferGeometry {
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
-    if (this.col.length) g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3));
-    g.setIndex(this.idx);
-    g.computeVertexNormals();
+    const pos = new Float32Array(this.pos);
+    const n = pos.length / 3;
+    const idx = n < 65536 ? new Uint16Array(this.idx) : new Uint32Array(this.idx);
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    if (this.col.length) g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(this.col), 3));
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    g.setAttribute('normal', new THREE.BufferAttribute(vertexNormals(pos, idx), 3));
     return g;
   }
+}
+
+/**
+ * Smooth vertex normals of an indexed mesh, as three's computeVertexNormals makes them (each face's normal,
+ * weighted by its area, summed at its corners), straight on the typed arrays: roads are rebuilt as they are drawn.
+ */
+function vertexNormals(pos: Float32Array, idx: Uint16Array | Uint32Array): Float32Array {
+  const out = new Float32Array(pos.length);
+  for (let k = 0; k < idx.length; k += 3) {
+    const a = idx[k] * 3;
+    const b = idx[k + 1] * 3;
+    const c = idx[k + 2] * 3;
+    const ux = pos[c] - pos[b];
+    const uy = pos[c + 1] - pos[b + 1];
+    const uz = pos[c + 2] - pos[b + 2];
+    const vx = pos[a] - pos[b];
+    const vy = pos[a + 1] - pos[b + 1];
+    const vz = pos[a + 2] - pos[b + 2];
+    const nx = uy * vz - uz * vy;
+    const ny = uz * vx - ux * vz;
+    const nz = ux * vy - uy * vx;
+    for (const i of [a, b, c]) {
+      out[i] += nx;
+      out[i + 1] += ny;
+      out[i + 2] += nz;
+    }
+  }
+  for (let i = 0; i < out.length; i += 3) {
+    const l = Math.hypot(out[i], out[i + 1], out[i + 2]) || 1;
+    out[i] /= l;
+    out[i + 1] /= l;
+    out[i + 2] /= l;
+  }
+  return out;
 }
 
 export function normalAt(s: Sample[], i: number): { x: number; y: number } {
@@ -413,19 +450,30 @@ export function offsetSamples(s: Sample[], off: number): Sample[] {
   return out;
 }
 
-export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
+/** What drawing any part of the network needs to know about all of it: its junctions and how wide each node is. */
+export interface RoadContext {
+  junctions: Map<number, Junction>;
+  widths: Map<number, { full: number; asphalt: number }>;
+}
+
+export function roadContext(net: RoadNetwork): RoadContext {
+  return { junctions: findJunctions(net), widths: nodeWidths(net) };
+}
+
+/** The roads' meshes: of the whole network, or of just the segments and nodes in `part` (one tile of the map). */
+export function buildRoadGeometries(net: RoadNetwork, part?: { segs: Iterable<RoadSegment>; nodes: Iterable<RoadNode> }, ctx = roadContext(net)): RoadGeometries {
   const walk = new Builder(0.04);
   const asphalt = new Builder(0.07);
   const marks = new Builder(0.1);
   marks.color = WHITE;
-  const junctions = findJunctions(net);
+  const { junctions, widths } = ctx;
   const concrete = new Builder(0);
   const dark = new Builder(0);
   const panels = new Builder(0);
   const posts = new Builder(0);
   const heads = new Builder(0);
   const pools = new Builder(0.12);
-  for (const seg of net.segments.values()) {
+  for (const seg of part?.segs ?? net.segments.values()) {
     const h = segHeight(net, seg);
     const raised = net.isRaised(seg);
     const full = roadWidth(seg);
@@ -449,8 +497,7 @@ export function buildRoadGeometries(net: RoadNetwork): RoadGeometries {
     // Tunnel mouths: the ramp between street level and a tunnel
     else if (isTunnelRamp(net, seg)) portal(concrete, dark, seg.samples, (t) => net.heightAt(seg, t), full);
   }
-  const widths = nodeWidths(net);
-  for (const n of net.nodes.values()) {
+  for (const n of part?.nodes ?? net.nodes.values()) {
     const w = widths.get(n.id) ?? { full: ROAD_WIDTH, asphalt: asphaltWidth({}) };
     (n.h > 0 ? concrete : walk).disc(n.p.x, n.p.y, w.full / 2, n.h);
     asphalt.disc(n.p.x, n.p.y, w.asphalt / 2, n.h);

@@ -581,6 +581,18 @@ export class Hud {
             this.render();
           });
         }
+        // 三鐵共構: which side, facing the station, its car park and elevated road go
+        if (t.stationType === 'triple') {
+          this.sub.append(el('span', 'divider'));
+          option('出口在左', t.hubExit === 'left', () => {
+            t.setHubExit('left');
+            this.render();
+          });
+          option('出口在右', t.hubExit === 'right', () => {
+            t.setHubExit('right');
+            this.render();
+          });
+        }
       } else if (t.railAction === 'track') {
         option('直線', !t.trackCurve, () => t.setTrackCurve(false));
         option('曲線', t.trackCurve, () => t.setTrackCurve(true));

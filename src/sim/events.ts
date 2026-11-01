@@ -8,7 +8,8 @@ import { type Vec2, clamp } from './geometry';
  * the arena by train or bus drive, jamming the streets round it. Two bookings that overlap split the
  * crowd and cost the goodwill of residents (民眾好感度) and promoters (廠商好感度). Two on the same day one
  * after the other (同日接檔) both play to a full house, but the first may run late or its crowd may clear out
- * slowly, holding up the second.
+ * slowly, holding up the second. Each region may build an arena of its own: each has its own diary (bookings
+ * only clash in the same hall) while the goodwill is the city's.
  */
 export type EventKind = 'concert' | 'sports' | 'festival';
 
@@ -98,6 +99,8 @@ export interface EventOffer {
   keen: number;
   /** offers lapse unanswered at this game day */
   expires: number;
+  /** the arena (facility id) it is held at; saves from before there could be several have none (the first arena) */
+  arena?: number;
 }
 
 export interface Booking extends EventOffer {
@@ -155,17 +158,20 @@ export function eventNet(o: Pick<EventOffer, 'kind' | 'cost'>, attendance: numbe
 
 export const eventEnd = (e: Pick<EventOffer, 'start' | 'hours'>) => e.start + e.hours / 24;
 
-/** Whether two bookings sit too close together for one arena. */
-export function clashes(a: Pick<EventOffer, 'start' | 'hours'>, b: Pick<EventOffer, 'start' | 'hours'>): boolean {
-  const gap = CLASH_GAP_HOURS / 24;
-  return a.start < eventEnd(b) + gap && b.start < eventEnd(a) + gap;
-}
+type Slot = Pick<EventOffer, 'start' | 'hours' | 'arena'>;
 
-type Slot = Pick<EventOffer, 'start' | 'hours'>;
+/** Whether two events are in the same hall. */
+const sameHall = (a: Slot, b: Slot) => (a.arena ?? 0) === (b.arena ?? 0);
+
+/** Whether two bookings sit too close together in one arena. */
+export function clashes(a: Slot, b: Slot): boolean {
+  const gap = CLASH_GAP_HOURS / 24;
+  return sameHall(a, b) && a.start < eventEnd(b) + gap && b.start < eventEnd(a) + gap;
+}
 
 /** Hours between the earlier booking ending and the later one starting, if they are 同日接檔 (back to back), else null. */
 export function backToBack(a: Slot, b: Slot): number | null {
-  if (clashes(a, b)) return null;
+  if (!sameHall(a, b) || clashes(a, b)) return null;
   const [first, second] = a.start <= b.start ? [a, b] : [b, a];
   const gap = (second.start - eventEnd(first)) * 24;
   return gap < BACK_TO_BACK_HOURS ? gap : null;
@@ -191,21 +197,19 @@ export const DELAY_COST_PER_MIN = 8_000;
 /** What the city tells the book each step. */
 export interface EventContext {
   day: number;
-  /** the city has an arena */
-  arena: boolean;
+  /** the city's arenas (facility ids), each with the share of its fans who can come by train, metro, bus or bike, 0..1 */
+  arenas: { id: number; transit: number }[];
   /** 0..100 */
   happiness: number;
   population: number;
-  /** share of fans who can come by train, metro, bus or bike, 0..1 */
-  transit: number;
 }
 
 /** What happened this step, for the city and the HUD. */
 export interface EventStep {
   /** money in or out this step, NT$ */
   money: number;
-  /** fans arriving by car this step */
-  cars: number;
+  /** fans arriving by car this step, by arena */
+  cars: Map<number, number>;
   offered?: EventOffer;
   started?: Booking;
   ended?: EventResult;
@@ -227,20 +231,21 @@ export class EventBook {
 
   /** One step of the clock: new offers, lapsed ones, events starting, fans arriving and events ending. */
   step(ctx: EventContext, stepDays: number, rng: () => number): EventStep {
-    const out: EventStep = { money: 0, cars: 0 };
+    const out: EventStep = { money: 0, cars: new Map() };
     const { day } = ctx;
-    // Offers lapse; nothing is offered without an arena
+    const halls = ctx.arenas.length;
+    // Offers lapse, and those for an arena since pulled down; nothing is offered without an arena
     const before = this.offers.length;
-    this.offers = this.offers.filter((o) => o.expires > day);
+    this.offers = this.offers.filter((o) => o.expires > day && (o.arena === undefined || ctx.arenas.some((a) => a.id === o.arena)));
     if (this.offers.length !== before) this.version++;
-    if (ctx.arena) {
+    if (halls) {
       if (this.nextOffer < 0) this.nextOffer = day + 0.15;
-      if (day >= this.nextOffer && this.offers.length < 3) {
+      if (day >= this.nextOffer && this.offers.length < Math.min(6, 2 + halls)) {
         out.offered = this.offer(ctx, rng);
         this.offers.push(out.offered);
         this.version++;
-        // Promoters who like working with the city call more often
-        this.nextOffer = day + (0.35 + 0.5 * rng()) * (1.5 - this.vendorFavor / 100);
+        // Promoters who like working with the city call more often, and more arenas draw more of them
+        this.nextOffer = day + ((0.35 + 0.5 * rng()) * (1.5 - this.vendorFavor / 100)) / (1 + 0.5 * (halls - 1));
       }
     }
     for (const b of this.booked) {
@@ -251,8 +256,9 @@ export class EventBook {
         // Held up by the show before it: some of the crowd gives up or wants its money back
         const late = b.delayed ?? 0;
         const kept = late ? 1 - Math.min(0.3, late * DELAY_LOSS_PER_MIN) : 1;
-        b.attendance = Math.round(expectedAttendance(b.capacity, b.keen) * (clash ? 0.55 : 1) * kept * (ctx.arena ? 1 : 0));
-        b.drove = 1 - ctx.transit;
+        const hall = ctx.arenas.find((a) => a.id === b.arena) ?? (b.arena === undefined ? ctx.arenas[0] : undefined);
+        b.attendance = Math.round(expectedAttendance(b.capacity, b.keen) * (clash ? 0.55 : 1) * kept * (hall ? 1 : 0));
+        b.drove = 1 - (hall?.transit ?? 0);
         if (clash) {
           this.publicFavor = clamp(this.publicFavor - 8, 0, 100);
           this.vendorFavor = clamp(this.vendorFavor - 10, 0, 100);
@@ -267,7 +273,10 @@ export class EventBook {
         this.version++;
       }
       // Fans drive in over the first two hours
-      if (b.attendance !== undefined && day < b.start + 2 / 24) out.cars += ((b.attendance * (b.drove ?? 1)) / FANS_PER_CAR) * (stepDays / (2 / 24));
+      if (b.attendance !== undefined && day < b.start + 2 / 24) {
+        const id = b.arena ?? ctx.arenas[0]?.id ?? 0;
+        out.cars.set(id, (out.cars.get(id) ?? 0) + ((b.attendance * (b.drove ?? 1)) / FANS_PER_CAR) * (stepDays / (2 / 24)));
+      }
     }
     const done = this.booked.find((b) => b.attendance !== undefined && day >= eventEnd(b));
     if (done) {
@@ -325,13 +334,18 @@ export class EventBook {
     const name = names[Math.floor(rng() * names.length) % names.length];
     // Two to five days out, at one of the kind's hours; now and then a promoter asks for a day the arena is
     // already booked, at an hour that leaves room for both (同日接檔)
+    // The arena with the least on its books; with several, now and then another at random
+    const load = (id: number) => [...this.offers, ...this.booked].filter((x) => x.arena === id).length;
+    const halls = ctx.arenas.map((a) => a.id);
+    let arena = halls.reduce((best, id) => (load(id) < load(best) ? id : best), halls[0]);
+    if (halls.length > 1 && rng() < 0.3) arena = halls[Math.floor(rng() * halls.length) % halls.length];
     let date = Math.floor(ctx.day) + 2 + Math.floor(rng() * 4);
     let hour = spec.startHours[Math.floor(rng() * spec.startHours.length) % spec.startHours.length];
-    const ahead = this.booked.filter((b) => b.start > ctx.day + 1.5);
+    const ahead = this.booked.filter((b) => b.start > ctx.day + 1.5 && b.arena === arena);
     if (ahead.length && rng() < 0.35) {
       const b = ahead[Math.floor(rng() * ahead.length) % ahead.length];
       const fits = spec.startHours.filter((h) => {
-        const slot = { start: Math.floor(b.start) + h / 24, hours: spec.hours };
+        const slot = { start: Math.floor(b.start) + h / 24, hours: spec.hours, arena };
         return !this.booked.some((o) => clashes(o, slot));
       });
       if (fits.length) {
@@ -358,6 +372,7 @@ export class EventBook {
       capacity: spec.capacity,
       keen,
       expires: Math.min(start - 0.5, ctx.day + 0.8),
+      arena,
     };
   }
 
@@ -365,6 +380,11 @@ export class EventBook {
   clashesWith(id: number): Booking[] {
     const o = this.offers.find((x) => x.id === id);
     return o ? this.booked.filter((b) => clashes(b, o)) : [];
+  }
+
+  /** Offers and bookings from before there could be several arenas are the first arena's. */
+  adopt(arena: number): void {
+    for (const e of [...this.offers, ...this.booked]) e.arena ??= arena;
   }
 
   /** Bookings an offer or booking would share a day with, back to back, and the hours between them. */

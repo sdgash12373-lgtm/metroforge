@@ -166,8 +166,9 @@ export const SPECIAL_REGIONS: readonly SpecialRegion[] = ['kaohsiung', 'pingtung
 export type StationStyle = 'standard' | SpecialRegion | HubStyle;
 /** What a station looks like and covers: its style, or for a metro station its look. */
 export type StationShape = StationStyle | MetroLook;
-export type HubStyle = 'twin' | 'triple';
-export const isHub = (style?: StationShape): style is HubStyle => style === 'twin' || style === 'triple';
+/** 'tripleLeft' is 三鐵共構 turned the other way: car park and elevated road on the left as seen from the street. */
+export type HubStyle = 'twin' | 'triple' | 'tripleLeft';
+export const isHub = (style?: StationShape): style is HubStyle => style === 'twin' || style === 'triple' || style === 'tripleLeft';
 /** Stations whose metro and high-speed stops belong to the train station: 共構 ones, and Kaohsiung's (三鐵共構, all underground). */
 export const isShared = (style?: StationShape): boolean => isHub(style) || style === 'kaohsiung';
 

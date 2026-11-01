@@ -111,8 +111,38 @@ const S = Math.SQRT1_2;
 
 /** Pingtung reaches this far along the coast (v) and up and down the plain (u). */
 const PINGTUNG = { v: 3900, u: 2400 };
-/** The Hengchun Peninsula's part of the map: south (u) to past Eluanbi, along v from the west sea to the Pacific. */
-const HENGCHUN = { u: -5300, minV: 2400, maxV: 4400 };
+/**
+ * The Hengchun Peninsula's part of the map, in its own frame (see `hengchunFrame`): south (u) to past Eluanbi,
+ * along v from the west sea to the Pacific; from `rootU` north it overlaps the Pingtung band it hangs from.
+ */
+const HENGCHUN = { u: -5300, minV: 2400, maxV: 4400, rootU: -1250 };
+/**
+ * The peninsula is drawn in a frame of its own (the u, v it was first laid out in, running straight out along -u)
+ * and turned to where it really lies: hung from the coast past Fangliao (`at`), heading down the coast `turn`
+ * radians seaward of it (real Taiwan's coast turns from running south-south-east past Kaohsiung to due south
+ * down the peninsula) rather than straight out to sea.
+ */
+const HENGCHUN_TURN = { root: { u: -1850, v: 2760 }, at: { u: -2010, v: 3450 }, turn: (30 * Math.PI) / 180 };
+const H_SIN = Math.sin(HENGCHUN_TURN.turn);
+const H_COS = Math.cos(HENGCHUN_TURN.turn);
+
+/** A map point (u, v) in the peninsula's frame; `along` is how far past its root down the peninsula. */
+function hengchunFrame(u: number, v: number): { u: number; v: number; along: number } {
+  const du = u - HENGCHUN_TURN.at.u;
+  const dv = v - HENGCHUN_TURN.at.v;
+  const along = -du * H_SIN + dv * H_COS;
+  const across = du * H_COS + dv * H_SIN;
+  return { u: HENGCHUN_TURN.root.u - along, v: HENGCHUN_TURN.root.v + across, along };
+}
+
+/** The map point at (u, v) of the peninsula's own frame. */
+export function hengchunPoint(pu: number, pv: number): Vec2 {
+  const along = HENGCHUN_TURN.root.u - pu;
+  const across = pv - HENGCHUN_TURN.root.v;
+  const u = HENGCHUN_TURN.at.u - along * H_SIN + across * H_COS;
+  const v = HENGCHUN_TURN.at.v + along * H_COS + across * H_SIN;
+  return { x: (u + v) * S + 0, y: (v - u) * S + 0 };
+}
 
 /**
  * Southern Taiwan in turned axes: u runs south-west → north-east (inland, roughly real north), v runs
@@ -148,7 +178,7 @@ export const KAOHSIUNG: Terrain = {
       const f = northFrame(u, v);
       if (northward(f.s)) return northSea(x, y, f.s, f.w) || (penghuAt(x, y).d >= 1 && ovalAt(WAISANDING, x, y) >= 1 && northFresh(x, y) > 0);
     }
-    return seaDepth(u, v) > 0 || riverDepth(u, v) > 0;
+    return kaohsiungSea(u, v) || riverDepth(u, v) > 0;
   },
   sea(x, y) {
     const u = (x - y) * S;
@@ -158,7 +188,7 @@ export const KAOHSIUNG: Terrain = {
       const f = northFrame(u, v);
       if (northward(f.s)) return northSea(x, y, f.s, f.w);
     }
-    return seaDepth(u, v) > 0;
+    return kaohsiungSea(u, v);
   },
   region(x, y) {
     const u = (x - y) * S;
@@ -170,7 +200,8 @@ export const KAOHSIUNG: Terrain = {
     }
     if (inSquare(x, y) || (v <= PINGTUNG.v && Math.abs(u) <= PINGTUNG.u)) return 'pingtung';
     // The Hengchun Peninsula, reaching south to Eluanbi with the Pacific on its east
-    return u >= HENGCHUN.u && u < -PINGTUNG.u + 800 && v >= HENGCHUN.minV && v <= HENGCHUN.maxV ? 'pingtung' : null;
+    const h = hengchunFrame(u, v);
+    return h.u >= HENGCHUN.u && h.u < HENGCHUN.rootU && h.v >= HENGCHUN.minV && h.v <= HENGCHUN.maxV ? 'pingtung' : null;
   },
   // The square, the Pingtung band to its south-east and the Hengchun Peninsula to the south, Tainan and Chiayi up
   // the coast to the north-west and Penghu out at sea
@@ -183,19 +214,16 @@ export const KAOHSIUNG: Terrain = {
 let boundsCache: Bounds | null = null;
 function mapBounds(): Bounds {
   if (boundsCache) return boundsCache;
-  const b: Bounds = {
-    minX: (HENGCHUN.u + HENGCHUN.minV) * S,
-    minY: -HALF_MAP,
-    maxX: (PINGTUNG.u + PINGTUNG.v) * S,
-    maxY: (HENGCHUN.maxV - HENGCHUN.u) * S,
-  };
+  const b: Bounds = { minX: -HALF_MAP, minY: -HALF_MAP, maxX: (PINGTUNG.u + PINGTUNG.v) * S, maxY: HALF_MAP };
   const take = (p: Vec2) => {
     b.minX = Math.min(b.minX, p.x);
     b.maxX = Math.max(b.maxX, p.x);
     b.minY = Math.min(b.minY, p.y);
     b.maxY = Math.max(b.maxY, p.y);
   };
-  // Round the north's strip, and Penghu's islands with the sea round them
+  // Round the Pingtung band, the Hengchun Peninsula, the north's strip, and Penghu's islands with the sea round them
+  for (const [u, v] of [[-PINGTUNG.u, PINGTUNG.v], [PINGTUNG.u, PINGTUNG.v]]) take({ x: (u + v) * S, y: (v - u) * S });
+  for (const pu of [HENGCHUN.u, HENGCHUN.rootU]) for (const pv of [HENGCHUN.minV, HENGCHUN.maxV]) take(hengchunPoint(pu, pv));
   for (let s = NORTH.s0; s <= NORTH_END; s += 50) {
     take(northPoint(s, NORTH_SEA));
     take(northPoint(s, table(NORTH_LAND, s)));
@@ -216,7 +244,11 @@ function mapBounds(): Bounds {
 
 function kaohsiungHeight(x: number, y: number, u: number, v: number): number {
   const sea = seaDepth(u, v);
-  if (sea > 0) return -Math.min(7, 1 + sea * 0.12);
+  if (sea > 0) {
+    const sand = cijin(u, v);
+    if (sand > 0) return 1.2 + Math.min(1.6, sand * 0.05);
+    return -Math.min(7, 1 + sea * 0.12);
+  }
   const river = riverDepth(u, v);
   if (river > 0) return -Math.min(5, 1 + river * 0.15);
   const h = kaohsiungLand(x, y, u, v);
@@ -239,6 +271,27 @@ function kaohsiungLand(x: number, y: number, u: number, v: number): number {
   h += hill(u, v, -1010, -520, 130, 340, 62) * (0.8 + 0.4 * noise(x / 60, y / 60));
   h += hill(u, v, -420, -1080, 55, 230, 34) * (0.85 + 0.3 * noise(x / 50, y / 50));
   return h;
+}
+
+/**
+ * Cijin (旗津): the long, narrow sand island off the city, from just south of the coastal hill (Xiziwan, where
+ * the first harbour mouth is) down the coast to the second harbour mouth, with Kaohsiung Harbour between it and
+ * the shore. How far inside it a point lies (≤ 0 off it).
+ */
+const CIJIN = { from: -230, to: 830, north: -1375, south: -1270, width: 80 };
+function cijin(u: number, v: number): number {
+  if (v <= CIJIN.from || v >= CIJIN.to) return 0;
+  // Nearly straight, just off the headland at its north end, the harbour widening behind it as the shore bends in
+  const t = (v - CIJIN.from) / (CIJIN.to - CIJIN.from);
+  const mid = CIJIN.north + (CIJIN.south - CIJIN.north) * t + 6 * Math.sin(v / 150);
+  const half = (CIJIN.width / 2) * (0.7 + 0.3 * Math.sin(Math.PI * t) ** 0.4) + 4 * (noise(v / 70, 9.2) - 0.5);
+  const ends = Math.min(v - CIJIN.from, CIJIN.to - v);
+  return Math.min(half - Math.abs(u - mid), ends);
+}
+
+/** Kaohsiung's sea, Cijin left out of it. */
+function kaohsiungSea(u: number, v: number): boolean {
+  return seaDepth(u, v) > 0 && cijin(u, v) <= 0;
 }
 
 /** How far into the sea a point lies (≤ 0 on land). */
@@ -302,11 +355,12 @@ function peninsulaOut(u: number, v: number): number {
 
 /** How far out to sea a point in Pingtung lies (≤ 0 on land). */
 function pingtungSeaDepth(u: number, v: number): number {
-  // The Pacific, east of the peninsula and of the range to its north
-  const pacific = v - peninsulaEast(u);
-  if (pacific > 0) return pacific;
-  const west = pingtungCoast(v) - u;
-  return west > 0 ? Math.min(west, peninsulaOut(u, v)) : west;
+  // The band down the plain: the strait on the west, the Pacific east of the range
+  const band = Math.max(pingtungCoast(v) - u, v - peninsulaEast(Math.max(u, HENGCHUN_TURN.root.u)));
+  // The peninsula hanging from its south end (its strip cut off a little way back into the band)
+  const h = hengchunFrame(u, v);
+  const cape = Math.max(peninsulaOut(h.u, h.v), -h.along - 400);
+  return Math.min(band, cape);
 }
 
 function pingtungSea(u: number, v: number): boolean {
@@ -334,7 +388,9 @@ function linbianCentre(v: number): number {
 function pingtungRivers(u: number, v: number): number {
   const dong = (16 + 10 * smooth(0, -1500, u)) * smooth(1700, 1300, u) - Math.abs(v - donggangCentre(u));
   const lin = (14 + 12 * smooth(3100, 2850, v)) * smooth(3600, 3300, v) - Math.abs(u - linbianCentre(v));
-  // Sichong River out of the hills to the sea at Checheng, and the Gangkou River down to the Pacific
+  // Sichong River out of the hills to the sea at Checheng, and the Gangkou River down to the Pacific (in the
+  // peninsula's frame)
+  ({ u, v } = hengchunFrame(u, v));
   const sichong = 11 * smooth(3450, 3300, v) - Math.abs(u - (-3350 + 25 * Math.sin(v / 90)));
   const gangkou = 10 * smooth(3650, 3780, v) - Math.abs(u - (-4150 + 20 * Math.sin(v / 70) + 0.2 * (v - 3800)));
   const lake = 40 * (1 - ellipse(u, v, LONGLUAN));
@@ -358,8 +414,9 @@ function pingtungHeight(x: number, y: number, u: number, v: number): number {
   // Near the Gaoping River the hills and mountains carry on from the Kaohsiung bank, then give way
   // to Pingtung's own; in the south the Central Range runs on down the peninsula
   const fromKaohsiung = 1 - smooth(riverCentre(u), riverCentre(u) + 650, v);
-  const south = smooth(-1750, -2500, u);
-  let h = (1 - south) * plainHeight(x, y, u, v) + south * peninsulaHeight(x, y, u, v);
+  const cape = hengchunFrame(u, v);
+  const south = smooth(-1750, -2500, cape.u);
+  let h = (1 - south) * plainHeight(x, y, u, v) + south * peninsulaHeight(x, y, cape.u, cape.v);
   if (fromKaohsiung > 0) h = fromKaohsiung * kaohsiungLand(x, y, u, v) + (1 - fromKaohsiung) * h;
   return h < 0.4 ? 0 : h;
 }
@@ -907,11 +964,11 @@ export const KAOHSIUNG_CLASSIC: Terrain = {
     if (!nearSquare(x, y)) return KAOHSIUNG.water(x, y);
     const u = (x - y) * S;
     const v = (x + y) * S;
-    return seaDepth(u, v) > 0 || riverDepth(u, v) > 0;
+    return kaohsiungSea(u, v) || riverDepth(u, v) > 0;
   },
   sea(x, y) {
     if (!nearSquare(x, y)) return KAOHSIUNG.sea(x, y);
-    return seaDepth((x - y) * S, (x + y) * S) > 0;
+    return kaohsiungSea((x - y) * S, (x + y) * S);
   },
   region(x, y) {
     // Near the square the old ground keeps its old regions, even where Tainan's now begins

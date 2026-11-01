@@ -262,6 +262,7 @@ if (import.meta.env.DEV) {
   Object.assign(window, {
     __game: {
       world,
+      tools,
       get city() {
         return city;
       },
