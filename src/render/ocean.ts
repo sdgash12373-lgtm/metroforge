@@ -24,7 +24,7 @@ const CHOP = 1.25;
 /** Reach of the sea surface from the camera's focus: past the far fog, to the horizon. */
 const REACH = 9000;
 /** Resolution of the depth map over the land's extent. */
-const DEPTH_RES = 384;
+const DEPTH_RES = 512;
 /** Depth (m) at which the waves are full height and the water its deepest colour. */
 const FULL_DEPTH = 8;
 

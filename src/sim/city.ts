@@ -59,9 +59,9 @@ import {
   emptyReview,
 } from './policy';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
-import { FLAT, FLAT_CLASSIC, PLAIN, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable } from './terrain';
+import { FLAT, FLAT_CLASSIC, HALF_MAP, PLAIN, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable, northPoint, penghuPoint } from './terrain';
 import { type RoadPoint, Traffic, taxiTint } from './traffic';
-import { type BusStop, type HubStyle, type MetroLook, type StationShape, type StationStyle, Transit, isHub, isShared } from './transit';
+import { type BusStop, type HubStyle, type MetroLook, SPECIAL_REGIONS, type SpecialRegion, type StationShape, type StationStyle, Transit, isHub, isShared } from './transit';
 import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, isIndustry, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
 
 export const ROAD_COST_PER_M = 20;
@@ -115,9 +115,8 @@ export interface FreewaySpec {
 }
 
 const RS = Math.SQRT1_2;
-/** Each region's freeway: 國道 1 號 west of Kaohsiung, 國道 3 號 up the Pingtung Plain east of Pingtung city. */
 /** Level each region's own train station is built at: Kaohsiung's underground, Pingtung's on a viaduct. */
-export const STATION_LEVEL: Record<RegionName, number> = { kaohsiung: TUNNEL_DEPTH, pingtung: ELEVATED_HEIGHT };
+export const STATION_LEVEL: Record<SpecialRegion, number> = { kaohsiung: TUNNEL_DEPTH, pingtung: ELEVATED_HEIGHT };
 /** Track a train station comes with either side of its middle, a little longer than its platforms, kept level. */
 export const STATION_LEVEL_HALF = 50;
 /** Ramp from there back to street level for a station underground or on a viaduct, as steep as track may be. */
@@ -198,8 +197,52 @@ const FREEWAY_ROUTES: { name: string; pts: Vec2[]; probe: Vec2; corner?: number[
   { name: '國道 10 號', pts: [{ x: -700, y: -450 }, { x: 100, y: -450 }], probe: { x: -300, y: -450 } },
 ];
 
-/** 國道 ends left where they are, not carried on: 國道 3 號 heads into the hills here, where the plain narrows towards 國道 1 號. */
-const FREEWAY_FIXED_ENDS: Vec2[] = [{ x: -300, y: -880 }];
+/** A point up north, `s` along the coast and `w` inland (see northPoint). */
+const N = northPoint;
+/** The point a fraction `t` of the way from a to b. */
+const along = (a: Vec2, b: Vec2, t: number): Vec2 => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+/** Straight legs of 國道 1 號 through Tainan and Chiayi that carry each region's interchange, and of 國道 3 號 where 國道 8 號 meets it. */
+const TAINAN_LEG = [N(1900, 640), N(3300, 660)] as const;
+const CHIAYI_LEG = [N(5300, 1500), N(6300, 1700)] as const;
+const SANHAO_LEG = [N(2400, 1250), N(3500, 1350)] as const;
+/**
+ * The 國道 up north, after the map of Taiwan's freeways: 國道 1 號 leaves its line north of Kaohsiung for the plain,
+ * east of Tainan city through 永康, 麻豆 and 新營, across the 八掌溪 past 嘉義 to the north edge; 國道 3 號 carries on
+ * from the hills north of Kaohsiung along the foot of the hills, by 新化, 官田 and 白河 to 中埔 and 竹崎; 國道 8 號
+ * runs from 安南 near the coast across 國道 1 號 to meet 國道 3 號 at 新化. They start inside Kaohsiung; that part is
+ * laid only where it is clear.
+ */
+const NORTH_ROUTES: { name: string; pts: Vec2[]; probe: Vec2; corner?: number[] }[] = [
+  {
+    name: '國道 1 號',
+    pts: [{ x: -700, y: -1000 }, ...TAINAN_LEG, N(3900, 700), N(4600, 1000), ...CHIAYI_LEG, N(6750, 1850)],
+    probe: along(TAINAN_LEG[0], TAINAN_LEG[1], 0.5),
+  },
+  {
+    name: '國道 3 號',
+    pts: [{ x: -300, y: -880 }, N(1700, 1450), ...SANHAO_LEG, N(4000, 1500), N(4600, 1700), N(5000, 1800), N(5600, 2250), N(6100, 2300), N(6750, 2450)],
+    probe: along(SANHAO_LEG[0], SANHAO_LEG[1], 0.5),
+  },
+  { name: '國道 8 號', pts: [N(2950, 150), along(SANHAO_LEG[0], SANHAO_LEG[1], 0.5)], probe: N(2950, 400) },
+];
+
+/** Whether part of a stretch of road lies in the old square (Kaohsiung). */
+const inKaohsiung = (x: { a: Vec2; c: Vec2 | null; b: Vec2 }) =>
+  sampleQuad({ a: x.a, c: x.c ?? lerp(x.a, x.b, 0.5), b: x.b }, 8).some((p) => Math.abs(p.x) <= HALF_MAP && Math.abs(p.y) <= HALF_MAP);
+
+/**
+ * 國道 ends left where they are, not carried on: 國道 3 號 heads into the hills here, where the plain narrows towards
+ * 國道 1 號; 國道 8 號 ends at 安南; and the north's 國道 start here at Kaohsiung's edge when their way through it is blocked.
+ */
+const FREEWAY_FIXED_ENDS: Vec2[] = [
+  { x: -300, y: -880 },
+  NORTH_ROUTES[2].pts[0],
+  ...NORTH_ROUTES.flatMap((r) => {
+    const pieces = smoothRoute(r.pts, r.corner ?? FREEWAY_CORNER);
+    const out = pieces.find((x) => !inKaohsiung(x));
+    return out && out !== pieces[0] ? [out.a] : [];
+  }),
+];
 
 /** A route through `pts` as straight pieces with each corner rounded into a curve `r` either side of it. */
 function smoothRoute(pts: Vec2[], r: number | number[]): { a: Vec2; c: Vec2 | null; b: Vec2 }[] {
@@ -282,11 +325,30 @@ export const ROAD_KINDS: Record<RoadKind, { label: string; oneway: boolean; lane
   highway: { label: '高速公路', oneway: false, lanes: 2, cost: 2.5 },
 };
 
-export const FREEWAYS: Record<RegionName, FreewaySpec> = {
+/** A region's 國道 on one of the north's legs: its interchange halfway along, its town `town` metres off towards the sea (-1) or inland (1). */
+function legSpec(leg: readonly [Vec2, Vec2], at: number, toward: 1 | -1, town: number): FreewaySpec {
+  const len = dist(leg[0], leg[1]);
+  const axis = { x: (leg[1].x - leg[0].x) / len, y: (leg[1].y - leg[0].y) / len };
+  // Heading up the coast, inland is on the right
+  const side = { x: -axis.y * toward, y: axis.x * toward };
+  return { center: along(leg[0], leg[1], at), axis, side, north: 0, south: 0, ramp: 160, exit: 140, town, name: '國道 1 號' };
+}
+
+/** Regions reached by 國道: each one's own, its interchange and the road into town. */
+export type FreewayRegion = Exclude<RegionName, 'penghu'>;
+
+export const FREEWAYS: Record<FreewayRegion, FreewaySpec> = {
   kaohsiung: { center: { x: FREEWAY.x, y: 0 }, axis: { x: 0, y: -1 }, side: { x: 1, y: 0 }, north: -FREEWAY.north, south: FREEWAY.south, ramp: FREEWAY.ramp, exit: 140, town: 396, name: FREEWAY.name },
   // Turned axes: up the plain (u) and away from the Gaoping River (v), the town on the river side
   pingtung: { center: { x: 1900 * RS, y: 1900 * RS }, axis: { x: RS, y: -RS }, side: { x: -RS, y: -RS }, north: 250, south: 1250, ramp: 160, exit: 140, town: 400, name: '國道 3 號' },
+  // 台南交流道 on the plain north of the old city, the town towards the coast; 嘉義交流道 west of 嘉義 city
+  tainan: legSpec(TAINAN_LEG, (2700 - 1900) / 1400, -1, 360),
+  chiayi: legSpec(CHIAYI_LEG, 0.5, 1, 380),
 };
+
+/** Penghu has no 國道: the way in is by sea, the ferry pier in Magong harbour, with a road up into town. */
+export const PENGHU_TOWN = penghuPoint(0.9, -0.1);
+export const PENGHU_PIER_TOWARD = penghuPoint(-0.4, 1.4);
 
 /** A point `a` metres along a freeway and `c` across it, towards its town. */
 export function freewayPoint(f: FreewaySpec, a: number, c: number): Vec2 {
@@ -295,7 +357,15 @@ export function freewayPoint(f: FreewaySpec, a: number, c: number): Vec2 {
 }
 
 /** Where a region's access road ends, on a cell centre: a new city starts here. */
-export const freewayTown = (region: RegionName): Vec2 => cellCenter(freewayPoint(FREEWAYS[region], 0, FREEWAYS[region].town));
+export const freewayTown = (region: RegionName): Vec2 =>
+  cellCenter(region === 'penghu' ? PENGHU_TOWN : freewayPoint(FREEWAYS[region], 0, FREEWAYS[region].town));
+
+/** Where the camera looks first in a new city in this region: between its interchange (or pier) and town. */
+export function regionView(region: RegionName): Vec2 {
+  if (region === 'penghu') return lerp(PENGHU_TOWN, PENGHU_PIER_TOWARD, 0.3);
+  const f = FREEWAYS[region];
+  return freewayPoint(f, 0, (f.exit + f.town) / 2 - 40);
+}
 
 /** Price of opening another region of the map, and the rank it can be opened at. */
 export const REGION_COST = 1_000_000;
@@ -784,7 +854,7 @@ export class City {
     this.spend(REGION_COST);
     this.regions.add(r);
     this.regionsVersion++;
-    // Its 國道 may run there already; the way into town off it is built now
+    // Its 國道 may run there already; the way into town off it (or Penghu's from the pier) is built now
     const hasAccess = !!this.net.segmentAt(freewayTown(r), 3, 0);
     if (!hasAccess) this.buildFreeway(r);
     else this.roadsChanged();
@@ -1086,6 +1156,13 @@ export class City {
    * same interchange the player can build, and an access road from it into town.
    */
   buildFreeway(region: RegionName = 'kaohsiung'): void {
+    if (region === 'penghu') {
+      // A new city lays the 國道 on the main island too, in regions it may open later
+      if (this.net.segments.size === 0) this.layFreeways(true);
+      this.buildPier();
+      this.roadsChanged();
+      return;
+    }
     const f = FREEWAYS[region];
     const at = (a: number, c: number) => freewayPoint(f, a, c);
     // A new city lays the whole network; a city opening this region lays what fits round what it has built,
@@ -1106,6 +1183,30 @@ export class City {
     this.roadsChanged();
   }
 
+  /**
+   * Penghu's way in: the ferry pier on Magong harbour (an outside connection, as ferries bring traffic in and out),
+   * with a road two lanes each way up into town.
+   */
+  private buildPier(): void {
+    const town = freewayTown('penghu');
+    const d = { x: PENGHU_PIER_TOWARD.x - town.x, y: PENGHU_PIER_TOWARD.y - town.y };
+    const len = Math.hypot(d.x, d.y);
+    // Down to the waterfront, stopping a little short of the water
+    let pier = town;
+    for (let k = 4; k <= len + 400; k += 4) {
+      const p = { x: town.x + (d.x / len) * k, y: town.y + (d.y / len) * k };
+      if (!buildable(this.terrain, p)) break;
+      pier = p;
+    }
+    const back = Math.max(0, dist(pier, town) - 8);
+    pier = { x: town.x + (d.x / len) * back, y: town.y + (d.y / len) * back };
+    if (dist(pier, town) < 40) return;
+    const made = this.net.addRoad({ kind: 'free', p: pier }, null, this.net.snapLevel(town, 3, 0), 0);
+    for (const s of made) applyStyle(this.net, s, { lanes: 2 });
+    const gate = made.length ? made[0].a : undefined;
+    if (gate !== undefined) this.outside.add(gate);
+  }
+
   /** Whether a stretch of 國道 viaduct can go here: over plain or rivers inside the map, clear of anything built. */
   private freewayClear(a: Vec2, c: Vec2 | null, e: Vec2, from?: RoadSegment): boolean {
     const b = this.terrain.bounds;
@@ -1114,6 +1215,8 @@ export class City {
     for (const p of pts.slice(1)) {
       if (p.x < b.minX + 20 || p.x > b.maxX - 20 || p.y < b.minY + 20 || p.y > b.maxY - 20) return false;
       if (!flat && (this.terrain.sea(p.x, p.y) || this.terrain.height(p.x, p.y) > ELEVATED_HEIGHT - 3)) return false;
+      // Nor past the land's edge, where it reaches beyond what the map is drawn for
+      if (!flat && this.terrain.region(p.x, p.y) === null) return false;
       // The old all-flat map keeps within what the new 平地 map allows, so the city can still move onto it
       if (this.terrain === FLAT && (PLAIN.sea(p.x, p.y) || PLAIN.height(p.x, p.y) > ELEVATED_HEIGHT - 3)) return false;
       if (this.buildingAt(p) || this.aviation.airportAt(p, 4)) return false;
@@ -1158,14 +1261,23 @@ export class City {
     // Old cities from before the 國道 that open a region get its own only
     const old = !newCity && ![...net.segments.values()].some((s) => s.highway && !s.built);
     if (regions.includes('kaohsiung') && regions.includes('pingtung') && !old) routes.push(...FREEWAY_ROUTES);
+    // Tainan's and Chiayi's: opening either lays them all, as the way to either runs through Tainan
+    const north = must === 'tainan' || must === 'chiayi';
+    if (regions.includes('tainan') && (!old || north)) routes.push(...NORTH_ROUTES.map((r) => ({ ...r, must: north })));
+    let linked = false;
     for (const r of routes) {
       if (has(r.name, r.probe)) continue;
       // Straight stretches along the 國道 a city has already (an older, longer line) are kept, not laid again
       const along = (x: { a: Vec2; c: Vec2 | null; b: Vec2 }) =>
         !x.c && [x.a, lerp(x.a, x.b, 0.5), x.b].every((q) => net.segmentAt(q, 3, ELEVATED_HEIGHT)?.seg.name === r.name);
-      const pieces = smoothRoute(r.pts, r.corner ?? FREEWAY_CORNER).filter((x) => !along(x));
+      let pieces = smoothRoute(r.pts, r.corner ?? FREEWAY_CORNER).filter((x) => !along(x));
       if (old && !r.must) continue;
       if (!newCity && !r.must && !pieces.every((x) => this.freewayClear(x.a, x.c, x.b))) continue;
+      // A region opened now gets its 國道 in any case; where the way to it runs through what a city has built in
+      // Kaohsiung, it starts at Kaohsiung's edge instead
+      if (!newCity && r.must && !pieces.filter(inKaohsiung).every((x) => this.freewayClear(x.a, x.c, x.b))) pieces = pieces.filter((x) => !inKaohsiung(x));
+      if (!pieces.length) continue;
+      if (r.name === '國道 1 號' && inKaohsiung(pieces[0]) && NORTH_ROUTES.some((n) => n.probe === r.probe)) linked = true;
       let from: Snap = net.snapLevel(pieces[0].a, 3, ELEVATED_HEIGHT);
       pieces.forEach((x, i) => {
         const end = i === pieces.length - 1 ? net.snapLevel(x.b, 3, ELEVATED_HEIGHT) : ({ kind: 'free', p: x.b } as Snap);
@@ -1176,7 +1288,35 @@ export class City {
         }
       });
     }
+    if (linked) this.dropNorthStub();
     this.extendFreeways();
+  }
+
+  /**
+   * Before Tainan, 國道 1 號 was carried on north from where it now turns off for Tainan, until the hills stopped it.
+   * Once the way to Tainan is laid that stub goes, unless anything the player built joins it.
+   */
+  private dropNorthStub(): void {
+    const net = this.net;
+    const turn = net.snapLevel({ x: FREEWAY.x, y: FREEWAY.north }, 2, ELEVATED_HEIGHT);
+    if (turn.kind !== 'node') return;
+    const stub: RoadSegment[] = [];
+    let at = turn.node.id;
+    for (;;) {
+      const next = [...net.segments.values()].find(
+        (s) => (s.a === at || s.b === at) && s.highway && !s.built && s.name === FREEWAY.name && !stub.includes(s) && Math.abs(s.samples[s.samples.length >> 1].x - FREEWAY.x) < 2 && s.samples[s.samples.length >> 1].y < FREEWAY.north,
+      );
+      if (!next) break;
+      stub.push(next);
+      at = next.a === at ? next.b : next.a;
+    }
+    if (!stub.length) return;
+    const nodes = new Set(stub.flatMap((s) => [s.a, s.b]));
+    nodes.delete(turn.node.id);
+    // Other 國道 may cross it (國道 3 號 on its way north); anything else joined keeps it
+    for (const s of net.segments.values()) if (!stub.includes(s) && (nodes.has(s.a) || nodes.has(s.b)) && (!s.highway || s.built)) return;
+    for (const s of stub) net.removeSegment(s.id);
+    for (const n of [...this.outside]) if (!net.nodes.has(n)) this.outside.delete(n);
   }
 
   /**
@@ -1359,7 +1499,7 @@ export class City {
   planTrainStation(p: Vec2, special: boolean): {
     cost: number;
     reason?: string;
-    style?: 'standard' | RegionName;
+    style?: 'standard' | SpecialRegion;
     centre?: Vec2;
     d?: Vec2;
     face?: 1 | -1;
@@ -1375,7 +1515,9 @@ export class City {
     if (!best) return { cost: 0, reason: '火車站要蓋在路邊：請點在道路旁邊' };
     const region = this.terrain.region(p.x, p.y);
     if (special && !region) return { cost: 0, reason: '這裡不屬於任何地區，沒有特色車站' };
-    const style: 'standard' | RegionName = special && region ? region : 'standard';
+    const own = SPECIAL_REGIONS.find((r) => r === region);
+    if (special && region && !own) return { cost: 0, reason: `${REGION_NAMES[region]}還沒有特色車站（目前只有高雄區、屏東區有），請蓋一般車站` };
+    const style: 'standard' | SpecialRegion = special && own ? own : 'standard';
     if (special && region && [...sys.transit.stops.values()].some((st) => st.style === region)) {
       return { cost: 0, reason: `${REGION_NAMES[region]}已經有特色車站了（每區限蓋一座）` };
     }
@@ -2790,6 +2932,8 @@ export class City {
     const pick = <T>(a: T[]) => a[Math.floor(rng() * a.length) % a.length];
     const at = (p: Placed): RoadPoint => ({ seg: p.seg.id, s: p.lot.s });
     const gate = this.gatePoint(rng);
+    // A way out on the same roads (Penghu's pier for Penghu, the 國道 for the main island)
+    const gateFor = (p: Placed) => (!gate || this.sameRoads(gate, at(p)) ? gate : this.gatePoint(rng, at(p)));
 
     // Riders on buses and trains take no room on the roads, so a few commuters still set out when the
     // streets are full: otherwise a big city with jammed roads never has anyone waiting at a stop
@@ -2804,7 +2948,7 @@ export class City {
       // What they can afford: a bicycle keeps off the road, a scooter or a car joins the traffic
       const commute = bracketOf(this.incomes.get(home.lot) ?? 0).commute;
       if (commute === 'bike' || cars >= room) continue;
-      const to = job ? at(job) : gate;
+      const to = job ? at(job) : gateFor(home);
       if (to) {
         this.traffic.spawn(at(home), to, commute, rng());
         cars++;
@@ -2816,9 +2960,11 @@ export class City {
     const shops = work.filter((p) => ZONES[p.lot.zone as Exclude<Zone, Zone.None>].demand === 'C');
     if (industry.length && rng() < Math.min(0.9, this.stats.jobs / 300)) {
       const r = rng();
-      if (shops.length && r < 0.4) this.traffic.spawn(at(pick(industry)), at(pick(shops)), 'truck', rng());
-      else if (gate && r < 0.7) this.traffic.spawn(at(pick(industry)), gate, 'truck', rng());
-      else if (gate) this.traffic.spawn(gate, at(pick(industry)), 'truck', rng());
+      const plant = pick(industry);
+      const gate = gateFor(plant);
+      if (shops.length && r < 0.4) this.traffic.spawn(at(plant), at(pick(shops)), 'truck', rng());
+      else if (gate && r < 0.7) this.traffic.spawn(at(plant), gate, 'truck', rng());
+      else if (gate) this.traffic.spawn(gate, at(plant), 'truck', rng());
     }
     // Freight: lorries take goods from industry down to a cargo port on the same roads
     const ports = this.cargoPorts();
@@ -2912,7 +3058,8 @@ export class City {
       return;
     }
     const homes = zoned.filter((p) => p.lot.level && ZONES[p.lot.zone as Exclude<Zone, Zone.None>].demand === 'R' && this.isConnected(p.seg));
-    const gate = this.gatePoint(rng);
+    const first = this.gatePoint(rng);
+    const gate = !first || this.sameRoads(first, arena.at) ? first : this.gatePoint(rng, arena.at);
     for (let n = Math.min(12, Math.floor(this.fansDue)); n > 0 && this.traffic.vehicles.length < this.maxVehicles; n--) {
       this.fansDue--;
       // Half the crowd comes from out of town
@@ -2923,9 +3070,23 @@ export class City {
     this.fansDue = Math.min(this.fansDue, 40);
   }
 
+  /** Whether two road points are on the same network of roads. */
+  private sameRoads(a: RoadPoint, b: RoadPoint): boolean {
+    const sa = this.net.segments.get(a.seg);
+    const sb = this.net.segments.get(b.seg);
+    return !!sa && !!sb && this.component.get(sa.a) === this.component.get(sb.a);
+  }
+
   /** Where the highway enters the map, as a road point. */
-  private gatePoint(rng: Rng): RoadPoint | null {
-    const gates = [...this.outside];
+  private gatePoint(rng: Rng, near?: RoadPoint | null): RoadPoint | null {
+    let gates = [...this.outside];
+    // Only ways out on the same roads as the trip's other end: Penghu's pier doesn't reach the main island's 國道
+    const seg = near ? this.net.segments.get(near.seg) : undefined;
+    if (seg) {
+      const piece = this.component.get(seg.a);
+      const same = gates.filter((n) => this.component.get(n) === piece);
+      if (same.length) gates = same;
+    }
     if (!gates.length) return null;
     const node = gates[Math.floor(rng() * gates.length) % gates.length];
     for (const s of this.net.segments.values()) {

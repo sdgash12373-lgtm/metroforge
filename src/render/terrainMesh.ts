@@ -8,7 +8,7 @@ const STEP = CELL_STEP;
 /** trees in the lowland woods, and on hills and mountains, and across the land beyond the old square */
 export const LOWLAND_TREES = 6000;
 export const HILL_TREES = 6000;
-export const OUTER_TREES = 5000;
+export const OUTER_TREES = 9000;
 const TREE_AREA = 1400;
 
 const GRASS = new THREE.Color(0x9cbf74);
@@ -73,14 +73,22 @@ function cellTriangles(x: number, y: number, h: (x: number, y: number) => number
 
 /**
  * The ground as flat-coloured low-poly triangles over every cell on the map; each triangle is coloured by
- * its lowest corner, so coasts get a sandy rim.
+ * its lowest corner, so coasts get a sandy rim. Shores are drawn finer, in the regions `open` (all if not given).
  */
-export function buildGroundGeometry(terrain: Terrain): THREE.BufferGeometry {
+export function buildGroundGeometry(terrain: Terrain, open?: ReadonlySet<RegionName>): THREE.BufferGeometry {
   const pos: number[] = [];
   const colors: number[] = [];
   const h = cornerHeights(terrain);
   const coast = coastOf(terrain, h);
   const b = terrain.bounds;
+  // Regions not opened yet lie under the veil: their shores keep the plain cells, which saves most of the ground's
+  // triangles on a big map (rivers and island coasts are long)
+  const level = (i: number, j: number) => {
+    const n = coast.level(i, j);
+    if (n === 1 || !open) return n;
+    const r = terrain.region(b.minX + (i + 0.5) * STEP, b.minY + (j + 0.5) * STEP);
+    return r && !open.has(r) ? 1 : n;
+  };
   const c = new THREE.Color();
   const flatColour = (start: number) => {
     const ys = [pos[start + 1], pos[start + 4], pos[start + 7]];
@@ -94,7 +102,7 @@ export function buildGroundGeometry(terrain: Terrain): THREE.BufferGeometry {
   eachCell(terrain, (x, y) => {
     const i = Math.round((x - b.minX) / STEP);
     const j = Math.round((y - b.minY) / STEP);
-    const n = coast.level(i, j);
+    const n = level(i, j);
     if (n === 1) {
       const at = pos.length;
       cellTriangles(x, y, h, pos);
@@ -106,7 +114,7 @@ export function buildGroundGeometry(terrain: Terrain): THREE.BufferGeometry {
     // waterline. Where a neighbour is split differently, the shared edge stays the straight line between the
     // corners, so no gap opens
     const step = STEP / n;
-    const other = (di: number, dj: number) => coast.level(i + di, j + dj) !== n;
+    const other = (di: number, dj: number) => level(i + di, j + dj) !== n;
     const vh: number[] = [];
     const vc: number[] = [];
     for (let cc = 0; cc <= n; cc++) {

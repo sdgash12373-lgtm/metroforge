@@ -90,10 +90,10 @@ describe('freeways and ramps', () => {
     expect(named('國道 10 號').every((s) => s.highway && !s.built && s.lanes === 2 && !s.lots.length)).toBe(true);
     // 國道 1 號 runs on south to the coast
     expect(Math.max(...named('國道 1 號').flatMap((s) => [c.net.node(s.a).p.y, c.net.node(s.b).p.y]))).toBeGreaterThan(800);
-    expect(c.outside.size).toBe(5);
+    expect(c.outside.size).toBe(6);
     expect(c.disconnectedRoads()).toHaveLength(0);
     // No lights anywhere on the 國道: only where the interchange's street crosses over
-    const lights = [...findJunctions(c.net).keys()].map((id) => c.net.node(id));
+    const lights = [...findJunctions(c.net).keys()].map((id) => c.net.node(id)).filter((n) => Math.abs(n.p.x) <= 2000 && Math.abs(n.p.y) <= 2000);
     expect(lights.length).toBe(2);
     expect(lights.every((n) => n.h === 0)).toBe(true);
     // Opening Pingtung builds only its interchange and road into town
@@ -101,12 +101,12 @@ describe('freeways and ramps', () => {
     const roads = c.net.segments.size;
     expect(c.openRegion('pingtung').ok).toBe(true);
     expect(c.net.segments.size).toBeGreaterThan(roads);
-    expect(c.outside.size).toBe(5);
+    expect(c.outside.size).toBe(6);
     // Saving and loading again lays nothing more
     const size = c.net.segments.size;
     const back = City.deserialize(JSON.parse(JSON.stringify(c.serialize())));
     expect(back.net.segments.size).toBe(size);
-    expect(back.outside.size).toBe(5);
+    expect(back.outside.size).toBe(6);
     // Nobody can tear the 國道 down
     const s = named('國道 10 號')[0];
     expect(c.bulldoze(quadPoint(c.net.quad(s), 0.5), 4).ok).toBe(false);

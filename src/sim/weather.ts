@@ -1,5 +1,5 @@
 import type { Vec2 } from './geometry';
-import type { Terrain, TerrainName } from './terrain';
+import { REGION_PLACES, type Terrain, type TerrainName } from './terrain';
 import { START_DATE } from './format';
 
 /** What the sky is doing over the whole map; each place then sees it a little differently. */
@@ -163,7 +163,10 @@ export class Weather {
         temp = temp * 0.85 + 26 * 0.15;
       }
       temp -= h * 0.0065;
-      if (t.region(p.x, p.y) === 'pingtung') region = `屏東${region}`;
+      const place = t.region(p.x, p.y);
+      // Penghu stands open to the strait's winds
+      if (place === 'penghu') c.wind = Math.min(1, c.wind + 0.25);
+      if (place && place !== 'kaohsiung') region = `${REGION_PLACES[place]}${region}`;
     }
     const snow = c.precip > 0 && temp < 1;
     const label = this.label(c.sky, c.precip, snow, c.fog);
