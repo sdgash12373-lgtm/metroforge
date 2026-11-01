@@ -59,7 +59,7 @@ import {
   emptyReview,
 } from './policy';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
-import { FLAT, FLAT_CLASSIC, HALF_MAP, PLAIN, REGION_NAMES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable, northPoint, penghuPoint } from './terrain';
+import { FLAT, FLAT_CLASSIC, HALF_MAP, PLAIN, REGION_NAMES, REGION_PLACES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable, northPoint, penghuPoint } from './terrain';
 import { type RoadPoint, Traffic, taxiTint } from './traffic';
 import { type BusStop, type HubStyle, type MetroLook, SPECIAL_REGIONS, type SpecialRegion, type StationShape, type StationStyle, Transit, isHub, isShared } from './transit';
 import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, isIndustry, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
@@ -127,7 +127,7 @@ export const STATION_STREET_REACH = 40;
 export const SPECIAL_STATION_COST = 3;
 /** A 共構 station's stops cost this many times their ordinary price, besides its track and road. */
 export const HUB_STATION_COST = 2;
-export const HUB_LABEL: Record<HubStyle, string> = { twin: '雙鐵共構站', triple: '三鐵共構站' };
+export const HUB_LABEL: Record<HubStyle, string> = { twin: '雙鐵共構站', triple: '三鐵共構站', tripleLeft: '三鐵共構站' };
 
 /** A station standing on a rail line: where, which side its building is on, and whether it is Kaohsiung's own. */
 /**
@@ -659,7 +659,7 @@ export class City {
   /** offers made and events started or ended since the HUD last looked */
   eventNews: Omit<EventStep, 'money' | 'cars'>[] = [];
   /** fans' cars still to set off for the arena */
-  private fansDue = 0;
+  private fansDue = new Map<number, number>();
   /** rank: index into LEVELS */
   level = 0;
   /** bumped when the rank changes */
@@ -743,7 +743,7 @@ export class City {
     }
     // Stations may move to the other side of their track now the streets differ (roadsVersion is bumped below)
     this.stationCache = null;
-    recomputeBlocked(this.net, (p) => this.occupied(p));
+    this.recomputeLots();
     this.traffic.onNetworkChanged();
     this.transit.onNetworkChanged();
     this.computeConnectivity();
@@ -789,9 +789,25 @@ export class City {
     }
   }
 
+  /** Which cells along the streets are free to build on. */
+  private recomputeLots(): void {
+    // Stations and metro entrances looked up once for the whole pass, not once per cell
+    this.blockers = { spots: this.stationSpots(), exits: this.metroExits() };
+    try {
+      recomputeBlocked(this.net, (p) => this.occupied(p));
+    } finally {
+      this.blockers = null;
+    }
+  }
+
+  /** stations and metro entrances, held while every cell in town is checked (see recomputeLots) */
+  private blockers: { spots: StationSpot[]; exits: MetroExit[] } | null = null;
+  /** whether a cell's own ground can be built on (opened region, not water or too steep), by regionsVersion */
+  private readonly landCache = new WeakMap<Vec2, { v: number; x: number; y: number; ok: boolean }>();
+
   /** Water, hillside, track, a station or an airfield on this spot, so nothing can be built on it. */
   occupied(p: Vec2): boolean {
-    for (const e of this.metroExits()) {
+    for (const e of this.blockers?.exits ?? this.metroExits()) {
       if (Math.abs(p.x - e.x) > CELL * 2 || Math.abs(p.y - e.y) > CELL * 2) continue;
       if (e.cells.some((c) => Math.hypot(c.x - p.x, c.y - p.y) < CELL * 0.45)) return true;
     }
@@ -800,8 +816,13 @@ export class City {
 
   /** Everything that keeps a spot from being built on except metro entrances, which find their places around it. */
   private occupiedByWorks(p: Vec2): boolean {
-    if (!this.open(p) || !buildable(this.terrain, p)) return true;
-    for (const st of this.stationSpots()) if (stationCovers(st.kind, st.pose, st.side, p, CELL * 0.45, st.style)) return true;
+    let land = this.landCache.get(p);
+    if (land?.v !== this.regionsVersion || land.x !== p.x || land.y !== p.y) {
+      land = { v: this.regionsVersion, x: p.x, y: p.y, ok: this.open(p) && buildable(this.terrain, p) };
+      this.landCache.set(p, land);
+    }
+    if (!land.ok) return true;
+    for (const st of this.blockers?.spots ?? this.stationSpots()) if (stationCovers(st.kind, st.pose, st.side, p, CELL * 0.45, st.style)) return true;
     // Footbridges stand on the sidewalks and leave the lots beside them free
     for (const f of this.facilities.values()) if (f.kind !== 'footbridge' && footprintContains(f, p, 2)) return true;
     for (const a of this.aviation.airports.values()) if (Aviation.contains(a, p, 2)) return true;
@@ -988,7 +1009,7 @@ export class City {
   /** Track or airports changed: zoning under them goes, and the renderer rebuilds. */
   private landChanged(): void {
     if (this.holdLand) return;
-    recomputeBlocked(this.net, (p) => this.occupied(p));
+    this.recomputeLots();
     this.lotsVersion++;
     this.zoningVersion++;
   }
@@ -1935,7 +1956,11 @@ export class City {
     if (spec.unlock && !this.unlocked(spec.unlock)) return `城市升級為「${LEVELS[UNLOCK[spec.unlock]].name}」後才能蓋${spec.label}`;
     if (kind === 'footbridge') return this.footbridgeProblem(p, angle);
     const plan = { kind, p, angle };
-    if (isLandmark(kind) && [...this.facilities.values()].some((f) => f.kind === kind)) return `城市裡已經有${spec.label}了`;
+    if (kind === 'arena') {
+      // One arena in each region
+      const r = this.terrain.region(p.x, p.y);
+      if (this.arenas().some((f) => this.terrain.region(f.p.x, f.p.y) === r)) return `${r ? REGION_NAMES[r] : '這裡'}已經有${spec.label}了，每一區可以蓋一座`;
+    } else if (isLandmark(kind) && [...this.facilities.values()].some((f) => f.kind === kind)) return `城市裡已經有${spec.label}了`;
     for (const q of footprintGrid(plan)) {
       const locked = this.regionProblem(q);
       if (locked) return locked;
@@ -2777,17 +2802,20 @@ export class City {
     for (const t of this.transits) t.maintain();
     this.spawnTrips(zoned, rng);
     // 巨蛋活動: offers come in, booked events open their doors, and fans who can't come by train or bus drive in
-    const arena = this.arenaAccess();
+    const arenas = this.arenas().map((f) => ({ f, access: this.arenaAccess(f)! }));
     const ev = this.events.step(
-      { day: this.day, arena: !!arena, happiness: this.needs.happiness, population: this.stats.population, transit: arena?.transit ?? 0 },
+      { day: this.day, arenas: arenas.map((a) => ({ id: a.f.id, transit: a.access.transit })), happiness: this.needs.happiness, population: this.stats.population },
       1 / DAY_STEPS,
       rng,
     );
     if (ev.offered || ev.started || ev.ended || ev.delayed) this.eventNews.push({ offered: ev.offered, started: ev.started, ended: ev.ended, delayed: ev.delayed });
     if (ev.money) this.money += ev.money;
-    this.fansDue += ev.cars;
-    if (arena && this.fansDue >= 1) this.spawnFans(arena, zoned, rng);
-    else if (!arena) this.fansDue = 0;
+    for (const [id, cars] of ev.cars) this.fansDue.set(id, (this.fansDue.get(id) ?? 0) + cars);
+    for (const [id, due] of this.fansDue) {
+      const a = arenas.find((x) => x.f.id === id);
+      if (!a) this.fansDue.delete(id);
+      else if (due >= 1) this.spawnFans(id, a.access, zoned, rng);
+    }
     // Trains and high-speed rail also carry people from out of town
     for (const k of RAIL_KINDS) {
       const sys = this.rails[k];
@@ -2999,14 +3027,24 @@ export class City {
     }
   }
 
+  /** The city's arenas, at most one in each region, oldest first. */
+  arenas(): Facility[] {
+    return [...this.facilities.values()].filter((f) => f.kind === 'arena').sort((a, b) => a.id - b.id);
+  }
+
+  /** What an arena is called: the region's place name before it once there can be more than one. */
+  arenaName(f: Facility): string {
+    const r = this.terrain.region(f.p.x, f.p.y);
+    return this.terrain.regions.length > 1 && r ? `${REGION_PLACES[r]}${FACILITIES.arena.label}` : FACILITIES.arena.label;
+  }
+
   /**
-   * The arena events are held at (the first one built), where its fans arrive on the road, and the share
-   * of them who can come without a car: metro, train and high-speed rail stations within 500 m, bus stops
-   * within 300 m and YouBike docks nearby.
+   * Where an arena's fans arrive on the road (the first one built if none is named), and the share of them
+   * who can come without a car: metro, train and high-speed rail stations within 500 m, bus stops within 300 m
+   * and YouBike docks nearby.
    */
-  arenaAccess(): (ArenaAccess & { at: RoadPoint | null }) | null {
-    let arena: Facility | null = null;
-    for (const f of this.facilities.values()) if (f.kind === 'arena') arena = arena ?? f;
+  arenaAccess(of?: Facility): (ArenaAccess & { at: RoadPoint | null }) | null {
+    const arena = of ?? this.arenas()[0];
     if (!arena) return null;
     const p = arena.p;
     const modes: string[] = [];
@@ -3052,22 +3090,23 @@ export class City {
   }
 
   /** Fans' cars heading for the arena from homes round town and from the highway, as room on the roads allows. */
-  private spawnFans(arena: { at: RoadPoint | null }, zoned: Placed[], rng: Rng): void {
+  private spawnFans(id: number, arena: { at: RoadPoint | null }, zoned: Placed[], rng: Rng): void {
     if (!arena.at) {
-      this.fansDue = 0;
+      this.fansDue.set(id, 0);
       return;
     }
+    let due = this.fansDue.get(id) ?? 0;
     const homes = zoned.filter((p) => p.lot.level && ZONES[p.lot.zone as Exclude<Zone, Zone.None>].demand === 'R' && this.isConnected(p.seg));
     const first = this.gatePoint(rng);
     const gate = !first || this.sameRoads(first, arena.at) ? first : this.gatePoint(rng, arena.at);
-    for (let n = Math.min(12, Math.floor(this.fansDue)); n > 0 && this.traffic.vehicles.length < this.maxVehicles; n--) {
-      this.fansDue--;
+    for (let n = Math.min(12, Math.floor(due)); n > 0 && this.traffic.vehicles.length < this.maxVehicles; n--) {
+      due--;
       // Half the crowd comes from out of town
       const from = rng() < 0.5 || !homes.length ? gate : ((h) => ({ seg: h.seg.id, s: h.lot.s }))(homes[Math.floor(rng() * homes.length) % homes.length]);
       if (from) this.traffic.spawn(from, arena.at, 'car', rng());
     }
     // Whoever can't find room on the roads gives up rather than piling up for later
-    this.fansDue = Math.min(this.fansDue, 40);
+    this.fansDue.set(id, Math.min(due, 40));
   }
 
   /** Whether two road points are on the same network of roads. */
@@ -3194,6 +3233,8 @@ export class City {
     for (const k of data.policies ?? []) if (POLICIES[k]) city.policies.add(k);
     city.ridersDay = data.ridersDay ?? 0;
     if (data.events) city.events.load(data.events);
+    const first = city.arenas()[0];
+    if (first) city.events.adopt(first.id);
     for (const [id, name] of data.roadNames ?? []) {
       const seg = city.net.segments.get(id);
       if (seg) seg.name = name;

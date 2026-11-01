@@ -105,7 +105,7 @@ const STATION_HINTS: Record<StationType, string> = {
   standard: '點在路邊蓋火車站，車站會沿著道路，自帶一段月台軌道',
   special: '點在路邊蓋地區特色車站（高雄區：高雄車站，三鐵共構全在地下；屏東區：屏東車站。每區一座；台南、嘉義、澎湖目前沒有）',
   twin: '點在路邊蓋雙鐵共構站：火車和捷運都在地下，自帶兩段地下軌道，地面是車站入口',
-  triple: '點在路邊蓋三鐵共構站：地下火車和捷運、地面高鐵，旁邊的停車場有高架道路可接快速道路',
+  triple: '點在路邊蓋三鐵共構站：地下火車和捷運、地面高鐵，旁邊的停車場有高架道路可接快速道路（可選出口在車站左邊或右邊，以面對車站為準）',
 };
 
 export class ToolController {
@@ -144,6 +144,8 @@ export class ToolController {
   metroLook: 'standard' | 'canopy' = 'standard';
   /** what the station tool builds: a standard station, the region's own, or a 共構 station */
   stationType: StationType = 'standard';
+  /** which side of a 三鐵共構 station (facing it from the street) its car park and elevated road go */
+  hubExit: 'right' | 'left' = 'right';
   /** track tools draw curves instead of straight track */
   trackCurve = false;
   trackLevel: Record<RailKind, RoadLevel> = {
@@ -299,6 +301,12 @@ export class ToolController {
   /** Level the active drawing tool builds on. */
   get level(): RoadLevel {
     return isRail(this.tool) ? this.trackLevel[this.tool] : this.roadLevel;
+  }
+
+  setHubExit(side: 'right' | 'left'): void {
+    this.hubExit = side;
+    this.events.changed();
+    this.refresh();
   }
 
   setStationType(type: StationType): void {
@@ -920,7 +928,7 @@ export class ToolController {
     else if (this.tool === 'train' && this.railAction === 'station') {
       const type = this.stationType;
       if (type === 'twin' || type === 'triple') {
-        const r = this.city.buildHubStation(p, type);
+        const r = this.city.buildHubStation(p, type === 'triple' && this.hubExit === 'left' ? 'tripleLeft' : type);
         const next = type === 'twin' ? '從兩端用「地下」拉火車和捷運軌道' : '從兩端用「地下」拉火車和捷運軌道、用「地面」拉高鐵軌道，高架道路可接快速道路';
         this.events.toast(r.ok ? `${HUB_LABEL[type]}完成，花費 ${ntd(r.cost)}；接著${next}` : (r.reason ?? '這裡不能蓋車站'));
       } else {

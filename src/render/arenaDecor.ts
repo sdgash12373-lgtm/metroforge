@@ -401,7 +401,7 @@ function beam(b: Builder, x0: number, y0: number, z0: number, x1: number, y1: nu
  * Dresses the arena for its next event, from a day before the doors open until it ends, in a style of
  * its own for each kind: 演唱會, 運動賽事 or 音樂祭, with the show's own name, date and teams.
  */
-export class ArenaDecor {
+class OneArena {
   readonly group = new THREE.Group();
   /** the crowd and the light show, which move every frame */
   private readonly show = new ArenaShow();
@@ -415,11 +415,10 @@ export class ArenaDecor {
   }
 
   /** `night` 0..1 how dark it is; `pixels` the screen's pixels per unit one unit from the camera. */
-  update(city: City, dt = 0, simDt = dt, night = 0, pixels = 600): void {
-    let arena: Facility | null = null;
-    for (const f of city.facilities.values()) if (f.kind === 'arena') arena = arena ?? f;
+  update(city: City, arena: Facility | null, first: boolean, dt: number, simDt: number, night: number, pixels: number): void {
     const day = city.day;
-    let show = arena ? city.events.booked.find((b) => day >= b.start - DRESS_DAYS && day < eventEnd(b)) : undefined;
+    const here = (b: Booking) => (b.arena === undefined ? first : b.arena === arena?.id);
+    let show = arena ? city.events.booked.find((b) => here(b) && day >= b.start - DRESS_DAYS && day < eventEnd(b)) : undefined;
     // Once it is over it leaves the bookings, but the crowd still has to go home
     const last = this.last;
     if (!show && arena && last && day >= last.start && day < eventEnd(last) + EXIT_HOURS / 24) show = last;
@@ -430,6 +429,11 @@ export class ArenaDecor {
     this.key = key;
     this.clear();
     if (arena && show) this.build(arena, show);
+  }
+
+  dispose(): void {
+    this.clear();
+    this.show.update(null, undefined, 0, 0, 0, 0, 0);
   }
 
   private clear(): void {
@@ -459,5 +463,31 @@ export class ArenaDecor {
         ),
       );
     } else glow.dispose();
+  }
+}
+
+/** Dresses every arena in town (one per region) for its own next event. */
+export class ArenaDecor {
+  readonly group = new THREE.Group();
+  private readonly halls = new Map<number, OneArena>();
+
+  /** `night` 0..1 how dark it is; `pixels` the screen's pixels per unit one unit from the camera. */
+  update(city: City, dt = 0, simDt = dt, night = 0, pixels = 600): void {
+    const arenas = city.arenas();
+    for (const [id, hall] of this.halls) {
+      if (arenas.some((f) => f.id === id)) continue;
+      hall.dispose();
+      this.group.remove(hall.group);
+      this.halls.delete(id);
+    }
+    arenas.forEach((f, i) => {
+      let hall = this.halls.get(f.id);
+      if (!hall) {
+        hall = new OneArena();
+        this.halls.set(f.id, hall);
+        this.group.add(hall.group);
+      }
+      hall.update(city, f, i === 0, dt, simDt, night, pixels);
+    });
   }
 }

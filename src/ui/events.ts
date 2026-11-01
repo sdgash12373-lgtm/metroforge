@@ -52,33 +52,40 @@ export class EventsPanel {
 
   render(city: City, force = false): void {
     const book = city.events;
-    const access = city.arenaAccess();
-    const key = `${book.version}:${Math.round(book.publicFavor)}:${Math.round(book.vendorFavor)}:${access ? Math.round(access.transit * 100) : -1}:${access?.at ? 1 : 0}`;
+    const halls = city.arenas().map((f) => ({ f, name: city.arenaName(f), access: city.arenaAccess(f)! }));
+    const key = `${book.version}:${Math.round(book.publicFavor)}:${Math.round(book.vendorFavor)}:${halls.map((h) => `${h.f.id}/${Math.round(h.access.transit * 100)}/${h.access.at ? 1 : 0}`).join()}`;
     if (!force && key === this.shown) return;
     this.shown = key;
     const body: HTMLElement[] = [el('h2', '', '🎤 巨蛋活動')];
-    if (!access) {
-      body.push(el('p', 'note', '先在「建設 → 地標」蓋一座巨蛋，主辦單位就會開始來洽談演唱會、運動賽事和音樂祭。'));
+    if (!halls.length) {
+      body.push(el('p', 'note', '先在「建設 → 地標」蓋一座巨蛋，主辦單位就會開始來洽談演唱會、運動賽事和音樂祭。每一區都可以蓋一座。'));
       this.panel.replaceChildren(...body);
       return;
     }
+    const many = halls.length > 1;
+    const hallOf = (e: EventOffer) => halls.find((h) => h.f.id === e.arena) ?? halls[0];
+    const tagOf = (e: EventOffer) => (many ? `［${hallOf(e).name}］` : '');
     body.push(meter('民眾好感度', book.publicFavor), meter('廠商好感度', book.vendorFavor));
     body.push(el('p', 'note', '撞期、塞車會降低好感度；民眾好感度影響滿意度，廠商好感度越高，邀約越多、活動越熱門。'));
-    const drive = Math.round((1 - access.transit) * 100);
-    const reach = el('p', `note ${drive > 60 ? 'warn' : 'ok'}`);
-    reach.textContent = access.modes.length
-      ? `場館周邊：${access.modes.join('、')}，約 ${Math.round(access.transit * 100)}% 觀眾搭大眾運輸，${drive}% 開車`
-      : `場館周邊沒有捷運、火車站或公車站，觀眾全部開車，會塞爆附近道路。在 500 公尺內蓋捷運或火車站、300 公尺內設公車站可以分流。`;
-    body.push(reach);
-    if (!access.at) body.push(el('p', 'note warn', '巨蛋門口的道路沒有接上高速公路，觀眾到不了。'));
-    const go = el('button', 'chip', '看巨蛋');
-    go.type = 'button';
-    go.onclick = () => this.hooks.lookAt(access.p);
-    body.push(go);
+    for (const { name, access } of halls) {
+      if (many) body.push(el('h3', 'bgroup', name));
+      const drive = Math.round((1 - access.transit) * 100);
+      const reach = el('p', `note ${drive > 60 ? 'warn' : 'ok'}`);
+      reach.textContent = access.modes.length
+        ? `場館周邊：${access.modes.join('、')}，約 ${Math.round(access.transit * 100)}% 觀眾搭大眾運輸，${drive}% 開車`
+        : `場館周邊沒有捷運、火車站或公車站，觀眾全部開車，會塞爆附近道路。在 500 公尺內蓋捷運或火車站、300 公尺內設公車站可以分流。`;
+      body.push(reach);
+      if (!access.at) body.push(el('p', 'note warn', `${name}門口的道路沒有接上高速公路，觀眾到不了。`));
+      const go = el('button', 'chip', `看${name}`);
+      go.type = 'button';
+      go.onclick = () => this.hooks.lookAt(access.p);
+      body.push(go);
+    }
+    if (many) body.push(el('p', 'note', '每座巨蛋各自排檔，不同場館同一天辦活動不算撞期。'));
 
     body.push(el('h3', 'bgroup', `邀約（${book.offers.length}）`));
     if (!book.offers.length) body.push(el('p', 'note', '目前沒有新的邀約，主辦單位每隔一陣子會來洽談。'));
-    for (const o of book.offers) body.push(this.offerCard(city, o, access.transit));
+    for (const o of book.offers) body.push(this.offerCard(city, o, hallOf(o).access.transit, tagOf(o)));
 
     body.push(el('h3', 'bgroup', '已排定'));
     if (!book.booked.length) body.push(el('p', 'note', '還沒有排定的活動。'));
@@ -91,7 +98,7 @@ export class EventsPanel {
       const live = b.attendance !== undefined;
       const tag = clash ? ' ⚠️撞期' : b.delayed ? ` ⏰延後${b.delayed}分` : pair ? ' 🔁同日接檔' : '';
       row.append(
-        el('span', '', `${spec.icon} ${b.name}${tag}`),
+        el('span', '', `${spec.icon} ${tagOf(b)}${b.name}${tag}`),
         el('b', '', live ? `進行中 · ${b.attendance!.toLocaleString()} 人` : when(b)),
       );
       body.push(row);
@@ -110,12 +117,12 @@ export class EventsPanel {
     this.panel.replaceChildren(...body);
   }
 
-  private offerCard(city: City, o: EventOffer, transit: number): HTMLElement {
+  private offerCard(city: City, o: EventOffer, transit: number, hall: string): HTMLElement {
     const book = city.events;
     const spec = EVENT_KINDS[o.kind];
     const card = el('div', 'ev-card');
     const head = el('div', 'ev-head');
-    head.append(el('b', '', `${spec.icon} ${o.name}`), el('small', '', spec.label));
+    head.append(el('b', '', `${spec.icon} ${o.name}`), el('small', '', `${hall}${spec.label}`));
     card.append(head);
     card.append(el('div', 'ev-when', `${when(o)}（${o.hours} 小時）`));
     if (o.kind === 'sports') {

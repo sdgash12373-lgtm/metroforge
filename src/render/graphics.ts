@@ -36,8 +36,9 @@ const PRESETS: Record<Tier, Preset> = {
   // No shadows and no multisampling, and the resolution gives way before the frame rate does: for integrated chips
   low: { pixels: 1, post: false, samples: 0, softShadows: false, shadowSize: 1024, shadows: false, minScale: 0.7 },
   // Straight to the screen (multisampled by the canvas): no full-screen passes, which integrated chips feel most
-  medium: { pixels: 1, post: false, samples: 0, softShadows: false, shadowSize: 2048, shadows: true, minScale: 1 },
-  high: { pixels: 2, post: true, samples: 4, softShadows: true, shadowSize: 2048, shadows: true, minScale: 1 },
+  medium: { pixels: 1, post: false, samples: 0, softShadows: false, shadowSize: 2048, shadows: true, minScale: 0.8 },
+  // Sharper than the screen's own pixels only up to 1.5×: the last half costs nearly double for little to see
+  high: { pixels: 1.5, post: true, samples: 4, softShadows: true, shadowSize: 2048, shadows: true, minScale: 0.75 },
 };
 
 /** The frame rate the automatic setting holds on to. */
@@ -124,6 +125,7 @@ export class Graphics {
   private slow = 0;
   private fast = 0;
   private starved = 0;
+  private frames = 0;
   /** whether the player has shadows on in 設定 (低 leaves them out anyway) */
   private readonly wantShadows: boolean;
 
@@ -222,6 +224,10 @@ export class Graphics {
 
   /** Night 0..1: lights bloom more after dark. */
   render(night: number): void {
+    // The sun's shadows are drawn every other frame: the shadow pass draws the whole scene again, and a moving
+    // car's shadow a frame behind can't be seen (the map keeps the light's matrix it was made with, so nothing slides)
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = this.frames++ % 2 === 0;
     if (!this.composer) {
       this.renderer.render(this.scene, this.camera);
       return;

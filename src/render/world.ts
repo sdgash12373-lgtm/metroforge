@@ -13,7 +13,7 @@ import { CELL, Zone } from '../sim/zoning';
 import { BuildingLayer } from './buildings';
 import { CameraRig } from './cameraRig';
 import type { PathPiece } from '../sim/transit';
-import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay, streetTreeSpots } from './roadMesh';
+import { type RoadContext, buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeometry, buildRoadGeometries, buildTrafficOverlay, roadContext, streetTreeSpots } from './roadMesh';
 import { StopLayer } from './transit';
 import { buildFacilityGeometry, buildFacilitySigns, signAtlas } from './facilities';
 import { SignalLayer } from './signals';
@@ -23,7 +23,7 @@ import { LEVELS, UNLOCK } from '../sim/levels';
 import { VehicleLayer } from './vehicles';
 import { PedestrianLayer } from './pedestrians';
 import { RAIL_KINDS, type RailKind, TRACK_OFFSET } from '../sim/rail';
-import type { RoadNetwork, RoadSegment } from '../sim/roads';
+import type { RoadNetwork, RoadNode, RoadSegment } from '../sim/roads';
 import { airportMaterial, buildAirportGeometry, PlaneLayer, TaxiRank } from './airport';
 import { TRACK_LOOK, buildTrackGeometries } from './railMesh';
 import { StationLayer } from './stations';
@@ -52,6 +52,10 @@ interface RailLayer {
 
 const TREE_COUNT = LOWLAND_TREES + HILL_TREES + OUTER_TREES;
 const STREET_TREES = 4000;
+/** Size of the map tiles the roads are drawn in, metres. */
+const ROAD_TILE = 400;
+/** After a road is drawn, buildings and trees wait this long for the next one before they are redrawn. */
+const ROAD_SETTLE_MS = 700;
 /** Camera height above which the small things round the buildings are not drawn */
 const FAR_DETAIL = 2200;
 /** How often painted cells are redrawn while the brush moves. */
@@ -165,7 +169,12 @@ export class World {
   private buildingsZoning = -1;
   private showEmpty = false;
   /** street lights' pools of light, shown only after dark */
-  private lampPools: THREE.Mesh | null = null;
+  /** the roads, a group of meshes for each tile of the map (see syncRoadTiles) */
+  private readonly roadTiles = new Map<string, { key: string; group: THREE.Group }>();
+  /** when the roads last changed, and whether the trees still have to be cleared off them */
+  private roadsAt = -Infinity;
+  private syncedCity: City | null = null;
+  private treesDue = false;
   private readonly materials = {
     sidewalk: new THREE.MeshLambertMaterial({ color: 0xc4c7c2, side: THREE.DoubleSide }),
     asphalt: roughAsphalt(new THREE.MeshLambertMaterial({ color: 0x4a4d52, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 })),
@@ -812,6 +821,9 @@ export class World {
   }
 
   sync(city: City): void {
+    // A city just loaded draws everything at once
+    const fresh = this.syncedCity !== city;
+    this.syncedCity = city;
     this.cityRef = city;
     const now = performance.now();
     // While the zoning brush is moving, the slow rebuilds (trees, stations) wait for the stroke to end
@@ -834,32 +846,13 @@ export class World {
     }
     if (city.roadsVersion !== this.roadsVersion) {
       this.roadsVersion = city.roadsVersion;
-      for (const child of [...this.roadGroup.children]) {
-        (child as THREE.Mesh).geometry.dispose();
-        this.roadGroup.remove(child);
-      }
-      const g = buildRoadGeometries(city.net);
-      const walk = new THREE.Mesh(g.sidewalk, this.materials.sidewalk);
-      walk.receiveShadow = true;
-      const asphalt = new THREE.Mesh(g.asphalt, this.materials.asphalt);
-      asphalt.receiveShadow = true;
+      this.syncRoadTiles(city);
       this.tunnels.geometry.dispose();
       this.tunnels.geometry = buildTunnelOverlay(city.net);
-      const concrete = new THREE.Mesh(g.concrete, this.materials.concrete);
-      concrete.castShadow = true;
-      concrete.receiveShadow = true;
-      const mouths = new THREE.Mesh(g.dark, this.materials.tunnel);
-      const barriers = new THREE.Mesh(g.barriers, this.materials.barrier);
-      barriers.castShadow = true;
-      barriers.receiveShadow = true;
-      const posts = new THREE.Mesh(g.lampPosts, this.materials.lampPost);
-      posts.castShadow = true;
-      const pools = new THREE.Mesh(g.lampPools, this.materials.lampPool);
-      pools.renderOrder = 3;
-      this.lampPools = pools;
-      pools.visible = this.sky.night.value > 0.02;
-      this.roadGroup.add(walk, asphalt, new THREE.Mesh(g.markings, this.materials.markings), concrete, mouths, barriers, posts, new THREE.Mesh(g.lampHeads, this.materials.lampHead), pools);
-      this.updateTrees(city);
+      // Trees and buildings cleared by the new road follow once the player pauses: drawing road after road
+      // stays smooth instead of redrawing the whole town at every click
+      if (!fresh) this.roadsAt = now;
+      this.treesDue = true;
     }
     for (const k of RAIL_KINDS) this.syncRail(city, k, painting);
     this.syncCutOff(city);
@@ -882,13 +875,92 @@ export class World {
     // Painted cells still show as the brush moves, a few times a second rather than every frame
     const own = city.zoningVersion !== this.buildingsZoning;
     const wait = painting ? PAINT_REDRAW_MS : own ? 0 : GROWTH_REDRAW_MS;
-    if (city.lotsVersion !== this.lotsVersion && now - this.buildingsAt > wait) {
+    const settled = now - this.roadsAt > ROAD_SETTLE_MS;
+    if (this.treesDue && settled) {
+      this.treesDue = false;
+      this.updateTrees(city);
+    }
+    if (city.lotsVersion !== this.lotsVersion && now - this.buildingsAt > wait && settled) {
       this.lotsVersion = city.lotsVersion;
       this.buildingsZoning = city.zoningVersion;
       this.buildingsAt = now;
       this.buildings.update(city);
     }
     if (city.zoningVersion !== this.treesZoning && !painting) this.updateTrees(city);
+  }
+
+  /**
+   * The roads are drawn in tiles of the map, and a change redraws only the tiles whose roads it touched (with
+   * the junctions at their ends): drawing a road in a big city no longer rebuilds every street. Tiles also let
+   * the parts off screen be skipped when drawing.
+   */
+  private syncRoadTiles(city: City): void {
+    const net = city.net;
+    const at = new Map<number, RoadSegment[]>();
+    for (const s of net.segments.values()) {
+      for (const n of [s.a, s.b]) {
+        const list = at.get(n);
+        if (list) list.push(s);
+        else at.set(n, [s]);
+      }
+    }
+    const kind = (s: RoadSegment) => `${s.lanes ?? 1}${+s.oneway}${+!!s.ring}${+!!s.ramp}${+!!s.highway}${+!!s.built}${+!!s.walk}`;
+    // A node's looks depend on its height and on every road meeting there
+    const nodeKey = (id: number) => `${net.node(id).h}|${(at.get(id) ?? []).map((s) => `${s.id}.${kind(s)}`).join(',')}`;
+    const tileOf = (p: Vec2) => `${Math.floor(p.x / ROAD_TILE)},${Math.floor(p.y / ROAD_TILE)}`;
+    const parts = new Map<string, { segs: RoadSegment[]; nodes: RoadNode[]; key: string[] }>();
+    const part = (k: string) => {
+      let t = parts.get(k);
+      if (!t) parts.set(k, (t = { segs: [], nodes: [], key: [] }));
+      return t;
+    };
+    for (const s of net.segments.values()) {
+      const t = part(tileOf(s.samples[s.samples.length >> 1]));
+      t.segs.push(s);
+      t.key.push(`s${s.id}:${s.length}:${kind(s)}:${nodeKey(s.a)}:${nodeKey(s.b)}`);
+    }
+    for (const n of net.nodes.values()) {
+      const t = part(tileOf(n.p));
+      t.nodes.push(n);
+      t.key.push(`n${n.id}:${n.p.x},${n.p.y}:${nodeKey(n.id)}`);
+    }
+    let ctx: RoadContext | null = null;
+    for (const [k, tile] of this.roadTiles) {
+      const now = parts.get(k);
+      if (now && now.key.join(';') === tile.key) continue;
+      for (const child of tile.group.children) (child as THREE.Mesh).geometry.dispose();
+      this.roadGroup.remove(tile.group);
+      this.roadTiles.delete(k);
+    }
+    for (const [k, p] of parts) {
+      if (this.roadTiles.has(k)) continue;
+      ctx ??= roadContext(net);
+      const g = buildRoadGeometries(net, p, ctx);
+      const group = new THREE.Group();
+      const mesh = (geo: THREE.BufferGeometry, mat: THREE.Material, cast = false, receive = false) => {
+        if (!geo.getAttribute('position').count) {
+          geo.dispose();
+          return;
+        }
+        const m = new THREE.Mesh(geo, mat);
+        m.castShadow = cast;
+        m.receiveShadow = receive;
+        group.add(m);
+        return m;
+      };
+      mesh(g.sidewalk, this.materials.sidewalk, false, true);
+      mesh(g.asphalt, this.materials.asphalt, false, true);
+      mesh(g.markings, this.materials.markings);
+      mesh(g.concrete, this.materials.concrete, true, true);
+      mesh(g.dark, this.materials.tunnel);
+      mesh(g.barriers, this.materials.barrier, true, true);
+      mesh(g.lampPosts, this.materials.lampPost, true);
+      mesh(g.lampHeads, this.materials.lampHead);
+      const pools = mesh(g.lampPools, this.materials.lampPool);
+      if (pools) pools.renderOrder = 3;
+      this.roadGroup.add(group);
+      this.roadTiles.set(k, { key: p.key.join(';'), group });
+    }
   }
 
   private syncRail(city: City, kind: RailKind, painting: boolean): void {
@@ -1019,7 +1091,7 @@ export class World {
     const night = this.sky.night.value;
     this.materials.lampHead.emissive.setHex(0xfff1cf).multiplyScalar(night);
     this.materials.lampPool.color.setHex(0xffd9a0).multiplyScalar(night * 0.16);
-    if (this.lampPools) this.lampPools.visible = night > 0.02;
+    this.materials.lampPool.visible = night > 0.02;
   }
 
   render(): void {
