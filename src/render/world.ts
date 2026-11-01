@@ -192,9 +192,9 @@ export class World {
     installAerialPerspective();
     const coarse = matchMedia('(pointer: coarse)').matches;
     const guess = guessTier(coarse);
-    // Drawn straight to the screen (multisampled) on 低; through the effects otherwise, which smooth edges themselves
+    // Drawn straight to the screen (multisampled) on 低 and 中; through the effects on 高, which smooth edges themselves
     const tier = quality === 'auto' ? guess : quality;
-    this.renderer = new THREE.WebGLRenderer({ antialias: tier === 'low', powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: tier !== 'high', powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = shadows;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     // Gentle filmic tone mapping: bright sun and lit windows roll off softly instead of clipping, colours stay true
