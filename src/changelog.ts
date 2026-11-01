@@ -8,6 +8,15 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '3.19.1',
+    date: '2026-11-01',
+    title: '澎湖旅遊港',
+    notes: [
+      '澎湖開通時，馬公港邊直接蓋好一座旅遊港（免費），從市區來的平面道路接到港口，不再是一條通到海邊就斷掉的路',
+      '已經開通澎湖的存檔，讀檔時也會在那條路的盡頭補上旅遊港',
+    ],
+  },
+  {
     version: '3.19.0',
     date: '2026-11-01',
     title: '整地',

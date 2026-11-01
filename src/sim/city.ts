@@ -1394,7 +1394,40 @@ export class City {
     const made = this.net.addRoad({ kind: 'free', p: pier }, null, this.net.snapLevel(town, 3, 0), 0);
     for (const s of made) applyStyle(this.net, s, { lanes: 2 });
     const gate = made.length ? made[0].a : undefined;
-    if (gate !== undefined) this.outside.add(gate);
+    if (gate !== undefined) {
+      this.outside.add(gate);
+      this.penghuPort();
+    }
+  }
+
+  /**
+   * Penghu's ferries come in at a 旅遊港 at the end of the road from town (free, built with the region), so the
+   * road leads somewhere instead of stopping at the water. Cities that opened Penghu before get theirs on load.
+   */
+  private penghuPort(): void {
+    const t = this.terrain;
+    const inPenghu = (p: Vec2) => t.region(p.x, p.y) === 'penghu';
+    if ([...this.facilities.values()].some((f) => f.kind === 'cruisePort' && inPenghu(f.p))) return;
+    const gate = [...this.outside].map((n) => this.net.nodes.get(n)).find((n) => n && n.h === 0 && inPenghu(n.p));
+    if (!gate) return;
+    const seg = [...this.net.segments.values()].find((s) => s.a === gate.id || s.b === gate.id);
+    if (!seg) return;
+    const other = this.net.node(seg.a === gate.id ? seg.b : seg.a).p;
+    const len = dist(other, gate.p) || 1;
+    const dir = { x: (gate.p.x - other.x) / len, y: (gate.p.y - other.y) / len };
+    const { d } = FACILITIES.cruisePort;
+    // Facing the road end, out to sea; nudged along and across the shore until it sits on the coastline
+    const angle = Math.atan2(dir.y, dir.x) - Math.PI / 2;
+    for (const out of [0, 6, 12, 18, -6]) {
+      for (const side of [0, 10, -10, 20, -20]) {
+        const k = FACILITY_ROAD_GAP / 2 + d / 2 + out;
+        const p = { x: gate.p.x + dir.x * k - dir.y * side, y: gate.p.y + dir.y * k + dir.x * side };
+        const problem = this.facilityProblem('cruisePort', p, angle);
+        if (problem && !problem.startsWith('資金不足') && !problem.startsWith('城市升級')) continue;
+        this.addFacility('cruisePort', p, angle);
+        return;
+      }
+    }
   }
 
   /** Whether a stretch of 國道 viaduct can go here: over plain or rivers inside the map, clear of anything built. */
@@ -3445,6 +3478,8 @@ export class City {
         if (hit && !hit.seg.highway && Math.abs(city.net.heightAt(hit.seg, hit.t) - ELEVATED_HEIGHT) < 0.5) Object.assign(hit.seg, { highway: true, built: true, lanes: 2 });
       }
     }
+    // Penghu opened before its 旅遊港 came with it: the road from town now ends at one
+    if (city.regions.has('penghu')) city.penghuPort();
     city.holdLand = false;
     city.restoreGate();
     if (extend) city.layFreeways();

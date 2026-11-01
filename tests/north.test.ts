@@ -116,6 +116,15 @@ describe('Tainan, Chiayi and Penghu', () => {
     const pier = [...city.outside].map((n) => city.net.node(n)).find((n) => n.h === 0)!;
     expect(pier).toBeTruthy();
     expect(Math.hypot(pier.p.x - PENGHU_TOWN.x, pier.p.y - PENGHU_TOWN.y)).toBeGreaterThan(40);
+    // ...where the ferries come in at a 旅遊港, built with it
+    const port = [...city.facilities.values()].find((f) => f.kind === 'cruisePort');
+    expect(port).toBeTruthy();
+    expect(Math.hypot(port!.p.x - pier.p.x, port!.p.y - pier.p.y)).toBeLessThan(80);
+    // A city that opened Penghu before gets its port on load
+    const old = city.serialize();
+    old.facilities = [];
+    const back = City.deserialize(old);
+    expect([...back.facilities.values()].filter((f) => f.kind === 'cruisePort').length).toBe(1);
   });
 
   it('lays 國道 1, 3 and 8 up the north as on the map of Taiwan', () => {
