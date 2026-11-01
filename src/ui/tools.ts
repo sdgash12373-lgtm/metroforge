@@ -7,6 +7,8 @@ import { BULLDOZE_REFUND, type City, HUB_LABEL, type RoadStyle, type SaveData } 
 import { LEVELS, UNLOCK } from '../sim/levels';
 import { type GuideLine, alignToGuides } from '../sim/guides';
 import { type Vec2, dist, lerp, quadPoint } from '../sim/geometry';
+import { LAND_BRUSH } from '../sim/city';
+import type { LandMode } from '../sim/landform';
 import { HOUR_STEPS, ROAD_KINDS, ROUNDABOUT_RADIUS, type RoadKind, type RoundaboutSize } from '../sim/city';
 import { RAIL_KINDS, RAIL_SPECS, type RailKind, TRACK_OFFSET } from '../sim/rail';
 import { ELEVATED_HEIGHT, LEVEL_TOLERANCE, MAX_GRADE, ROAD_WIDTH, type RoadNetwork, type Snap, TUNNEL_DEPTH } from '../sim/roads';
@@ -37,7 +39,9 @@ export type Tool =
   | 'parking'
   | 'youbike'
   | 'nightMarket'
-  | 'university';
+  | 'university'
+  /** 整地: level, raise, dig or bore a tunnel */
+  | 'terraform';
 
 /** Tools that place a public service, landmark, green space or footbridge. */
 export const isFacilityTool = (t: Tool): t is ServiceKind | 'landmark' | 'greenery' | 'footbridge' | 'port' | 'parking' | 'youbike' | 'nightMarket' | 'university' =>
@@ -108,8 +112,27 @@ const STATION_HINTS: Record<StationType, string> = {
   triple: '點在路邊蓋三鐵共構站：地下火車和捷運、地面高鐵，旁邊的停車場有高架道路可接快速道路（可選出口在車站左邊或右邊，以面對車站為準）',
 };
 
+/** 整地's four tools: the three brushes and the tunnel. */
+export type TerraformMode = LandMode | 'tunnel';
+export const TERRAFORM_MODES: [TerraformMode, string, string][] = [
+  ['level', '整平', '刷過的山坡一層一層削平、窪地和淺海一層一層填平，平了就能蓋平面道路和建築'],
+  ['raise', '填高', '刷過的地一層一層堆高成山坡；在海邊刷可以填海造陸（填出水面後用整平修成平地）'],
+  ['dig', '下挖', '刷過的地一層一層挖成低於地面的地洞；挖到和海、河、湖連通（挖溝或用隧道引水）就會變成人工湖'],
+  ['tunnel', '隧道', '在山的兩側山腳各點一下，挖穿山體：平面道路、高架道路、高速公路和軌道都能穿過；兩端接到水邊和地洞時也能引水成湖'],
+];
+/** The brush lays a layer no more often than this while held or dragged (ms). */
+const DAB_MS = 140;
+
 export class ToolController {
   tool: Tool = 'road';
+  terraformMode: TerraformMode = 'level';
+  landRadius = 50;
+  /** the first end of a tunnel being bored */
+  boreStart: Vec2 | null = null;
+  /** what the 整地 stroke under way has cost, and when it last laid a layer */
+  private landSpent = 0;
+  private lastDab = 0;
+  private landNotice = '';
   zone: Zone = Zone.ResidentialLow;
   /** 更正: painting replaces zones already there instead of only filling empty cells */
   overwriteZones = false;
@@ -203,6 +226,7 @@ export class ToolController {
       c.facilitiesVersion,
       c.zoningVersion,
       c.regionsVersion,
+      c.landVersion,
       c.labelsVersion,
       c.aviation.version,
       c.transit.version,
@@ -281,6 +305,9 @@ export class ToolController {
       else if (!sys.net.segments.size) this.railAction = tool === 'train' ? 'station' : 'track';
       if (tool !== 'train' && this.railAction === 'station') this.railAction = 'track';
     }
+    this.boreStart = null;
+    this.world.setRelief(tool === 'terraform');
+    this.world.rig.surface = tool === 'terraform' ? (x, y) => this.city.terrain.height(x, y) : null;
     this.world.setShowEmptyCells(tool === 'zone');
     this.world.setTrafficOverlay(tool === 'traffic');
     this.world.setLineOverlay(tool === 'bus' ? 'bus' : isRail(tool) ? tool : tool === 'bulldoze' && this.demolishLines ? 'all' : null);
@@ -491,7 +518,8 @@ export class ToolController {
   private updateUnderground(): void {
     // Underground metro lines must stay visible to be picked for removal too
     const pickingLines = this.tool === 'bulldoze' && this.demolishLines;
-    this.world.setXray((this.isRoadTool && this.level === 'tunnel') || (this.tool === 'metro' && this.railAction === 'line') || pickingLines);
+    const boring = this.tool === 'terraform' && this.terraformMode === 'tunnel';
+    this.world.setXray((this.isRoadTool && this.level === 'tunnel') || (this.tool === 'metro' && this.railAction === 'line') || pickingLines || boring);
     // Laying track underground: every kind's tunnels marked in its own colour, so the right one is joined
     const railTunnel = isRail(this.tool) && this.railAction === 'track' && this.level === 'tunnel';
     this.world.setUndergroundView((this.tool === 'bulldoze' && !this.demolishLines) || railTunnel);
@@ -509,6 +537,26 @@ export class ToolController {
     this.zone = zone;
     this.events.changed();
     this.refresh();
+  }
+
+  setTerraformMode(m: TerraformMode): void {
+    this.terraformMode = m;
+    this.boreStart = null;
+    this.updateUnderground();
+    this.events.changed();
+    this.refresh();
+  }
+
+  /** Resizes the 整地 brush, shown at the middle of the view. */
+  setLandRadius(r: number): void {
+    this.landRadius = Math.max(LAND_BRUSH.min, Math.min(LAND_BRUSH.max, r));
+    this.hover = { ...this.world.rig.target };
+    this.refresh();
+  }
+
+  /** Whether holding the brush still keeps laying layers. */
+  get repeatsPaint(): boolean {
+    return this.tool === 'terraform' && this.terraformMode !== 'tunnel';
   }
 
   /** Resizes the zoning brush and shows it at the middle of the view so the size can be judged. */
@@ -647,7 +695,7 @@ export class ToolController {
 
   /** Painting tools take one-finger drags; the others use drags to move the camera. */
   get paintsOnDrag(): boolean {
-    return this.tool === 'zone';
+    return this.tool === 'zone' || this.repeatsPaint;
   }
 
   private snap(p: Vec2): Snap {
@@ -679,6 +727,11 @@ export class ToolController {
     switch (this.tool) {
       case 'pan':
         return '拖曳移動地圖；雙指縮放、旋轉；滑鼠右鍵旋轉視角、滾輪縮放。';
+      case 'terraform': {
+        const m = TERRAFORM_MODES.find(([k]) => k === this.terraformMode)!;
+        if (m[0] === 'tunnel') return this.boreStart ? '再點山另一側的山腳，挖穿隧道（每公尺 NT$250）' : m[2];
+        return `${m[2]}；按住或拖曳一層一層整，雙指移動地圖`;
+      }
       case 'road':
       case 'curve':
         return this.drawHint('道路', '拉路');
@@ -917,8 +970,8 @@ export class ToolController {
   }
 
   onTap(p: Vec2): void {
-    if (this.tool === 'pan' || this.tool === 'traffic' || this.tool === 'zone') return this.onTapNow(p);
-    this.undoable(this.tool === 'bulldoze' ? '拆除' : '建造', () => this.onTapNow(p));
+    if (this.tool === 'pan' || this.tool === 'traffic' || this.tool === 'zone' || this.repeatsPaint) return this.onTapNow(p);
+    this.undoable(this.tool === 'bulldoze' ? '拆除' : this.tool === 'terraform' ? '整地' : '建造', () => this.onTapNow(p));
   }
 
   private onTapNow(p: Vec2): void {
@@ -980,8 +1033,24 @@ export class ToolController {
       if (r.ok) this.events.toast(r.refund ? `${r.what ?? '道路'}已拆除，退還 ${ntd(r.refund)}` : `${r.what}已拆除`);
       else if (r.reason) this.events.toast(r.reason);
     } else if (this.tool === 'zone') this.onPaint(p);
+    else if (this.tool === 'terraform' && this.terraformMode === 'tunnel') this.tapBore(p);
     this.events.changed();
     this.refresh();
+  }
+
+  /** 隧道: the first tap marks one end, the second bores through to it. */
+  private tapBore(p: Vec2): void {
+    const a = this.boreStart;
+    if (!a) {
+      this.boreStart = p;
+      this.events.toast('再點山的另一側山腳，挖穿隧道');
+      return;
+    }
+    const r = this.city.buildBore(a, p);
+    if (r.ok) {
+      this.boreStart = null;
+      this.events.toast(`隧道挖通，花費 ${ntd(r.cost)}；道路、高架和軌道都能從這裡穿過山`);
+    } else this.events.toast(r.reason ?? '這裡不能挖隧道');
   }
 
   /** A brush stroke starts or ends; the map holds its slow redraws until the stroke is done. */
@@ -989,17 +1058,45 @@ export class ToolController {
     this.world.setPainting(on);
     if (on) {
       this.painted = 0;
+      this.landSpent = 0;
+      this.landNotice = '';
+      this.lastDab = 0;
       this.begin();
+    } else if (this.tool === 'terraform') {
+      this.city.settleLand();
+      if (this.landSpent > 0) this.events.toast(`整地花費 ${ntd(this.landSpent)}`);
+      this.commit('整地', this.landSpent > 0);
+      this.events.changed();
     } else this.commit('劃分區', this.painted > 0);
   }
 
   onPaint(p: Vec2): void {
+    if (this.repeatsPaint) return this.dab(p);
     this.hover = p;
     // A tap without a drag paints once, as its own stroke
     const stroke = !!this.pending;
     if (!stroke) this.setPainting(true);
     this.painted += this.city.paint(p, this.brushRadius, this.zone, this.overwriteZones);
     if (!stroke) this.setPainting(false);
+    this.refresh();
+  }
+
+  /** One layer of the 整地 brush, at most every DAB_MS while dragged or held. */
+  private dab(p: Vec2): void {
+    this.hover = p;
+    const now = performance.now();
+    if (now - this.lastDab >= DAB_MS) {
+      this.lastDab = now;
+      const stroke = !!this.pending;
+      if (!stroke) this.setPainting(true);
+      const r = this.city.terraform(this.terraformMode as LandMode, p, this.landRadius);
+      if (r.ok) this.landSpent += r.cost;
+      else if (r.reason && r.reason !== this.landNotice) {
+        this.landNotice = r.reason;
+        this.events.toast(r.reason);
+      }
+      if (!stroke) this.setPainting(false);
+    }
     this.refresh();
   }
 
@@ -1179,6 +1276,7 @@ export class ToolController {
       w.setBrush(c?.p ?? null, ROUNDABOUT_RADIUS[this.roundaboutSize], c?.snapped ? 0xf2b134 : 0xffffff);
     }
     else w.setBrush(this.tool === 'zone' ? this.hover : null, this.brushRadius, this.zone === Zone.None ? 0xffffff : ZONES[this.zone].color);
+    w.setLandBrush(this.repeatsPaint ? this.hover : null, this.landRadius);
     const { start, control } = this.draft;
     if (isRoad && start && hoverSnap) {
       const ctrl = this.curved ? (control ?? lerp(start.p, hoverSnap.p, 0.5)) : null;
@@ -1191,6 +1289,12 @@ export class ToolController {
     } else {
       w.setPreview(null, true);
       w.setAngleGuides([]);
+    }
+    if (this.tool === 'terraform' && this.terraformMode === 'tunnel') {
+      const a = this.boreStart;
+      const b = this.hover;
+      w.setCursor(a ?? b, !!a);
+      if (a && b && dist(a, b) > 1) w.setPreview({ a, c: lerp(a, b, 0.5), b }, !this.city.boreProblem(a, b).reason, 0, 0);
     }
   }
 }

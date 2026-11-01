@@ -62,7 +62,10 @@ export function buildable(t: Terrain, p: Vec2): boolean {
   let byY = byX.get(p.x);
   const hit = byY?.get(p.y);
   if (hit !== undefined) return hit;
-  const ok = !t.water(p.x, p.y) && t.height(p.x, p.y) <= 0.05;
+  const h = t.height(p.x, p.y);
+  // Ground dug below the plain (a dry pit) takes nothing until it is filled back up
+  const pit = h < -0.3 && !!(t as { touched?: (x: number, y: number) => boolean }).touched?.(p.x, p.y);
+  const ok = !pit && !t.water(p.x, p.y) && h <= 0.05;
   // Lots and trees sit at fixed spots; other callers (the cursor, a road being drawn) ask once, so cap the cache
   if (buildableCached < BUILDABLE_CACHE_MAX) {
     if (!byY) byX.set(p.x, (byY = new Map()));
@@ -70,6 +73,20 @@ export function buildable(t: Terrain, p: Vec2): boolean {
     buildableCached++;
   }
   return ok;
+}
+
+/** Forgets the cached answers for a terrain whose shape has changed (整地), inside `area` if given. */
+export function forgetBuildable(t: Terrain, area?: Bounds): void {
+  const byX = buildableCache.get(t);
+  if (!byX) return;
+  for (const [x, byY] of byX) {
+    if (area && (x < area.minX || x > area.maxX)) continue;
+    for (const y of byY.keys()) {
+      if (area && (y < area.minY || y > area.maxY)) continue;
+      byY.delete(y);
+      buildableCached--;
+    }
+  }
 }
 
 const smooth = (a: number, b: number, x: number) => {

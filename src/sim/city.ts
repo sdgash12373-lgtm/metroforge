@@ -59,7 +59,8 @@ import {
   emptyReview,
 } from './policy';
 import { type CityLevel, LEVELS, MONTH_DAYS, UNLOCK } from './levels';
-import { FLAT, FLAT_CLASSIC, HALF_MAP, PLAIN, REGION_NAMES, REGION_PLACES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable, northPoint, penghuPoint } from './terrain';
+import { FLAT, FLAT_CLASSIC, HALF_MAP, PLAIN, REGION_NAMES, REGION_PLACES, type RegionName, type Terrain, type TerrainName, TERRAINS, buildable, forgetBuildable, northPoint, penghuPoint } from './terrain';
+import { BORE_HALF, DIG_FLOOR, LAND_STEP, LAYER, type LandMode, type LandSave, Landform, PORTAL_HEIGHT, RAISE_TOP, boreDistance } from './landform';
 import { type RoadPoint, Traffic, taxiTint } from './traffic';
 import { type BusStop, type HubStyle, type MetroLook, SPECIAL_REGIONS, type SpecialRegion, type StationShape, type StationStyle, Transit, isHub, isShared } from './transit';
 import { CELL, DEPTH, type DemandKey, type Lot, ZONES, Zone, cellCenter, isIndustry, generateLots, inheritLots, paintZone, recomputeBlocked } from './zoning';
@@ -554,7 +555,15 @@ export interface SaveData extends NetSave {
   facilities?: [number, FacilityKind, number, number, number][];
   /** v9: parts of the map opened (older saves have only Kaohsiung) */
   regions?: RegionName[];
+  /** 整地: the land as reshaped */
+  land?: LandSave;
 }
+
+/** 整地 costs this much per cubic meter of earth moved, and a tunnel bore this much per meter. */
+export const EARTH_COST = 0.4;
+export const BORE_COST_PER_M = 250;
+/** Brush sizes (radius, meters) for 整地. */
+export const LAND_BRUSH = { min: 20, max: 160 };
 
 const RAIL_COST_EXTRA = { elevated: 1, tunnel: 2 };
 /** NT$ of goods each industrial job makes a month, times its zone's `goods`. */
@@ -716,8 +725,14 @@ export class City {
   private exitCache: { key: string; exits: MetroExit[] } | null = null;
   private stationsSeen: number[] = [];
 
-  constructor(readonly terrain: Terrain = FLAT) {
-    this.weather = new Weather(terrain);
+  /** the land, as the map made it and as 整地 has reshaped it */
+  readonly terrain: Landform;
+  /** bumped when 整地 changes the land */
+  landVersion = 0;
+
+  constructor(base: Terrain = FLAT) {
+    this.terrain = new Landform(base instanceof Landform ? base.base : base);
+    this.weather = new Weather(this.terrain);
     this.net.listener = {
       added: (seg, from) => {
         seg.lots = generateLots(this.net, seg);
@@ -817,8 +832,9 @@ export class City {
   /** Everything that keeps a spot from being built on except metro entrances, which find their places around it. */
   private occupiedByWorks(p: Vec2): boolean {
     let land = this.landCache.get(p);
-    if (land?.v !== this.regionsVersion || land.x !== p.x || land.y !== p.y) {
-      land = { v: this.regionsVersion, x: p.x, y: p.y, ok: this.open(p) && buildable(this.terrain, p) };
+    const v = this.regionsVersion + this.landVersion * 4096;
+    if (land?.v !== v || land.x !== p.x || land.y !== p.y) {
+      land = { v, x: p.x, y: p.y, ok: this.open(p) && buildable(this.terrain, p) };
       this.landCache.set(p, land);
     }
     if (!land.ok) return true;
@@ -880,6 +896,154 @@ export class City {
     if (!hasAccess) this.buildFreeway(r);
     else this.roadsChanged();
     return { ok: true };
+  }
+
+  /**
+   * What keeps the ground round an area from being reshaped: streets and track not in a tunnel, buildings,
+   * facilities, airports and stations, each with a margin so the land under them stays as it is.
+   */
+  private landLock(c: Vec2, r: number): (p: Vec2) => boolean {
+    const pad = LAND_STEP + 4;
+    const roads = [...this.net.segments.values()].filter((s) => {
+      if (this.net.node(s.a).h < -1 && this.net.node(s.b).h < -1) return false;
+      return bboxNear(s.bbox, c, r + roadWidth(s) / 2 + pad + CELL * DEPTH);
+    });
+    const homes = roads.flatMap((s) => s.lots.filter((l) => l.level > 0 && dist(l, c) < r + pad + CELL));
+    const rails = RAIL_KINDS.flatMap((k) => {
+      const net = this.rails[k].net;
+      return [...net.segments.values()].filter((s) => !(net.node(s.a).h < 0 && net.node(s.b).h < 0) && bboxNear(s.bbox, c, r + pad + 4));
+    });
+    const facilities = [...this.facilities.values()].filter((f) => dist(f.p, c) < r + pad + Math.hypot(FACILITIES[f.kind].w, FACILITIES[f.kind].d));
+    const airports = [...this.aviation.airports.values()].filter((a) => Aviation.contains(a, c, r + pad));
+    const stations = this.stationSpots();
+    return (p) => {
+      for (const s of roads) if (bboxNear(s.bbox, p, roadWidth(s) / 2 + pad) && closestOnSamples(s.samples, p).d < roadWidth(s) / 2 + pad) return true;
+      for (const l of homes) if (Math.abs(l.x - p.x) < CELL / 2 + pad && Math.abs(l.y - p.y) < CELL / 2 + pad) return true;
+      for (const s of rails) if (bboxNear(s.bbox, p, pad + 4) && closestOnSamples(s.samples, p).d < pad + 4) return true;
+      for (const f of facilities) if (footprintContains(f, p, pad)) return true;
+      for (const a of airports) if (Aviation.contains(a, p, pad)) return true;
+      for (const st of stations) if (stationCovers(st.kind, st.pose, st.side, p, pad, st.style)) return true;
+      return false;
+    };
+  }
+
+  /**
+   * One dab of the 整地 brush at p (radius r): 整平 brings the ground a layer nearer the plain (cutting hills,
+   * filling hollows and shallows), 填高 heaps it up a layer, 下挖 digs it down a layer. Strongest at the
+   * middle, fading to the brush's edge, so hills come down a step at a time. Call `settleLand` when the
+   * stroke ends.
+   */
+  terraform(mode: LandMode, p: Vec2, radius: number): { ok: boolean; cost: number; reason?: string } {
+    const land = this.terrain;
+    const r = clamp(radius, LAND_BRUSH.min, LAND_BRUSH.max);
+    const locked = this.regionProblem(p);
+    if (locked) return { ok: false, cost: 0, reason: locked };
+    const lock = this.landLock(p, r);
+    const b = land.bounds;
+    const last = { i: Math.floor((b.maxX - b.minX) / LAND_STEP), j: Math.floor((b.maxY - b.minY) / LAND_STEP) };
+    const changes: [number, number, number][] = [];
+    let volume = 0;
+    let blocked = false;
+    for (let i = Math.max(1, Math.ceil(land.gi(p.x - r))); i <= Math.min(last.i - 1, Math.floor(land.gi(p.x + r))); i++) {
+      for (let j = Math.max(1, Math.ceil(land.gj(p.y - r))); j <= Math.min(last.j - 1, Math.floor(land.gj(p.y + r))); j++) {
+        const q = { x: land.cornerX(i), y: land.cornerY(j) };
+        const d = dist(q, p);
+        if (d > r || !this.open(q)) continue;
+        if (lock(q)) {
+          blocked = true;
+          continue;
+        }
+        const step = LAYER * (0.3 + 0.7 * (0.5 + 0.5 * Math.cos((Math.PI * d) / r)));
+        const base = land.baseCorner(i, j);
+        const cur = base + land.cornerDelta(i, j);
+        let next = cur;
+        if (mode === 'level') next = Math.abs(cur) <= step ? 0 : cur - Math.sign(cur) * step;
+        else if (mode === 'raise') next = cur >= RAISE_TOP ? cur : Math.min(RAISE_TOP, cur + step);
+        else next = cur <= DIG_FLOOR ? cur : Math.max(DIG_FLOOR, cur - step);
+        if (Math.abs(next - cur) < 1e-3) continue;
+        changes.push([i, j, next - base]);
+        volume += Math.abs(next - cur) * LAND_STEP * LAND_STEP;
+      }
+    }
+    if (!changes.length) {
+      const done = { level: '這裡已經是平地了', raise: `已經填到最高（${RAISE_TOP} 公尺）`, dig: `已經挖到最深（${-DIG_FLOOR} 公尺）` };
+      return { ok: false, cost: 0, reason: blocked ? '道路、軌道、建築和設施旁邊的地不能整地' : done[mode] };
+    }
+    const cost = Math.round(volume * EARTH_COST);
+    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
+    this.spend(cost);
+    for (const [i, j, d] of changes) land.setCorner(i, j, d);
+    this.landMoved({ minX: p.x - r - LAND_STEP, maxX: p.x + r + LAND_STEP, minY: p.y - r - LAND_STEP, maxY: p.y + r + LAND_STEP });
+    return { ok: true, cost };
+  }
+
+  /** What 整地 has changed since the last `settleLand`, for the lots to be checked again. */
+  private landPending = false;
+
+  private landMoved(area: { minX: number; maxX: number; minY: number; maxY: number }): void {
+    forgetBuildable(this.terrain, area);
+    this.landVersion++;
+    this.landPending = true;
+  }
+
+  /** After a 整地 stroke: water finds the pits it can reach, and the lots on changed ground are checked again. */
+  settleLand(): void {
+    if (!this.landPending) return;
+    this.landPending = false;
+    this.terrain.settleWater();
+    // Water may have reached new cells: their lots go
+    forgetBuildable(this.terrain);
+    this.landVersion++;
+    this.landChanged();
+  }
+
+  /** Why a tunnel can't be bored from a to b, or null; with what it would cost. */
+  boreProblem(a: Vec2, b: Vec2): { cost: number; reason: string | null } {
+    const len = dist(a, b);
+    const t = this.terrain;
+    if (len < 40) return { cost: 0, reason: '隧道太短' };
+    if (len > 4000) return { cost: 0, reason: '隧道太長（最長 4 公里）' };
+    const pts = sampleQuad({ a, c: lerp(a, b, 0.5), b }, Math.max(8, Math.ceil(len / 10)));
+    for (const p of pts) {
+      const locked = this.regionProblem(p);
+      if (locked) return { cost: 0, reason: locked };
+    }
+    if (t.height(a.x, a.y) >= PORTAL_HEIGHT || t.height(b.x, b.y) >= PORTAL_HEIGHT) return { cost: 0, reason: '隧道的兩頭要在山腳下（點在山外的低處）' };
+    if (!pts.some((p) => t.height(p.x, p.y) >= PORTAL_HEIGHT)) return { cost: 0, reason: '這裡沒有山擋著，不用挖隧道' };
+    const cost = Math.round(len * BORE_COST_PER_M);
+    if (cost > this.money) return { cost, reason: `資金不足，需要 ${ntd(cost)}` };
+    return { cost, reason: null };
+  }
+
+  /**
+   * Bores a tunnel through the hill between a and b (both at its foot): streets, freeways and track may then
+   * run through it, at street level or on a viaduct, and water through it to a lake dug at the far end. Its
+   * approaches are cut down to the plain where the hill is lower than the tunnel mouth.
+   */
+  buildBore(a: Vec2, b: Vec2): { ok: boolean; cost: number; reason?: string } {
+    const { cost, reason } = this.boreProblem(a, b);
+    if (reason) return { ok: false, cost, reason };
+    const land = this.terrain;
+    const bore = { a, b };
+    const mid = lerp(a, b, 0.5);
+    const reach = dist(a, b) / 2 + BORE_HALF + LAND_STEP;
+    const lock = this.landLock(mid, reach);
+    const cut: [number, number, number][] = [];
+    for (let i = Math.ceil(land.gi(Math.min(a.x, b.x) - BORE_HALF - LAND_STEP)); i <= Math.floor(land.gi(Math.max(a.x, b.x) + BORE_HALF + LAND_STEP)); i++) {
+      for (let j = Math.ceil(land.gj(Math.min(a.y, b.y) - BORE_HALF - LAND_STEP)); j <= Math.floor(land.gj(Math.max(a.y, b.y) + BORE_HALF + LAND_STEP)); j++) {
+        const q = { x: land.cornerX(i), y: land.cornerY(j) };
+        if (boreDistance(bore, q) > BORE_HALF + LAND_STEP / 2 || !this.open(q) || lock(q)) continue;
+        const base = land.baseCorner(i, j);
+        const h = base + land.cornerDelta(i, j);
+        if (h > 0.05 && h < PORTAL_HEIGHT) cut.push([i, j, -base]);
+      }
+    }
+    this.spend(cost);
+    for (const [i, j, d] of cut) land.setCorner(i, j, d);
+    land.addBore(a, b);
+    this.landMoved({ minX: Math.min(a.x, b.x) - 60, maxX: Math.max(a.x, b.x) + 60, minY: Math.min(a.y, b.y) - 60, maxY: Math.max(a.y, b.y) + 60 });
+    this.settleLand();
+    return { ok: true, cost };
   }
 
   /** Train, high-speed and metro stations on lines, where they stand and which side their building is on. */
@@ -1098,16 +1262,21 @@ export class City {
   }
 
   /** Why the land won't take a road or track at these heights, or null: streets need flat dry land, viaducts clear water and low ground. */
-  terrainProblem(a: Vec2, c: Vec2 | null, b: Vec2, ha: number, hb: number, terrain = this.terrain): string | null {
+  terrainProblem(a: Vec2, c: Vec2 | null, b: Vec2, ha: number, hb: number, terrain: Terrain = this.terrain): string | null {
     const pts = sampleQuad({ a, c: c ?? lerp(a, b, 0.5), b }, Math.max(8, Math.ceil(dist(a, b) / 8)));
     for (const p of pts) {
       const locked = this.regionProblem(p);
       if (locked) return locked;
     }
-    if (terrain === FLAT || terrain === FLAT_CLASSIC) return null;
+    const land = terrain instanceof Landform ? terrain : null;
+    const raw = land ? land.base : terrain;
+    if ((raw === FLAT || raw === FLAT_CLASSIC) && !land?.edited) return null;
     for (const p of pts) {
       const h = ha + (hb - ha) * p.t;
       if (h < -1) continue;
+      // Through a tunnel bore the hill is no obstacle, at street level or on a viaduct
+      if (land?.bores.length && land.bored(p) && !terrain.water(p.x, p.y)) continue;
+      if (h <= 1 && land?.touched(p.x, p.y) && terrain.height(p.x, p.y) < -0.3) return '這裡是挖下去的地洞，地面蓋不了（先填平，或用高架跨過）';
       if (h <= 1) {
         if (terrain.water(p.x, p.y)) return '這裡是水面，地面蓋不了（改用高架跨過，或從地下穿過）';
         if (terrain.height(p.x, p.y) > 0.05) return '這裡是山坡地，地面蓋不了（改用隧道穿過）';
@@ -1232,14 +1401,14 @@ export class City {
   private freewayClear(a: Vec2, c: Vec2 | null, e: Vec2, from?: RoadSegment): boolean {
     const b = this.terrain.bounds;
     const pts = sampleQuad({ a, c: c ?? lerp(a, e, 0.5), b: e }, Math.max(4, Math.ceil(dist(a, e) / 8)));
-    const flat = this.terrain === FLAT || this.terrain === FLAT_CLASSIC;
+    const flat = (this.terrain.base === FLAT || this.terrain.base === FLAT_CLASSIC) && !this.terrain.edited;
     for (const p of pts.slice(1)) {
       if (p.x < b.minX + 20 || p.x > b.maxX - 20 || p.y < b.minY + 20 || p.y > b.maxY - 20) return false;
       if (!flat && (this.terrain.sea(p.x, p.y) || this.terrain.height(p.x, p.y) > ELEVATED_HEIGHT - 3)) return false;
       // Nor past the land's edge, where it reaches beyond what the map is drawn for
       if (!flat && this.terrain.region(p.x, p.y) === null) return false;
       // The old all-flat map keeps within what the new 平地 map allows, so the city can still move onto it
-      if (this.terrain === FLAT && (PLAIN.sea(p.x, p.y) || PLAIN.height(p.x, p.y) > ELEVATED_HEIGHT - 3)) return false;
+      if (this.terrain.base === FLAT && (PLAIN.sea(p.x, p.y) || PLAIN.height(p.x, p.y) > ELEVATED_HEIGHT - 3)) return false;
       if (this.buildingAt(p) || this.aviation.airportAt(p, 4)) return false;
       const hit = this.net.segmentAt(p, 12, ELEVATED_HEIGHT);
       if (hit && !hit.seg.highway && Math.abs(this.net.heightAt(hit.seg, hit.t) - ELEVATED_HEIGHT) < LEVEL_TOLERANCE) return false;
@@ -3164,6 +3333,7 @@ export class City {
       roadNames: [...this.net.segments.values()].filter((s) => s.name).map((s) => [s.id, s.name!]),
       districts: [...this.districts.values()].map((d) => [d.id, round2(d.p.x), round2(d.p.y), Math.round(d.r), d.name, d.color]),
       terrain: this.terrain.name,
+      land: this.terrain.save(),
       name: this.name,
       level: this.level,
       facilities: [...this.facilities.values()].map((f) => [f.id, f.kind, round2(f.p.x), round2(f.p.y), round2(f.angle * 1000) / 1000]),
@@ -3177,7 +3347,8 @@ export class City {
     // Cities on the all-flat 平地 map move onto its mountains, river and coast, unless something they built would end up on them
     // (checked on the flat load: loading onto the new ground would already have cleared buildings standing in its water)
     // (the 國道 is carried to the edge of the land only after that, on the ground the city ends up on)
-    if (terrain !== FLAT) return City.load(data, terrain);
+    // (a city that has reshaped its land stays on the land it reshaped)
+    if (terrain !== FLAT || data.land) return City.load(data, terrain);
     const flat = City.load(data, FLAT, false);
     if (flat.fitsTerrain(PLAIN)) return City.load(data, PLAIN);
     flat.layFreeways();
@@ -3208,6 +3379,8 @@ export class City {
   private static load(data: SaveData, terrain: Terrain, extend = true): City {
     const city = new City(terrain);
     city.holdLand = true;
+    city.terrain.load(data.land);
+    if (data.land) city.landVersion++;
     city.money = data.money;
     city.steps = Math.round(data.day * DAY_STEPS);
     if (data.name) city.name = data.name;

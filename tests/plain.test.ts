@@ -31,7 +31,7 @@ describe('the 平地 map', () => {
     city.buildFreeway();
     expect(city.disconnectedRoads()).toHaveLength(0);
     expect(city.buildRoad(free(-300, 0), null, free(-300, -300), true).ok).toBe(true);
-    expect(City.deserialize(city.serialize()).terrain).toBe(PLAIN);
+    expect(City.deserialize(city.serialize()).terrain.base).toBe(PLAIN);
 
     // Built only on what is still plain: the city moves onto the new map
     const town = new City(FLAT);
@@ -39,7 +39,7 @@ describe('the 平地 map', () => {
     town.buildFreeway();
     expect(town.buildRoad(free(-300, 0), null, free(-300, -400), true).ok).toBe(true);
     const moved = City.deserialize(town.serialize());
-    expect(moved.terrain).toBe(PLAIN);
+    expect(moved.terrain.base).toBe(PLAIN);
     expect(moved.net.segments.size).toBe(town.net.segments.size);
 
     // A street where the mountains now are, or across the river: it keeps the flat ground
@@ -48,7 +48,7 @@ describe('the 平地 map', () => {
       old.money = 1e7;
       expect(old.buildRoad(a, null, b, true).ok).toBe(true);
       const back = City.deserialize(old.serialize());
-      expect(back.terrain).toBe(FLAT);
+      expect(back.terrain.base).toBe(FLAT);
       expect(back.net.segments.size).toBe(old.net.segments.size);
     }
   });
@@ -64,7 +64,7 @@ describe('the 平地 map', () => {
     const before = wet();
     expect(before).toBeGreaterThan(0);
     const back = City.deserialize(JSON.parse(JSON.stringify(old.serialize())));
-    expect(back.terrain).toBe(FLAT);
+    expect(back.terrain.base).toBe(FLAT);
     expect([...back.net.segments.values()].flatMap((s) => s.lots).filter((l) => l.level > 0 && !buildable(PLAIN, l)).length).toBe(before);
   });
 });

@@ -84,13 +84,13 @@ describe('regions', () => {
     expect(built).toBeGreaterThan(0);
     const old = { ...city.serialize(), v: 8, terrain: 'kaohsiung' as const, regions: undefined };
     const copy = City.deserialize(old);
-    expect(copy.terrain).toBe(KAOHSIUNG_CLASSIC);
+    expect(copy.terrain.base).toBe(KAOHSIUNG_CLASSIC);
     expect([...copy.regions].sort()).toEqual(['kaohsiung', 'pingtung']);
     expect(lots(copy).filter((l) => l.level === 2).length).toBe(built);
     // and keeps that ground from then on
-    expect(City.deserialize(copy.serialize()).terrain).toBe(KAOHSIUNG_CLASSIC);
+    expect(City.deserialize(copy.serialize()).terrain.base).toBe(KAOHSIUNG_CLASSIC);
     // Old saves that stayed on the Kaohsiung side get the new map
-    expect(City.deserialize({ ...new City(T).serialize(), v: 8, regions: undefined }).terrain).toBe(T);
+    expect(City.deserialize({ ...new City(T).serialize(), v: 8, regions: undefined }).terrain.base).toBe(T);
   });
 
   it('keeps what old saves built past the edge of the map', () => {
@@ -106,7 +106,7 @@ describe('regions', () => {
       const built = lots(city).filter((l) => l.level === 2).length;
       expect(built).toBeGreaterThan(0);
       const copy = City.deserialize({ ...city.serialize(), v: 8, terrain: name, regions: undefined });
-      expect(copy.terrain).toBe(classic);
+      expect(copy.terrain.base).toBe(classic);
       expect(lots(copy).filter((l) => l.level === 2).length).toBe(built);
     }
   });
