@@ -241,9 +241,24 @@ export class Graphics {
     this.composer.render();
   }
 
+  private holdFor = 0;
+
+  /** Leaves the resolution and level alone for the next `seconds` of play (loading, the menu). */
+  hold(seconds: number): void {
+    this.holdFor = Math.max(this.holdFor, seconds);
+    this.fps = TARGET_FPS;
+  }
+
   /** Called every frame with its length in seconds: keeps 自動 near the target frame rate. */
   govern(dt: number): void {
     if (dt <= 0 || dt > 0.5) return;
+    // Held after a city loads: its first frames build everything and say nothing about how it runs
+    if (this.holdFor > 0) {
+      this.holdFor -= dt;
+      this.slow = 0;
+      this.fast = 0;
+      return;
+    }
     this.fps += (1 / dt - this.fps) * Math.min(1, dt * 2);
     // 自動 may go down to 60 % and then a level; a level picked by hand only gives way in resolution, if at all
     const auto = this.quality === 'auto';

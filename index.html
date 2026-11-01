@@ -11,8 +11,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" />
   </head>
-  <body>
+  <body class="menu-open">
     <div id="app"></div>
+    <!-- Covers the map until the start screen's city is ready, so the page opens on the menu, not the game -->
+    <div id="boot" style="position:fixed;inset:0;background:#1c221f;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#cfd8d2;font:15px sans-serif;transition:opacity .5s">
+      <img src="./icon-180.png" alt="" width="96" height="96" style="border-radius:20px" />
+      <span>Metroforge：都市創造　載入中…</span>
+    </div>
     <div id="ui"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -2217,8 +2217,13 @@ export class City {
       }
     }
     const front = (n + 1) * (Math.floor(PORT_LAND * n) + 1);
-    if (ashore < front * 0.5) return '港口要蓋在海岸線上（靠路的一側在陸地，碼頭伸進海裡）';
-    return null;
+    if (ashore >= front * 0.5) return null;
+    // A street along the very edge of the land (a quay, as on land 整地 has reclaimed): the yard may be all
+    // out over the water, as long as the ground just in front of it, under the street, is land
+    let quay = 0;
+    for (let i = 0; i <= n; i++) if (buildable(t, toWorld(plan, (i / n - 0.5) * w, -d / 2 - FACILITY_ROAD_GAP / 2 - 3))) quay++;
+    if (quay >= (n + 1) * 0.6) return null;
+    return '港口要蓋在海岸線上（靠路的一側在陸地，碼頭伸進海裡）';
   }
 
   /** Where a port's lorries and passengers reach it: the street in front of it. */

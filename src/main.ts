@@ -157,6 +157,8 @@ function setCity(next: City): void {
   tools.setTool('road');
   focusCity();
   hud!.render();
+  // A city just loaded draws everything in its first frames: those slow frames are not a reason to blur the view
+  world.graphics.hold(5);
 }
 
 let saveAcc = 0;
@@ -225,6 +227,8 @@ const menu: Menu = new Menu(document.getElementById('ui')!, slots, {
     tutorial.start();
   },
 });
+// The start screen is up from the first moment: the HUD never shows before it
+menu.show('home');
 let speedBeforeTour = 1;
 const tutorial = new Tutorial(document.getElementById('ui')!, () => {
   hud!.speed = speedBeforeTour;
@@ -247,7 +251,18 @@ function showcase(): void {
   world.rig.apply();
 }
 showcase();
-menu.show('home');
+if (!menu.inGame) menu.show('home');
+// The map is drawn for the city behind the start screen: lift the cover once that first frame is up
+world.graphics.hold(4);
+requestAnimationFrame(() =>
+  requestAnimationFrame(() => {
+    const boot = document.getElementById('boot');
+    if (!boot) return;
+    boot.style.opacity = '0';
+    boot.style.pointerEvents = 'none';
+    setTimeout(() => boot.remove(), 600);
+  }),
+);
 watchForNewVersion((version, title) =>
   hud!.ticker(`有新版本 v${version}${title ? `「${title}」` : ''}已發布，重新整理頁面即可更新`, {
     action: { label: '重新整理', run: () => location.reload() },
