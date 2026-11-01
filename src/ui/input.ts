@@ -43,6 +43,8 @@ type Gesture =
 export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolController): void {
   const ptrs = new Map<number, Pointer>();
   let gesture: Gesture = { kind: 'idle' };
+  /** where the brush last was: 整地 keeps working there while the finger is held still */
+  let painting: Vec2 | null = null;
   const ground = (x: number, y: number): Vec2 | null => {
     const r = el.getBoundingClientRect();
     return rig.groundAt(x - r.left, y - r.top, r.width, r.height);
@@ -77,6 +79,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
       gesture = { kind: 'paint' };
       tools.setPainting(true);
       const p = ground(e.clientX, e.clientY);
+      painting = p;
       if (p) tools.onPaint(p);
     } else gesture = { kind: 'pending' };
   });
@@ -117,6 +120,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
         break;
       case 'paint': {
         const g = ground(p.x, p.y);
+        painting = g;
         if (g) tools.onPaint(g);
         return;
       }
@@ -196,6 +200,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
         tools.onHover(ground(p.x, p.y));
       }
     }
+    if (gesture.kind === 'paint' && painting && ptrs.size === 1 && tools.repeatsPaint) tools.onPaint(painting);
     if (keys.size && !rig.driving) {
       const speed = rig.distance * 1.2 * dt;
       let fx = 0;

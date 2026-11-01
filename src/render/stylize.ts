@@ -23,13 +23,23 @@ function worldVarying(shader: { vertexShader: string; fragmentShader: string }):
 }
 
 /**
+ * 整地 view: the ground coloured by height (blue below the plain, green on it, yellow, orange and brown up the
+ * hills to white peaks) with a contour line every 5 m, and the brush drawn on the ground (x, z, radius; 0 = none).
+ */
+export const groundView = { uRelief: { value: 0 }, uLandBrush: { value: new THREE.Vector4(0, 0, 0, 0) } };
+
+/**
  * Grass that isn't one flat green: big patches of darker, lusher and sun-dried grass, smaller tufts inside them,
  * and a fine speckle up close. Only green ground takes it; sand, rock and peaks keep their colour.
  */
 export function naturalGround(m: THREE.MeshLambertMaterial): THREE.MeshLambertMaterial {
   m.onBeforeCompile = (shader) => {
     worldVarying(shader);
-    shader.fragmentShader = shader.fragmentShader.replace(
+    shader.uniforms.uRelief = groundView.uRelief;
+    shader.uniforms.uLandBrush = groundView.uLandBrush;
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uRelief;\nuniform vec4 uLandBrush;')
+      .replace(
       '#include <color_fragment>',
       `#include <color_fragment>
       vec2 g = vWorld.xz;
@@ -40,7 +50,27 @@ export function naturalGround(m: THREE.MeshLambertMaterial): THREE.MeshLambertMa
       vec3 base = mix(diffuseColor.rgb, vec3(dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15))), 0.18);
       vec3 grass = base * (0.74 + 0.48 * patches + 0.1 * speck);
       grass = mix(grass, grass * vec3(1.22, 1.06, 0.66), dry * 0.7);
-      diffuseColor.rgb = mix(diffuseColor.rgb * (1.0 + 0.05 * speck), grass, green);`,
+      diffuseColor.rgb = mix(diffuseColor.rgb * (1.0 + 0.05 * speck), grass, green);
+      if (uRelief > 0.5) {
+        float hh = vWorld.y;
+        vec3 rc;
+        if (hh < -0.3) rc = mix(vec3(0.36, 0.62, 0.86), vec3(0.16, 0.24, 0.62), clamp(-hh / 8.0, 0.0, 1.0));
+        else if (hh < 0.3) rc = vec3(0.42, 0.74, 0.36);
+        else if (hh < 20.0) rc = mix(vec3(0.78, 0.86, 0.36), vec3(0.96, 0.82, 0.30), hh / 20.0);
+        else if (hh < 60.0) rc = mix(vec3(0.96, 0.82, 0.30), vec3(0.92, 0.52, 0.22), (hh - 20.0) / 40.0);
+        else if (hh < 150.0) rc = mix(vec3(0.92, 0.52, 0.22), vec3(0.62, 0.36, 0.22), (hh - 60.0) / 90.0);
+        else rc = mix(vec3(0.62, 0.36, 0.22), vec3(0.95, 0.94, 0.92), clamp((hh - 150.0) / 200.0, 0.0, 1.0));
+        float c5 = abs(fract(hh / 5.0 + 0.5) - 0.5) * 5.0;
+        float line = 1.0 - smoothstep(0.0, max(fwidth(hh) * 1.5, 0.05), c5);
+        line *= step(0.3, abs(hh));
+        diffuseColor.rgb = mix(rc, rc * 0.45, line * 0.85);
+      }
+      if (uLandBrush.z > 0.0) {
+        float bd = distance(vWorld.xz, uLandBrush.xy);
+        float rim = 1.0 - smoothstep(0.0, max(fwidth(bd) * 2.0, 0.6), abs(bd - uLandBrush.z));
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.25 + 0.08, step(bd, uLandBrush.z) * 0.35);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0), rim);
+      }`,
     );
   };
   m.customProgramCacheKey = () => 'naturalGround';

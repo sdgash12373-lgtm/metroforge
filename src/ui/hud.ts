@@ -16,7 +16,8 @@ import { Mailbox } from './mailbox';
 import { EventsPanel } from './events';
 import { EVENT_KINDS } from '../sim/events';
 import { clock } from '../sim/weather';
-import { BRUSH_MAX, BRUSH_MIN, DISTRICT_MAX, DISTRICT_MIN, STATION_TYPES, type Tool, type ToolController, STYLE_CHOICES, isRail } from './tools';
+import { BRUSH_MAX, BRUSH_MIN, DISTRICT_MAX, DISTRICT_MIN, STATION_TYPES, TERRAFORM_MODES, type Tool, type ToolController, STYLE_CHOICES, isRail } from './tools';
+import { LAND_BRUSH } from '../sim/city';
 
 /** Tools that share one dock button and are picked on a second row. */
 type Group = 'roads' | 'transport' | 'build' | 'names';
@@ -106,6 +107,7 @@ export class Hud {
   private toastEl: HTMLElement;
   private toolButtons = new Map<DockItem, HTMLButtonElement>();
   private demolishBtn: HTMLButtonElement;
+  private landBtn: HTMLButtonElement;
   private undoBtn: HTMLButtonElement;
   private beforeDemolish: Tool = 'pan';
   private side: HTMLElement;
@@ -383,6 +385,7 @@ export class Hud {
       return b;
     };
     this.demolishBtn = sideButton('🗑', '拆除', `拆除道路、軌道、路線、建設和房子（${DEMOLISH_KEY.toUpperCase()}）`, () => this.toggleDemolish(), 'danger', 'demolish');
+    this.landBtn = sideButton('⛰️', '整地', '整地：整平、填高、下挖、隧道（地面依高度上色）', () => this.toggleTerraform(), '', 'terraform');
     this.undoBtn = sideButton('↶', '上一步', '復原上一個蓋或拆的動作，只能退回一步（Ctrl+Z）', () => this.tools.undo(), '', 'undo');
     this.undoBtn.disabled = true;
     this.lockButton = sideButton('🔒', '鎖視角', '鎖住視角的旋轉與傾斜，拉路時不會被手勢轉動（仍可移動、縮放）', () => {
@@ -461,8 +464,17 @@ export class Hud {
   private toggleDemolish(): void {
     if (this.tools.tool === 'bulldoze') this.selectTool(this.beforeDemolish);
     else {
-      this.beforeDemolish = this.tools.tool;
+      if (this.tools.tool !== 'terraform') this.beforeDemolish = this.tools.tool;
       this.selectTool('bulldoze');
+    }
+  }
+
+  /** 整地 on, or back to the tool used before it. */
+  private toggleTerraform(): void {
+    if (this.tools.tool === 'terraform') this.selectTool(this.beforeDemolish);
+    else {
+      if (this.tools.tool !== 'bulldoze') this.beforeDemolish = this.tools.tool;
+      this.selectTool('terraform');
     }
   }
 
@@ -486,6 +498,7 @@ export class Hud {
     const group = groupOf(tool);
     for (const [id, b] of this.toolButtons) b.setAttribute('aria-pressed', String(id === group || id === tool));
     this.demolishBtn.setAttribute('aria-pressed', String(tool === 'bulldoze'));
+    this.landBtn.setAttribute('aria-pressed', String(tool === 'terraform'));
     this.undoBtn.disabled = !this.tools.canUndo;
     // While a road or track is being drawn only its own options stay, so the dock doesn't cover the map
     document.body.classList.toggle('road-drawing', this.tools.drawing);
@@ -509,7 +522,37 @@ export class Hud {
       b.onclick = onClick;
       this.sub.append(b);
     };
-    if (this.tools.tool === 'zone') {
+    if (this.tools.tool === 'terraform') {
+      const t = this.tools;
+      for (const [m, label, help] of TERRAFORM_MODES) {
+        option(label, t.terraformMode === m, () => {
+          t.setTerraformMode(m);
+          this.render();
+          this.toast(help);
+        });
+      }
+      if (t.terraformMode !== 'tunnel') {
+        const size = el('label', 'brush-size');
+        size.htmlFor = 'land-size';
+        const value = el('b', '', `${t.landRadius * 2} m`);
+        const range = el('input');
+        range.id = 'land-size';
+        range.type = 'range';
+        range.min = String(LAND_BRUSH.min);
+        range.max = String(LAND_BRUSH.max);
+        range.step = '10';
+        range.value = String(t.landRadius);
+        range.setAttribute('aria-label', '整地範圍');
+        range.oninput = () => {
+          t.setLandRadius(Number(range.value));
+          value.textContent = `${t.landRadius * 2} m`;
+        };
+        size.append(el('span', '', '範圍'), range, value);
+        this.sub.append(size);
+      }
+      this.sub.append(el('span', 'divider'));
+      option('結束整地', false, () => this.toggleTerraform());
+    } else if (this.tools.tool === 'zone') {
       const zones = [Zone.ResidentialLow, Zone.ResidentialHigh, Zone.Commercial, Zone.Office, ...INDUSTRY_ZONES] as const;
       for (const z of zones) {
         option(ZONES[z].name, this.tools.zone === z, () => {

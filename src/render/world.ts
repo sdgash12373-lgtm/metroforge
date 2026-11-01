@@ -3,7 +3,9 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { Conditions } from '../sim/weather';
 import { SkySystem, addWindows } from './sky';
-import { livelyWater, naturalGround } from './stylize';
+import { groundView, livelyWater, naturalGround } from './stylize';
+import { buildPortalGeometry } from './portals';
+import type { Landform } from '../sim/landform';
 import type { AngleGuide } from '../sim/angles';
 import type { City, District } from '../sim/city';
 import type { GuideLine } from '../sim/guides';
@@ -17,7 +19,7 @@ import { type RoadContext, buildDashedLines, buildLinePaths, buildTunnelOverlay,
 import { StopLayer } from './transit';
 import { buildFacilityGeometry, buildFacilitySigns, signAtlas } from './facilities';
 import { SignalLayer } from './signals';
-import { HILL_TREES, LOWLAND_TREES, OUTER_TREES, type TreeSpot, buildGroundGeometry, buildWaterGeometry, cornerHeights, treeSpots } from './terrainMesh';
+import { HILL_TREES, LOWLAND_TREES, OUTER_TREES, type TreeSpot, baseOf, buildGroundGeometry, buildWaterGeometry, cornerHeights, treeSpots } from './terrainMesh';
 import { FLAT, REGION_NAMES, type RegionName, type Terrain } from '../sim/terrain';
 import { LEVELS, UNLOCK } from '../sim/levels';
 import { VehicleLayer } from './vehicles';
@@ -52,6 +54,10 @@ interface RailLayer {
 
 const TREE_COUNT = LOWLAND_TREES + HILL_TREES + OUTER_TREES;
 const STREET_TREES = 4000;
+/** Ground cells per tile side (20 m each: 1 km tiles), and how often the 整地 brush redraws them. */
+const GROUND_TILE = 50;
+const GROUND_STEP = 20;
+const LAND_REDRAW_MS = 120;
 /** Size of the map tiles the roads are drawn in, metres. */
 const ROAD_TILE = 400;
 /** After a road is drawn, buildings and trees wait this long for the next one before they are redrawn. */
@@ -102,7 +108,16 @@ export class World {
   private readonly cutOff: THREE.Mesh;
   private cutOffKey = '';
   private transitVersion = -1;
-  private readonly ground: THREE.Mesh;
+  /** the ground, in tiles of GROUND_TILE cells: 整地 redraws only the tiles it changed */
+  private readonly ground = new THREE.Group();
+  private readonly groundMaterial = naturalGround(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }));
+  private readonly groundTiles = new Map<number, THREE.Mesh>();
+  private groundOpen: ReadonlySet<RegionName> = new Set();
+  /** the land's version last drawn, and when (the brush redraws a few times a second) */
+  private landSeen = -1;
+  private landAt = 0;
+  private boresSeen = 0;
+  private readonly portals = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide }));
   /** tunnels shown on the surface while building underground */
   private readonly tunnels: THREE.Mesh;
   private peopleAge = 0;
@@ -229,8 +244,9 @@ export class World {
     this.sky = new SkySystem(this.scene, this.sun, hemi, coarse);
     this.graphics = new Graphics(this.renderer, this.scene, this.rig.camera, this.sun, quality, guess);
 
-    this.ground = new THREE.Mesh(buildGroundGeometry(FLAT), naturalGround(new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
-    this.ground.receiveShadow = true;
+    this.portals.castShadow = shadows;
+    this.portals.receiveShadow = true;
+    this.scene.add(this.portals);
     this.water = new THREE.Mesh(
       new THREE.BufferGeometry(),
       livelyWater(new THREE.MeshLambertMaterial({ color: 0x4f97bf, transparent: true, opacity: 0.88 }), this.waterTime),
@@ -416,7 +432,10 @@ export class World {
     }
     const m = new THREE.Matrix4();
     let n = 0;
+    const land = city.terrain.box ? city.terrain : null;
     for (const t of this.trees.spots) {
+      // 整地 has cleared the trees off the ground it reshaped
+      if (land?.touched(t.x, t.y)) continue;
       if (!t.wild && (near(t.x, t.y) || city.occupied(t))) continue;
       const here = roads.get(key(Math.floor(t.x / ROAD_CELL), Math.floor(t.y / ROAD_CELL)));
       if (here?.some((s) => bboxNear(s.bbox, t, roadWidth(s) / 2 + 2) && closestOnSamples(s.samples, t).d < roadWidth(s) / 2 + 2)) continue;
@@ -431,6 +450,7 @@ export class World {
       let r = 0;
       const works = [...city.facilities.values()].map((f) => ({ p: f.p, r: Math.hypot(FACILITIES[f.kind].w, FACILITIES[f.kind].d) / 2 + 6 }));
       for (const t of this.rockSpots) {
+        if (land?.touched(t.x, t.y)) continue;
         // Piers, ports and coast roads clear the rocks off
         if (works.some((f) => Math.hypot(f.p.x - t.x, f.p.y - t.y) < f.r)) continue;
         const here = roads.get(key(Math.floor(t.x / ROAD_CELL), Math.floor(t.y / ROAD_CELL)));
@@ -496,7 +516,7 @@ export class World {
 
   /** See-through ground, so tunnels and the one being drawn show beneath it. */
   setXray(on: boolean): void {
-    const m = this.ground.material as THREE.MeshLambertMaterial;
+    const m = this.groundMaterial;
     if (m.transparent === on) return;
     this.xray = on;
     this.showWater();
@@ -783,7 +803,7 @@ export class World {
 
   /** The FFT sea, or the plain water where it cannot run; neither on flat land or in the see-through view. */
   private showWater(): void {
-    const on = this.terrain !== FLAT && !this.xray;
+    const on = baseOf(this.terrain) !== FLAT && !this.xray;
     this.water.visible = on && !this.ocean;
     if (this.ocean) this.ocean.mesh.visible = on;
   }
@@ -797,6 +817,7 @@ export class World {
     // The plain water is only for when the FFT sea can't run
     this.water.geometry = this.ocean ? new THREE.BufferGeometry() : buildWaterGeometry(terrain);
     this.ocean?.setTerrain(terrain);
+    if ((terrain as Landform).box) this.ocean?.setLand(terrain as Landform);
     this.showWater();
     this.rig.bounds = terrain.bounds;
     this.trees.spots = treeSpots(terrain);
@@ -804,9 +825,18 @@ export class World {
 
   /** The ground for the regions a city has opened (their shores finer, the rest shaded), and the reefs on their coasts. */
   private setGround(terrain: Terrain, open: ReadonlySet<RegionName>): void {
-    this.ground.geometry.dispose();
-    this.ground.geometry = buildGroundGeometry(terrain, open);
-    this.rockSpots = terrain === FLAT ? [] : coastRocks(terrain, coastOf(terrain, cornerHeights(terrain), open));
+    this.groundOpen = open;
+    for (const t of this.groundTiles.values()) {
+      this.ground.remove(t);
+      t.geometry.dispose();
+    }
+    this.groundTiles.clear();
+    const b = terrain.bounds;
+    const cols = Math.ceil((b.maxX - b.minX) / GROUND_STEP / GROUND_TILE);
+    const rows = Math.ceil((b.maxY - b.minY) / GROUND_STEP / GROUND_TILE);
+    for (let tj = 0; tj < rows; tj++) for (let ti = 0; ti < cols; ti++) this.groundTile(ti, tj);
+    const raw = baseOf(terrain);
+    this.rockSpots = raw === FLAT ? [] : coastRocks(raw, coastOf(raw, cornerHeights(raw), open));
     if (this.rocks) {
       this.scene.remove(this.rocks);
       this.rocks.dispose();
@@ -820,6 +850,67 @@ export class World {
     }
   }
 
+  /** Draws one tile of the ground again. */
+  private groundTile(ti: number, tj: number): void {
+    const key = ti * 4096 + tj;
+    const old = this.groundTiles.get(key);
+    if (old) {
+      this.ground.remove(old);
+      old.geometry.dispose();
+      this.groundTiles.delete(key);
+    }
+    const g = buildGroundGeometry(this.terrain, this.groundOpen, { i0: ti * GROUND_TILE, j0: tj * GROUND_TILE, i1: (ti + 1) * GROUND_TILE, j1: (tj + 1) * GROUND_TILE });
+    if (!g.attributes.position.count) {
+      g.dispose();
+      return;
+    }
+    const mesh = new THREE.Mesh(g, this.groundMaterial);
+    mesh.receiveShadow = true;
+    this.ground.add(mesh);
+    this.groundTiles.set(key, mesh);
+  }
+
+  /**
+   * 整地: the ground tiles it changed, the sea's mask and depth there, the tunnel mouths; trees and the plain
+   * water once the stroke is over.
+   */
+  private syncLand(city: City, now: number): void {
+    const land = city.terrain;
+    if (land.version === this.landSeen) return;
+    if (this.painting && now - this.landAt < LAND_REDRAW_MS) return;
+    this.landSeen = land.version;
+    this.landAt = now;
+    const d = land.takeDirty();
+    if (d) {
+      // A corner shapes the cells either side of it, and their neighbours' shared edges
+      for (let tj = Math.floor((d.j0 - 2) / GROUND_TILE); tj <= Math.floor((d.j1 + 1) / GROUND_TILE); tj++) {
+        for (let ti = Math.floor((d.i0 - 2) / GROUND_TILE); ti <= Math.floor((d.i1 + 1) / GROUND_TILE); ti++) if (ti >= 0 && tj >= 0) this.groundTile(ti, tj);
+      }
+    }
+    this.ocean?.setLand(land);
+    if (land.bores.length !== this.boresSeen) {
+      this.boresSeen = land.bores.length;
+      this.portals.geometry.dispose();
+      this.portals.geometry = buildPortalGeometry(land);
+    }
+    if (!this.painting) {
+      if (!this.ocean && baseOf(land) !== FLAT) {
+        this.water.geometry.dispose();
+        this.water.geometry = buildWaterGeometry(land);
+      }
+      this.treesDue = true;
+    }
+  }
+
+  /** 整地 view: ground coloured by height with contour lines, and the brush ring on the ground (null: none). */
+  setRelief(on: boolean): void {
+    groundView.uRelief.value = on ? 1 : 0;
+  }
+
+  setLandBrush(p: Vec2 | null, r: number): void {
+    groundView.uLandBrush.value.set(p?.x ?? 0, p?.y ?? 0, p ? r : 0, 0);
+  }
+
   sync(city: City): void {
     // A city just loaded draws everything at once
     const fresh = this.syncedCity !== city;
@@ -831,6 +922,11 @@ export class World {
     if (city.terrain !== this.terrain) {
       this.setTerrain(city.terrain);
       this.updateTrees(city);
+      this.landSeen = city.terrain.version;
+      city.terrain.takeDirty();
+      this.boresSeen = city.terrain.bores.length;
+      this.portals.geometry.dispose();
+      this.portals.geometry = buildPortalGeometry(city.terrain);
     }
     const groundKey = [...city.regions].sort().join();
     if (groundKey !== this.groundKey) {
@@ -838,6 +934,7 @@ export class World {
       this.setGround(city.terrain, city.regions);
       this.updateTrees(city);
     }
+    this.syncLand(city, now);
     if (city.transit.version !== this.transitVersion || city.roadsVersion !== this.roadsVersion) {
       this.transitVersion = city.transit.version;
       this.stops.rebuild(city);

@@ -2,6 +2,10 @@ import * as THREE from 'three';
 import { hash01 } from '../sim/geometry';
 import { BEACH, CELL_STEP, coastOf } from './coast';
 import { HALF_MAP, type RegionName, type Terrain, WATER_LEVEL, buildable } from '../sim/terrain';
+import { Landform } from '../sim/landform';
+
+/** The map's own land under any 整地. */
+export const baseOf = (t: Terrain): Terrain => (t instanceof Landform ? t.base : t);
 
 /** Ground triangles are this many meters across. */
 const STEP = CELL_STEP;
@@ -34,6 +38,20 @@ function landColor(h: number, out: THREE.Color): THREE.Color {
 const corners = new WeakMap<Terrain, (x: number, y: number) => number>();
 
 export function cornerHeights(terrain: Terrain): (x: number, y: number) => number {
+  // Reshaped land: the map's corners plus each corner's change (the ground grid and 整地's grid are the same)
+  if (terrain instanceof Landform) {
+    const land = terrain;
+    let h = corners.get(land);
+    if (h) return h;
+    const base = cornerHeights(land.base);
+    const b = land.bounds;
+    h = (x: number, y: number) => {
+      const v = base(x, y);
+      return land.box ? v + land.cornerDelta(Math.round((x - b.minX) / STEP), Math.round((y - b.minY) / STEP)) : v;
+    };
+    corners.set(land, h);
+    return h;
+  }
   let h = corners.get(terrain);
   if (h) return h;
   const b = terrain.bounds;
@@ -52,11 +70,27 @@ export function cornerHeights(terrain: Terrain): (x: number, y: number) => numbe
   return h;
 }
 
-/** Calls `cell` for every ground cell on the map (its corner x, y), row by row. */
-function eachCell(terrain: Terrain, cell: (x: number, y: number) => void, keep?: (r: RegionName) => boolean): void {
+/** A part of the map in ground cells: columns i0..i1-1, rows j0..j1-1. */
+export interface CellRect {
+  i0: number;
+  j0: number;
+  i1: number;
+  j1: number;
+}
+
+/** Calls `cell` for every ground cell on the map (its corner x, y), row by row; only those in `rect` if given. */
+function eachCell(terrain: Terrain, cell: (x: number, y: number) => void, keep?: (r: RegionName) => boolean, rect?: CellRect): void {
   const b = terrain.bounds;
-  for (let y = b.minY; y < b.maxY - 1e-6; y += STEP) {
-    for (let x = b.minX; x < b.maxX - 1e-6; x += STEP) {
+  const cols = Math.ceil((b.maxX - b.minX) / STEP - 1e-6);
+  const rows = Math.ceil((b.maxY - b.minY) / STEP - 1e-6);
+  const i0 = Math.max(0, rect?.i0 ?? 0);
+  const j0 = Math.max(0, rect?.j0 ?? 0);
+  const i1 = Math.min(cols, rect?.i1 ?? cols);
+  const j1 = Math.min(rows, rect?.j1 ?? rows);
+  for (let j = j0; j < j1; j++) {
+    const y = b.minY + j * STEP;
+    for (let i = i0; i < i1; i++) {
+      const x = b.minX + i * STEP;
       const r = terrain.region(x + STEP / 2, y + STEP / 2);
       if (r !== null && (!keep || keep(r))) cell(x, y);
     }
@@ -75,17 +109,22 @@ function cellTriangles(x: number, y: number, h: (x: number, y: number) => number
  * The ground as flat-coloured low-poly triangles over every cell on the map; each triangle is coloured by
  * its lowest corner, so coasts get a sandy rim. Shores are drawn finer, in the regions `open` (all if not given).
  */
-export function buildGroundGeometry(terrain: Terrain, open?: ReadonlySet<RegionName>): THREE.BufferGeometry {
+export function buildGroundGeometry(terrain: Terrain, open?: ReadonlySet<RegionName>, rect?: CellRect): THREE.BufferGeometry {
   const pos: number[] = [];
   const colors: number[] = [];
   const h = cornerHeights(terrain);
-  const coast = coastOf(terrain, h, open);
+  // The coast is the map's own; cells 整地 has reshaped are drawn plain, from their corners
+  const raw = baseOf(terrain);
+  const land = terrain instanceof Landform ? terrain : null;
+  const coast = coastOf(raw, cornerHeights(raw), open);
   const b = terrain.bounds;
   // Regions not opened yet are shaded darker, and their shores keep the plain cells (their coast isn't worked
   // out), which saves most of the ground's triangles on a big map: rivers and island coasts are long
   const level = (i: number, j: number) => {
     const n = coast.level(i, j);
-    if (n === 1 || !open) return n;
+    if (n === 1) return n;
+    if (land?.touchedCell(i, j)) return 1;
+    if (!open) return n;
     const r = terrain.region(b.minX + (i + 0.5) * STEP, b.minY + (j + 0.5) * STEP);
     return r && !open.has(r) ? 1 : n;
   };
@@ -162,7 +201,7 @@ export function buildGroundGeometry(terrain: Terrain, open?: ReadonlySet<RegionN
         put(V(a + 1, cc), a + 1, cc);
       }
     }
-  });
+  }, undefined, rect);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
@@ -202,8 +241,11 @@ function smoothstepN(a: number, b: number, x: number): number {
 export function buildWaterGeometry(terrain: Terrain): THREE.BufferGeometry {
   const pos: number[] = [];
   const h = cornerHeights(terrain);
+  const land = terrain instanceof Landform && terrain.box ? terrain : null;
   eachCell(terrain, (x, y) => {
-    const wet = h(x, y) < 0 || h(x + STEP, y) < 0 || h(x, y + STEP) < 0 || h(x + STEP, y + STEP) < 0;
+    // Reshaped cells: water only where it has reached (a dry pit stays dry)
+    const c = land?.touched(x + STEP / 2, y + STEP / 2);
+    const wet = c ? land!.water(x + STEP / 2, y + STEP / 2) : h(x, y) < 0 || h(x + STEP, y) < 0 || h(x, y + STEP) < 0 || h(x + STEP, y + STEP) < 0;
     if (wet) cellTriangles(x, y, () => WATER_LEVEL, pos);
   });
   const g = new THREE.BufferGeometry();

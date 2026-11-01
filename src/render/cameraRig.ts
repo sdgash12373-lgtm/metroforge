@@ -60,7 +60,39 @@ export class CameraRig {
   groundAt(sx: number, sy: number, w: number, h: number): Vec2 | null {
     this.ndc.set((sx / w) * 2 - 1, -(sy / h) * 2 + 1);
     this.ray.setFromCamera(this.ndc, this.camera);
+    if (this.surface) return this.surfaceHit(this.surface);
     this.ground.constant = -this.pickHeight;
+    const p = this.ray.ray.intersectPlane(this.ground, this.hit);
+    return p ? { x: p.x, y: p.z } : null;
+  }
+
+  /** When set (整地), taps land on the hills themselves rather than on the plain's level. */
+  surface: ((x: number, y: number) => number) | null = null;
+
+  /** Where the ray last set up meets the ground's surface: marched out in steps, then narrowed down. */
+  private surfaceHit(h: (x: number, y: number) => number): Vec2 | null {
+    const o = this.ray.ray.origin;
+    const d = this.ray.ray.direction;
+    const far = Math.min(30000, this.distance * 4 + 2000);
+    const step = Math.max(4, this.distance / 150);
+    let prev = 0;
+    for (let t = step; t < far; t += step) {
+      const y = o.y + d.y * t;
+      if (y > 600 && d.y >= 0) break;
+      if (y <= h(o.x + d.x * t, o.z + d.z * t)) {
+        let lo = prev;
+        let hi = t;
+        for (let k = 0; k < 12; k++) {
+          const m = (lo + hi) / 2;
+          if (o.y + d.y * m <= h(o.x + d.x * m, o.z + d.z * m)) hi = m;
+          else lo = m;
+        }
+        return { x: o.x + d.x * hi, y: o.z + d.z * hi };
+      }
+      prev = t;
+    }
+    // Looking up past the land: the plain's level, as usual
+    this.ground.constant = 0;
     const p = this.ray.ray.intersectPlane(this.ground, this.hit);
     return p ? { x: p.x, y: p.z } : null;
   }

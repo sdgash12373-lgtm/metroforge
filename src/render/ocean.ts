@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { Landform } from '../sim/landform';
 import { type Terrain, WATER_LEVEL } from '../sim/terrain';
 
 /**
@@ -174,6 +175,9 @@ uniform float uTime;
 uniform float uAmp;
 uniform sampler2D uDepth;
 uniform vec4 uBounds;
+uniform sampler2D uMask;
+uniform vec4 uMaskBox;
+uniform float uMaskOn;
 varying vec3 vWorld;
 varying vec2 vDepth;
 varying float vHeight;
@@ -181,6 +185,14 @@ varying float vOutside;
 #include <fog_pars_fragment>
 
 void main() {
+  // Land 整地 has reshaped: no water over dry pits or filled-in sea, only where it has reached (lakes)
+  if (uMaskOn > 0.5) {
+    vec2 m = (vWorld.xz - uMaskBox.xy) / (uMaskBox.zw - uMaskBox.xy);
+    if (m.x >= 0.0 && m.y >= 0.0 && m.x <= 1.0 && m.y <= 1.0) {
+      float k = texture2D(uMask, m).r;
+      if (k > 0.25 && k < 0.75) discard;
+    }
+  }
   // Land off the map, round its edges and past them, goes on as plain dimmed ground, like a locked region (worked
   // out per pixel: the sea disc's big outer triangles would blur it into steps)
   vec2 uvB = (vWorld.xz - uBounds.xy) / (uBounds.zw - uBounds.xy);
@@ -429,6 +441,9 @@ export class Ocean {
           uSky: { value: new THREE.Color(0.7, 0.8, 0.9) },
           uLight: { value: 1 },
           uTime: { value: 0 },
+          uMask: { value: null },
+          uMaskBox: { value: new THREE.Vector4(0, 0, 1, 1) },
+          uMaskOn: { value: 0 },
         },
       ]),
     });
@@ -445,6 +460,8 @@ export class Ocean {
     const b = terrain.bounds;
     const res = DEPTH_RES;
     const data = new Uint8Array(res * res * 4);
+    this.depthData = data;
+    this.material.uniforms.uMaskOn.value = 0;
     for (let j = 0; j < res; j++) {
       for (let i = 0; i < res; i++) {
         const x = b.minX + ((i + 0.5) / res) * (b.maxX - b.minX);
@@ -468,6 +485,65 @@ export class Ocean {
     this.depth.needsUpdate = true;
     this.material.uniforms.uDepth.value = this.depth;
     this.material.uniforms.uBounds.value.set(b.minX, b.minY, b.maxX, b.maxY);
+  }
+
+  private depthData: Uint8Array | null = null;
+  private mask: THREE.DataTexture | null = null;
+
+  /**
+   * After 整地: the depth over the reshaped part again, and a mask of its cells (no water where it is dry,
+   * water in the lakes), so the sea is not drawn in dry pits or over filled-in land.
+   */
+  setLand(land: Landform): void {
+    const box = land.box;
+    const u = this.material.uniforms;
+    if (!box || !this.depthData || !this.depth) {
+      u.uMaskOn.value = 0;
+      return;
+    }
+    const b = land.bounds;
+    const i0 = box.i0 - 1;
+    const j0 = box.j0 - 1;
+    const w = box.i1 - i0 + 1;
+    const h = box.j1 - j0 + 1;
+    const mask = new Uint8Array(w * h * 4);
+    for (let j = 0; j < h; j++) {
+      for (let i = 0; i < w; i++) {
+        if (!land.touchedCell(i0 + i, j0 + j)) continue;
+        const x = land.cornerX(i0 + i + 0.5);
+        const y = land.cornerY(j0 + j + 0.5);
+        mask[(j * w + i) * 4] = land.water(x, y) ? 255 : 128;
+      }
+    }
+    this.mask?.dispose();
+    this.mask = new THREE.DataTexture(mask, w, h, THREE.RGBAFormat);
+    this.mask.minFilter = THREE.NearestFilter;
+    this.mask.magFilter = THREE.NearestFilter;
+    this.mask.needsUpdate = true;
+    u.uMask.value = this.mask;
+    u.uMaskBox.value.set(land.cornerX(i0), land.cornerY(j0), land.cornerX(i0 + w), land.cornerY(j0 + h));
+    u.uMaskOn.value = 1;
+    // Depth over the box, so lakes are calm and their colour follows how deep they were dug
+    const res = DEPTH_RES;
+    const data = this.depthData;
+    const sx = (b.maxX - b.minX) / res;
+    const sy = (b.maxY - b.minY) / res;
+    const ti0 = Math.max(0, Math.floor((land.cornerX(i0) - b.minX) / sx));
+    const ti1 = Math.min(res - 1, Math.ceil((land.cornerX(i0 + w) - b.minX) / sx));
+    const tj0 = Math.max(0, Math.floor((land.cornerY(j0) - b.minY) / sy));
+    const tj1 = Math.min(res - 1, Math.ceil((land.cornerY(j0 + h) - b.minY) / sy));
+    for (let j = tj0; j <= tj1; j++) {
+      for (let i = ti0; i <= ti1; i++) {
+        const x = b.minX + (i + 0.5) * sx;
+        const y = b.minY + (j + 0.5) * sy;
+        if (!land.touched(x, y)) continue;
+        const o = (j * res + i) * 4;
+        const depth = land.water(x, y) ? WATER_LEVEL - land.height(x, y) : 0;
+        data[o] = Math.round(255 * Math.min(1, Math.max(0, depth / FULL_DEPTH)));
+        data[o + 1] = depth > 0 && land.sea(x, y) ? 255 : 0;
+      }
+    }
+    this.depth.needsUpdate = true;
   }
 
   private pass(material: THREE.RawShaderMaterial, out: THREE.WebGLRenderTarget): void {
