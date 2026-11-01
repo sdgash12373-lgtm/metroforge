@@ -17,8 +17,8 @@ import { buildDashedLines, buildLinePaths, buildTunnelOverlay, buildPreviewGeome
 import { StopLayer } from './transit';
 import { buildFacilityGeometry, buildFacilitySigns, signAtlas } from './facilities';
 import { SignalLayer } from './signals';
-import { HILL_TREES, LOWLAND_TREES, OUTER_TREES, type TreeSpot, buildGroundGeometry, buildLockedGeometry, buildWaterGeometry, cornerHeights, treeSpots } from './terrainMesh';
-import { FLAT, REGION_NAMES, type Terrain } from '../sim/terrain';
+import { HILL_TREES, LOWLAND_TREES, OUTER_TREES, type TreeSpot, buildGroundGeometry, buildWaterGeometry, cornerHeights, treeSpots } from './terrainMesh';
+import { FLAT, REGION_NAMES, type RegionName, type Terrain } from '../sim/terrain';
 import { LEVELS, UNLOCK } from '../sim/levels';
 import { VehicleLayer } from './vehicles';
 import { PedestrianLayer } from './pedestrians';
@@ -52,6 +52,8 @@ interface RailLayer {
 
 const TREE_COUNT = LOWLAND_TREES + HILL_TREES + OUTER_TREES;
 const STREET_TREES = 4000;
+/** Camera height above which the small things round the buildings are not drawn */
+const FAR_DETAIL = 2200;
 /** How often painted cells are redrawn while the brush moves. */
 const PAINT_REDRAW_MS = 120;
 /**
@@ -125,9 +127,6 @@ export class World {
   /** seconds, for the ripples on the water */
   private readonly waterTime = { value: 0 };
   /** veil over the parts of the map not opened yet */
-  private readonly locked: THREE.Mesh;
-  private lockedCity: City | null = null;
-  private lockedVersion = -1;
   /** the regions the ground was last drawn for (their shores finer) */
   private groundKey = '';
   private readonly preview: THREE.Mesh;
@@ -194,9 +193,10 @@ export class World {
     installAerialPerspective();
     const coarse = matchMedia('(pointer: coarse)').matches;
     const guess = guessTier(coarse);
-    // Drawn straight to the screen (multisampled) on 低 and 中; through the effects on 高, which smooth edges themselves
+    // Drawn straight to the screen, multisampled on 中; 高 smooths edges in its effects, and 低 saves the multisampling
+    // (decided when the page loads: a canvas cannot change it later)
     const tier = quality === 'auto' ? guess : quality;
-    this.renderer = new THREE.WebGLRenderer({ antialias: tier !== 'high', powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: tier === 'medium', powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = shadows;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     // Gentle filmic tone mapping: bright sun and lit windows roll off softly instead of clipping, colours stay true
@@ -227,14 +227,8 @@ export class World {
       livelyWater(new THREE.MeshLambertMaterial({ color: 0x4f97bf, transparent: true, opacity: 0.88 }), this.waterTime),
     );
     this.water.visible = false;
-    this.locked = new THREE.Mesh(
-      new THREE.BufferGeometry(),
-      new THREE.MeshBasicMaterial({ color: 0x1d2630, transparent: true, opacity: 0.38, depthWrite: false, side: THREE.DoubleSide }),
-    );
-    this.locked.renderOrder = 1;
-    this.locked.visible = false;
-    this.scene.add(this.ground, this.water, this.locked);
-    this.ocean = Ocean.supported(this.renderer) ? new Ocean(this.renderer, !matchMedia('(pointer: coarse)').matches) : null;
+    this.scene.add(this.ground, this.water);
+    this.ocean = Ocean.supported(this.renderer) ? new Ocean(this.renderer, !coarse && tier !== 'low') : null;
     if (this.ocean) {
       this.ocean.mesh.visible = false;
       this.scene.add(this.ocean.mesh);
@@ -471,7 +465,6 @@ export class World {
     this.aviationVersion = -1;
     this.facilitiesVersion = -1;
     this.labelsVersion = -1;
-    this.lockedVersion = -1;
     this.ships.invalidate();
     for (const k of RAIL_KINDS) {
       this.rails[k].version = -1;
@@ -792,13 +785,19 @@ export class World {
     // The ground itself is drawn in sync, for the regions the city has opened
     this.groundKey = '';
     this.water.geometry.dispose();
-    this.water.geometry = buildWaterGeometry(terrain);
+    // The plain water is only for when the FFT sea can't run
+    this.water.geometry = this.ocean ? new THREE.BufferGeometry() : buildWaterGeometry(terrain);
     this.ocean?.setTerrain(terrain);
     this.showWater();
     this.rig.bounds = terrain.bounds;
-    this.lockedVersion = -1;
     this.trees.spots = treeSpots(terrain);
-    this.rockSpots = terrain === FLAT ? [] : coastRocks(terrain, coastOf(terrain, cornerHeights(terrain)));
+  }
+
+  /** The ground for the regions a city has opened (their shores finer, the rest shaded), and the reefs on their coasts. */
+  private setGround(terrain: Terrain, open: ReadonlySet<RegionName>): void {
+    this.ground.geometry.dispose();
+    this.ground.geometry = buildGroundGeometry(terrain, open);
+    this.rockSpots = terrain === FLAT ? [] : coastRocks(terrain, coastOf(terrain, cornerHeights(terrain), open));
     if (this.rocks) {
       this.scene.remove(this.rocks);
       this.rocks.dispose();
@@ -824,8 +823,8 @@ export class World {
     const groundKey = [...city.regions].sort().join();
     if (groundKey !== this.groundKey) {
       this.groundKey = groundKey;
-      this.ground.geometry.dispose();
-      this.ground.geometry = buildGroundGeometry(city.terrain, city.regions);
+      this.setGround(city.terrain, city.regions);
+      this.updateTrees(city);
     }
     if (city.transit.version !== this.transitVersion || city.roadsVersion !== this.roadsVersion) {
       this.transitVersion = city.transit.version;
@@ -867,13 +866,6 @@ export class World {
     if (city.labelsVersion + city.roadsVersion * 1e6 + city.regionsVersion * 1e3 !== this.labelsVersion) {
       this.labelsVersion = city.labelsVersion + city.roadsVersion * 1e6 + city.regionsVersion * 1e3;
       this.rebuildNames(city);
-    }
-    if (city !== this.lockedCity || city.regionsVersion !== this.lockedVersion) {
-      this.lockedCity = city;
-      this.lockedVersion = city.regionsVersion;
-      this.locked.geometry.dispose();
-      this.locked.geometry = buildLockedGeometry(city.terrain, city.regions);
-      this.locked.visible = city.lockedRegions().length > 0;
     }
     if (city.aviation.version !== this.aviationVersion) {
       this.aviationVersion = city.aviation.version;
@@ -1031,6 +1023,7 @@ export class World {
   }
 
   render(): void {
+    this.buildings.farView(this.rig.camera.position.y > FAR_DETAIL);
     if (this.grid.visible) placeGrid(this.grid, this.gridAt ?? this.rig.target, this.rig.distance);
     // Keep the shadow camera centered on what the player is looking at (the sky aims the sun there)
     const span = Math.min(900, Math.max(150, this.rig.distance * 1.2));

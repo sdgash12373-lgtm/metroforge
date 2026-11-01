@@ -17,7 +17,11 @@ export class CameraRig {
   /** How far the view may wander: the map's extent */
   bounds = { minX: -2000, maxX: 2000, minY: -2000, maxY: 2000 };
   readonly minDistance = 40;
-  readonly maxDistance = 1600;
+  /** Far enough out to take in the whole map from overhead */
+  get maxDistance(): number {
+    const b = this.bounds;
+    return Math.max(1600, Math.max(b.maxX - b.minX, b.maxY - b.minY) * 1.3);
+  }
   private readonly ray = new THREE.Raycaster();
   private readonly ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private readonly hit = new THREE.Vector3();
@@ -41,6 +45,15 @@ export class CameraRig {
       this.target.y + Math.cos(this.yaw) * h,
     );
     this.camera.lookAt(this.target.x, 0, this.target.y);
+    // Near and far planes follow the zoom: far enough to see the whole map from high up, near enough for close-ups,
+    // with the ratio kept modest so distant roads don't flicker against the ground
+    const near = Math.max(1, this.distance * 0.004);
+    const far = Math.max(6000, this.distance * 3);
+    if (near !== this.camera.near || far !== this.camera.far) {
+      this.camera.near = near;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   /** Ground point (sim coordinates) under a screen position, or null when looking at the sky. */

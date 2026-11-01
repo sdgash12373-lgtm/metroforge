@@ -193,12 +193,15 @@ export class SkySystem {
     const fog = this.scene.fog as THREE.Fog;
     fog.color.copy(c);
     const thick = Math.sqrt(Math.max(n.fog, n.precip * 0.4));
-    fog.near = THREE.MathUtils.lerp(1500, 10, thick);
-    fog.far = THREE.MathUtils.lerp(4200, 520, thick);
+    // Zoomed far out (the whole map in view) the haze draws back with the camera
+    const zoom = Math.max(1, span / 1200);
+    fog.near = THREE.MathUtils.lerp(1500, 10, thick) * zoom;
+    fog.far = THREE.MathUtils.lerp(4200, 520, thick) * zoom;
 
     // Clouds drift with the wind; more of them the cloudier it is
     for (const cloud of this.clouds.children) {
-      cloud.visible = cloud.userData.order < n.cloud * 1.1;
+      // High above them the clouds are only specks in the way: hidden
+      cloud.visible = cloud.userData.order < n.cloud * 1.1 && span < 2500;
       cloud.position.x += dt * (6 + 40 * n.wind);
       if (cloud.position.x > target.x + 3000) cloud.position.x -= 6000;
       if (cloud.position.x < target.x - 3000) cloud.position.x += 6000;

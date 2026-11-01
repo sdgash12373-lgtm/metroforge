@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { hash01 } from '../sim/geometry';
-import { type Terrain, WATER_LEVEL } from '../sim/terrain';
+import { type RegionName, type Terrain, WATER_LEVEL } from '../sim/terrain';
 
 /**
  * The shore, drawn finer than the rest of the ground. The land meets the water in a sharp step that the 20 m
@@ -60,11 +60,17 @@ const smoothstep = (a: number, b: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
-const coasts = new WeakMap<Terrain, Coast>();
+/** The last coast worked out per terrain, and for which regions. */
+const coasts = new WeakMap<Terrain, { key: string; coast: Coast }>();
 
-export function coastOf(terrain: Terrain, corner: (x: number, y: number) => number): Coast {
+/**
+ * The shore of the regions `open` (all of them if not given): only those are drawn finer, so a city that has
+ * opened part of a big map pays only for that part's coasts and rivers.
+ */
+export function coastOf(terrain: Terrain, corner: (x: number, y: number) => number, open?: ReadonlySet<RegionName>): Coast {
+  const key = open ? [...open].sort().join() : '*';
   const known = coasts.get(terrain);
-  if (known) return known;
+  if (known?.key === key) return known.coast;
   const b = terrain.bounds;
   const wet = (x: number, y: number) => terrain.height(x, y) < WATER_LEVEL;
   const cells = new Set<number>();
@@ -89,7 +95,8 @@ export function coastOf(terrain: Terrain, corner: (x: number, y: number) => numb
     for (let x = b.minX, i = 0; x < b.maxX - 1e-6; x += CELL_STEP, i++) {
       const below = +(corner(x, y) < WATER_LEVEL) + +(corner(x + CELL_STEP, y) < WATER_LEVEL) + +(corner(x, y + CELL_STEP) < WATER_LEVEL) + +(corner(x + CELL_STEP, y + CELL_STEP) < WATER_LEVEL);
       if (below === 0 || below === 4) continue;
-      if (terrain.region(x + CELL_STEP / 2, y + CELL_STEP / 2) === null) continue;
+      const r = terrain.region(x + CELL_STEP / 2, y + CELL_STEP / 2);
+      if (r === null || (open && !open.has(r))) continue;
       cells.add(cellKey(i, j));
       // The waterline between neighbouring samples on the fine grid
       const w: boolean[] = [];
@@ -153,7 +160,7 @@ export function coastOf(terrain: Terrain, corner: (x: number, y: number) => numb
     return Math.max(h, WATER_LEVEL + d * 0.15);
   };
   const coast: Coast = { cells, level, last, height, rocky, line, distance };
-  coasts.set(terrain, coast);
+  coasts.set(terrain, { key, coast });
   return coast;
 }
 

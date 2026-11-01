@@ -26,13 +26,18 @@ interface Preset {
   samples: number;
   softShadows: boolean;
   shadowSize: number;
+  /** sun shadows at all (the shadow pass draws the whole scene a second time) */
+  shadows: boolean;
+  /** lowest resolution scale the frame-rate governor may go down to; 1 keeps it at full resolution */
+  minScale: number;
 }
 
 const PRESETS: Record<Tier, Preset> = {
-  low: { pixels: 1, post: false, samples: 0, softShadows: false, shadowSize: 1024 },
+  // No shadows and no multisampling, and the resolution gives way before the frame rate does: for integrated chips
+  low: { pixels: 1, post: false, samples: 0, softShadows: false, shadowSize: 1024, shadows: false, minScale: 0.7 },
   // Straight to the screen (multisampled by the canvas): no full-screen passes, which integrated chips feel most
-  medium: { pixels: 1, post: false, samples: 0, softShadows: false, shadowSize: 2048 },
-  high: { pixels: 2, post: true, samples: 4, softShadows: true, shadowSize: 2048 },
+  medium: { pixels: 1, post: false, samples: 0, softShadows: false, shadowSize: 2048, shadows: true, minScale: 1 },
+  high: { pixels: 2, post: true, samples: 4, softShadows: true, shadowSize: 2048, shadows: true, minScale: 1 },
 };
 
 /** The frame rate the automatic setting holds on to. */
@@ -119,6 +124,8 @@ export class Graphics {
   private slow = 0;
   private fast = 0;
   private starved = 0;
+  /** whether the player has shadows on in 設定 (低 leaves them out anyway) */
+  private readonly wantShadows: boolean;
 
   constructor(
     private readonly renderer: THREE.WebGLRenderer,
@@ -129,6 +136,7 @@ export class Graphics {
     private readonly guess: Tier,
   ) {
     this.tier = quality === 'auto' ? guess : quality;
+    this.wantShadows = sun.castShadow;
     this.apply(true);
   }
 
@@ -151,6 +159,7 @@ export class Graphics {
 
   private apply(first: boolean): void {
     const p = this.preset;
+    this.sun.castShadow = this.wantShadows && p.shadows;
     const soft = p.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     if (this.renderer.shadowMap.type !== soft || this.sun.shadow.mapSize.x !== p.shadowSize) {
       this.renderer.shadowMap.type = soft;
@@ -230,7 +239,10 @@ export class Graphics {
   govern(dt: number): void {
     if (dt <= 0 || dt > 0.5) return;
     this.fps += (1 / dt - this.fps) * Math.min(1, dt * 2);
-    if (this.quality !== 'auto') return;
+    // 自動 may go down to 60 % and then a level; a level picked by hand only gives way in resolution, if at all
+    const auto = this.quality === 'auto';
+    const floor = auto ? 0.6 : this.preset.minScale;
+    if (floor >= 1) return;
     if (this.fps < TARGET_FPS - 3) {
       this.slow += dt;
       this.fast = 0;
@@ -243,11 +255,11 @@ export class Graphics {
     }
     if (this.slow > 1.5) {
       this.slow = 0;
-      if (this.scale > 0.61) {
-        this.scale = Math.max(0.6, this.scale * 0.88);
+      if (this.scale > floor + 0.01) {
+        this.scale = Math.max(floor, this.scale * 0.88);
         this.resize(this.width, this.height);
         this.starved = 0;
-      } else if ((this.starved += 1) >= 3 && this.tier !== 'low') {
+      } else if (auto && (this.starved += 1) >= 3 && this.tier !== 'low') {
         // Even at the lowest resolution it is too slow: a simpler level, back at full resolution
         this.tier = this.tier === 'high' ? 'medium' : 'low';
         this.scale = 1;
