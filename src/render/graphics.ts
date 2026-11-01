@@ -30,7 +30,8 @@ interface Preset {
 
 const PRESETS: Record<Tier, Preset> = {
   low: { pixels: 1, post: false, samples: 0, softShadows: false, shadowSize: 1024 },
-  medium: { pixels: 1.25, post: true, samples: 0, softShadows: true, shadowSize: 2048 },
+  // Straight to the screen (multisampled by the canvas): no full-screen passes, which integrated chips feel most
+  medium: { pixels: 1, post: false, samples: 0, softShadows: false, shadowSize: 2048 },
   high: { pixels: 2, post: true, samples: 4, softShadows: true, shadowSize: 2048 },
 };
 
