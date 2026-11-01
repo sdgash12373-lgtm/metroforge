@@ -42,10 +42,13 @@ export interface MenuActions {
 
 type View = 'home' | 'pause' | 'new' | 'load' | 'save' | 'settings';
 
-/** Where a new city starts: the land, and the region opened first (the other opens at 縣轄市). */
+/** Where a new city starts: the land, and the region opened first (the others open at 縣轄市). */
 const START_CHOICES: { id: string; terrain: TerrainName; region: RegionName; title: string; desc: string }[] = [
-  { id: 'kaohsiung', terrain: 'kaohsiung', region: 'kaohsiung', title: '高雄', desc: '海岸、平原、河流與東北高山；屏東區之後可開通' },
-  { id: 'pingtung', terrain: 'kaohsiung', region: 'pingtung', title: '屏東', desc: '屏東平原、大武山、東港與小琉球；高雄區之後可開通' },
+  { id: 'kaohsiung', terrain: 'kaohsiung', region: 'kaohsiung', title: '高雄', desc: '海岸、平原、河流與東北高山；其他地區之後可開通' },
+  { id: 'pingtung', terrain: 'kaohsiung', region: 'pingtung', title: '屏東', desc: '屏東平原、大武山、東港與小琉球；其他地區之後可開通' },
+  { id: 'tainan', terrain: 'kaohsiung', region: 'tainan', title: '台南', desc: '嘉南平原、安平海岸、七股潟湖、曾文溪與烏山頭水庫' },
+  { id: 'chiayi', terrain: 'kaohsiung', region: 'chiayi', title: '嘉義', desc: '八掌溪到北港溪的平原、布袋、外傘頂洲，東邊阿里山山脈' },
+  { id: 'penghu', terrain: 'kaohsiung', region: 'penghu', title: '澎湖', desc: '海峽上的群島：馬公、白沙、西嶼、望安、七美，沒有國道，由馬公港進出' },
   { id: 'flat', terrain: 'plain', region: 'kaohsiung', title: '平地', desc: '大片平原，北邊高山、河川流向大海，西南臨海' },
 ];
 

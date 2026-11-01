@@ -128,6 +128,8 @@ export class World {
   private readonly locked: THREE.Mesh;
   private lockedCity: City | null = null;
   private lockedVersion = -1;
+  /** the regions the ground was last drawn for (their shores finer) */
+  private groundKey = '';
   private readonly preview: THREE.Mesh;
   private readonly cursor: THREE.Mesh;
   private readonly brush: THREE.Mesh;
@@ -787,8 +789,8 @@ export class World {
   /** Reshapes the ground, sea and forests for the land a city stands on. */
   private setTerrain(terrain: Terrain): void {
     this.terrain = terrain;
-    this.ground.geometry.dispose();
-    this.ground.geometry = buildGroundGeometry(terrain);
+    // The ground itself is drawn in sync, for the regions the city has opened
+    this.groundKey = '';
     this.water.geometry.dispose();
     this.water.geometry = buildWaterGeometry(terrain);
     this.ocean?.setTerrain(terrain);
@@ -818,6 +820,12 @@ export class World {
     if (city.terrain !== this.terrain) {
       this.setTerrain(city.terrain);
       this.updateTrees(city);
+    }
+    const groundKey = [...city.regions].sort().join();
+    if (groundKey !== this.groundKey) {
+      this.groundKey = groundKey;
+      this.ground.geometry.dispose();
+      this.ground.geometry = buildGroundGeometry(city.terrain, city.regions);
     }
     if (city.transit.version !== this.transitVersion || city.roadsVersion !== this.roadsVersion) {
       this.transitVersion = city.transit.version;

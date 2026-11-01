@@ -1055,8 +1055,8 @@ export class Hud {
             this.toast(done.reason ?? '不能開通');
             return;
           }
-          const road = r === 'pingtung' ? '國道 3 號' : '國道 1 號';
-          this.ticker(`🎉 ${REGION_NAMES[r]}開通了！${road}已經通車`, { loops: 2 });
+          const way = r === 'penghu' ? '馬公港的交通船開航了' : `${r === 'pingtung' ? '國道 3 號' : '國道 1 號'}已經通車`;
+          this.ticker(`🎉 ${REGION_NAMES[r]}開通了！${way}`, { loops: 2 });
           this.levelShown = '';
           this.showLevel(false);
           this.actions.lookAt(freewayTown(r));

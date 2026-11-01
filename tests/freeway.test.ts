@@ -21,16 +21,17 @@ describe('the freeway a new city starts with', () => {
   it('runs north–south on viaducts, two lanes each way, carried on to the edge of the land at both ends', () => {
     for (const terrain of ['flat', 'plain', 'kaohsiung'] as const) {
       const city = fresh(terrain);
-      // On the Kaohsiung map 國道 3 號 and 10 號 lead out too
-      expect(city.outside.size).toBe(terrain === 'kaohsiung' ? 5 : 2);
+      // On the Kaohsiung map 國道 3, 8 and 10 號 lead out too, and 國道 1 號 turns off north for Tainan and Chiayi
+      expect(city.outside.size).toBe(terrain === 'kaohsiung' ? 6 : 2);
       const all = [...city.outside].map((n) => city.net.node(n));
       expect(all.every((n) => n.h === ELEVATED_HEIGHT)).toBe(true);
       const ends = all.filter((n) => n.p.x === FREEWAY.x);
-      expect(ends).toHaveLength(2);
-      const [north, south] = ends.sort((a, b) => a.p.y - b.p.y);
-      expect(north.p.x).toBe(FREEWAY.x);
-      expect(north.p.y).toBeLessThan(FREEWAY.north);
+      expect(ends).toHaveLength(terrain === 'kaohsiung' ? 1 : 2);
+      const south = ends.sort((a, b) => a.p.y - b.p.y).at(-1)!;
       expect(south.p.y).toBeGreaterThan(FREEWAY.south);
+      const north = all.filter((n) => [...city.net.segments.values()].some((s) => (s.a === n.id || s.b === n.id) && s.name === FREEWAY.name)).sort((a, b) => a.p.y - b.p.y)[0];
+      expect(north.p.y).toBeLessThan(FREEWAY.north);
+      if (terrain !== 'kaohsiung') expect(north.p.x).toBe(FREEWAY.x);
       const main = [...city.net.segments.values()].filter((s) => s.highway && s.name === FREEWAY.name);
       expect(main.length).toBeGreaterThanOrEqual(3);
       expect(main.every((s) => s.lanes === 2 && s.lots.length === 0)).toBe(true);

@@ -24,8 +24,8 @@ export interface Terrain {
 
 export type TerrainName = 'flat' | 'plain' | 'kaohsiung' | 'flat-classic' | 'kaohsiung-classic';
 
-/** Parts of the map a city opens one at a time: Kaohsiung, and Pingtung across the Gaoping River. */
-export type RegionName = 'kaohsiung' | 'pingtung';
+/** Parts of the map a city opens one at a time: Kaohsiung, Pingtung across the Gaoping River, Tainan and Chiayi up the coast, Penghu out at sea. */
+export type RegionName = 'kaohsiung' | 'pingtung' | 'tainan' | 'chiayi' | 'penghu';
 
 export interface Bounds {
   minX: number;
@@ -133,36 +133,86 @@ export const KAOHSIUNG: Terrain = {
   height(x, y) {
     const u = (x - y) * S;
     const v = (x + y) * S;
-    return v < riverCentre(u) ? kaohsiungHeight(x, y, u, v) : pingtungHeight(x, y, u, v);
+    if (v >= riverCentre(u)) return pingtungHeight(x, y, u, v);
+    if (!inSquare(x, y)) {
+      const f = northFrame(u, v);
+      if (northward(f.s)) return northHeight(x, y, f.s, f.w, u, v);
+    }
+    return kaohsiungHeight(x, y, u, v);
   },
   water(x, y) {
     const u = (x - y) * S;
     const v = (x + y) * S;
-    if (v < riverCentre(u)) return seaDepth(u, v) > 0 || riverDepth(u, v) > 0;
-    return pingtungSea(u, v) || riverDepth(u, v) > 0 || pingtungRivers(u, v) > 0;
+    if (v >= riverCentre(u)) return pingtungSea(u, v) || riverDepth(u, v) > 0 || pingtungRivers(u, v) > 0;
+    if (!inSquare(x, y)) {
+      const f = northFrame(u, v);
+      if (northward(f.s)) return northSea(x, y, f.s, f.w) || (penghuAt(x, y).d >= 1 && ovalAt(WAISANDING, x, y) >= 1 && northFresh(x, y) > 0);
+    }
+    return seaDepth(u, v) > 0 || riverDepth(u, v) > 0;
   },
   sea(x, y) {
     const u = (x - y) * S;
     const v = (x + y) * S;
-    return v < riverCentre(u) ? seaDepth(u, v) > 0 : pingtungSea(u, v);
+    if (v >= riverCentre(u)) return pingtungSea(u, v);
+    if (!inSquare(x, y)) {
+      const f = northFrame(u, v);
+      if (northward(f.s)) return northSea(x, y, f.s, f.w);
+    }
+    return seaDepth(u, v) > 0;
   },
   region(x, y) {
     const u = (x - y) * S;
     const v = (x + y) * S;
-    if (v < riverCentre(u)) return inSquare(x, y) ? 'kaohsiung' : null;
+    if (v < riverCentre(u)) {
+      if (inSquare(x, y)) return 'kaohsiung';
+      const f = northFrame(u, v);
+      return northRegion(x, y, f.s, f.w, v);
+    }
     if (inSquare(x, y) || (v <= PINGTUNG.v && Math.abs(u) <= PINGTUNG.u)) return 'pingtung';
     // The Hengchun Peninsula, reaching south to Eluanbi with the Pacific on its east
     return u >= HENGCHUN.u && u < -PINGTUNG.u + 800 && v >= HENGCHUN.minV && v <= HENGCHUN.maxV ? 'pingtung' : null;
   },
-  // The square, the Pingtung band to its south-east and the Hengchun Peninsula to the south
-  bounds: {
+  // The square, the Pingtung band to its south-east and the Hengchun Peninsula to the south, Tainan and Chiayi up
+  // the coast to the north-west and Penghu out at sea
+  get bounds() {
+    return mapBounds();
+  },
+  regions: ['kaohsiung', 'pingtung', 'tainan', 'chiayi', 'penghu'],
+};
+
+let boundsCache: Bounds | null = null;
+function mapBounds(): Bounds {
+  if (boundsCache) return boundsCache;
+  const b: Bounds = {
     minX: (HENGCHUN.u + HENGCHUN.minV) * S,
     minY: -HALF_MAP,
     maxX: (PINGTUNG.u + PINGTUNG.v) * S,
     maxY: (HENGCHUN.maxV - HENGCHUN.u) * S,
-  },
-  regions: ['kaohsiung', 'pingtung'],
-};
+  };
+  const take = (p: Vec2) => {
+    b.minX = Math.min(b.minX, p.x);
+    b.maxX = Math.max(b.maxX, p.x);
+    b.minY = Math.min(b.minY, p.y);
+    b.maxY = Math.max(b.maxY, p.y);
+  };
+  // Round the north's strip, and Penghu's islands with the sea round them
+  for (let s = NORTH.s0; s <= NORTH_END; s += 50) {
+    take(northPoint(s, NORTH_SEA));
+    take(northPoint(s, table(NORTH_LAND, s)));
+  }
+  for (let w = NORTH_SEA; w <= 3400; w += 50) take(northPoint(NORTH_END, w));
+  const pad = PENGHU_SEA / KM;
+  for (const i of PENGHU_ISLES) {
+    const r = Math.max(i.re, i.rn) + pad;
+    for (const [e, n] of [[-r, -r], [r, -r], [-r, r], [r, r]]) take(penghuPoint(i.e + e, i.n + n));
+  }
+  b.minX = Math.floor(b.minX / 20) * 20;
+  b.minY = Math.floor(b.minY / 20) * 20;
+  b.maxX = Math.ceil(b.maxX / 20) * 20;
+  b.maxY = Math.ceil(b.maxY / 20) * 20;
+  boundsCache = b;
+  return b;
+}
 
 function kaohsiungHeight(x: number, y: number, u: number, v: number): number {
   const sea = seaDepth(u, v);
@@ -353,6 +403,412 @@ function plainHeight(x: number, y: number, u: number, v: number): number {
   return h;
 }
 
+/* ───────────── Up the coast: Tainan and Chiayi, and Penghu out in the strait ───────────── */
+
+/**
+ * North of the old square the coast bends round, as Taiwan's west coast does, from running north-west past
+ * Kaohsiung to running (nearly) north past Tainan and Chiayi. Up there points are told by `s`, metres along the
+ * coast northwards (going on from -v), and `w`, metres inland from the line the coast keeps to (about 120.15°E);
+ * the strip bends round a centre inland, `r` away.
+ */
+const NORTH = { s0: 1650, uRef: -1180, r: 11000 };
+const NORTH_CENTRE = { u: NORTH.uRef + NORTH.r, v: -NORTH.s0 };
+/** How far out to sea and inland the two regions reach, and where Chiayi ends (just past the Beigang River). */
+const NORTH_SEA = -800;
+const NORTH_END = 6790;
+
+function northFrame(u: number, v: number): { s: number; w: number } {
+  if (v >= -NORTH.s0) return { s: -v, w: u - NORTH.uRef };
+  const du = u - NORTH_CENTRE.u;
+  const dv = v - NORTH_CENTRE.v;
+  return { s: NORTH.s0 + NORTH.r * Math.atan2(-dv, -du), w: NORTH.r - Math.hypot(du, dv) };
+}
+
+/** The map point `s` along the northern coast and `w` inland of it. */
+export function northPoint(s: number, w: number): Vec2 {
+  let u = w + NORTH.uRef;
+  let v = -s;
+  if (s > NORTH.s0) {
+    const phi = (s - NORTH.s0) / NORTH.r;
+    const r = NORTH.r - w;
+    u = NORTH_CENTRE.u - r * Math.cos(phi);
+    v = NORTH_CENTRE.v - r * Math.sin(phi);
+  }
+  return { x: (u + v) * S + 0, y: (v - u) * S + 0 };
+}
+
+/** Unit vectors on the map pointing up the coast (north) and inland (east) at `s`. */
+function northAxes(s: number): { n: Vec2; e: Vec2 } {
+  const phi = Math.max(0, s - NORTH.s0) / NORTH.r;
+  const c = Math.cos(phi);
+  const sn = Math.sin(phi);
+  return { n: { x: (sn - c) * S, y: (-c - sn) * S }, e: { x: (c + sn) * S, y: (sn - c) * S } };
+}
+
+/** A place by latitude and longitude, at the map's scale (about 1:14.8, so 1 km is 67.6 m). */
+export function geoPoint(lat: number, lon: number): Vec2 {
+  return northPoint(1700 + (lat - 22.9) * 7500, (lon - 120.15) * 6925);
+}
+
+/** Linear through (x, y) pairs, flat beyond the ends. */
+function table(pts: readonly (readonly [number, number])[], x: number): number {
+  if (x <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) {
+    const [x1, y1] = pts[i];
+    if (x <= x1) {
+      const [x0, y0] = pts[i - 1];
+      return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
+    }
+  }
+  return pts[pts.length - 1][1];
+}
+
+/**
+ * Where the coast runs (w) along the north: from 茄萣 past 安平 to the bulge of 七股's sandbars and salt pans out
+ * west, back in at 將軍 and 北門, then nearly straight up past 布袋 and 東石 to the 北港溪.
+ */
+const NORTH_COAST: [number, number][] = [
+  [1650, 0], [2000, 30], [2400, 0], [2700, -60], [2900, -250], [3100, -420], [3300, -460], [3600, -390],
+  [3900, -300], [4400, -260], [4900, -150], [5350, -60], [5900, -80], [6300, -60], [6900, -40],
+];
+
+/** Where the plain meets the hills (w): 新化's hills come in close behind Tainan, then the foothills draw back to 竹崎. */
+const HILL_FRONT: [number, number][] = [
+  [1650, 1560], [2000, 1560], [2400, 1400], [2750, 1400], [3500, 1500], [4000, 1650], [4600, 1850], [5000, 1950],
+  [5600, 2400], [6100, 2500], [6900, 2650],
+];
+/** How far behind the hills the mountains rise, and how high: low in Tainan, the Alishan range in Chiayi. */
+const MOUNTAIN_GAP: [number, number][] = [[1650, 400], [2600, 750], [4400, 700], [5300, 380]];
+const MOUNTAIN_PEAK: [number, number][] = [[1650, 640], [2600, 520], [4400, 600], [5300, 1050]];
+/** How far inland each part of the map goes. */
+const NORTH_LAND: [number, number][] = [[1650, 3100], [5000, 3100], [5600, 3300]];
+
+function northCoast(s: number): number {
+  // The Kaohsiung coast's bays carry on a little way, then the sandy coast runs smoother
+  const k = 0.35 + 0.65 * smooth(NORTH.s0 + 600, NORTH.s0, s);
+  const v = -s;
+  const bays = 90 * Math.sin(v / 260) + 55 * Math.sin(v / 97 + 1) + 40 * (noise(v / 180, 1.5) - 0.5);
+  return table(NORTH_COAST, s) + k * bays;
+}
+
+/** A river: its line on the map, and how wide it is along it (half-widths at each point). */
+interface River {
+  pts: Vec2[];
+  half: number[];
+  /** hills and mountains are cut down into a valley this wide either side */
+  valley: number;
+  box: Bounds;
+}
+
+function river(pts: Vec2[], half: number[], valley = 170): River {
+  const pad = Math.max(...half) + valley + 10;
+  return {
+    pts,
+    half,
+    valley,
+    box: {
+      minX: Math.min(...pts.map((p) => p.x)) - pad,
+      maxX: Math.max(...pts.map((p) => p.x)) + pad,
+      minY: Math.min(...pts.map((p) => p.y)) - pad,
+      maxY: Math.max(...pts.map((p) => p.y)) + pad,
+    },
+  };
+}
+
+/** A river laid out by (s, w) points up north, with half-widths from the mouth to the last point. */
+function northRiver(sw: [number, number][], mouth: number, source: number, valley = 170): River {
+  const pts = sw.map(([s, w]) => northPoint(s, w));
+  return river(pts, pts.map((_, i) => mouth + ((source - mouth) * i) / Math.max(1, pts.length - 1)), valley);
+}
+
+/** How far inside a river a point lies (≤ 0 off it), and how far from its middle line. */
+function riverAt(r: River, x: number, y: number): { depth: number; d: number } {
+  if (x < r.box.minX || x > r.box.maxX || y < r.box.minY || y > r.box.maxY) return { depth: -1e9, d: 1e9 };
+  let best = 1e9;
+  let half = 0;
+  for (let i = 1; i < r.pts.length; i++) {
+    const a = r.pts[i - 1];
+    const b = r.pts[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy)));
+    const d = Math.hypot(x - a.x - dx * t, y - a.y - dy * t);
+    if (d < best) {
+      best = d;
+      half = r.half[i - 1] + (r.half[i] - r.half[i - 1]) * t;
+    }
+  }
+  // A gentle meander, so the banks aren't ruled lines
+  const h = half * (0.85 + 0.3 * noise(x / 70, y / 70));
+  return { depth: h - best, d: best - h };
+}
+
+/**
+ * The rivers of the north, from the sea up: 二仁溪's mouth at Kaohsiung's edge, 鹽水溪 past 安平, 曾文溪 from the
+ * 曾文 reservoir down past 玉井 and 西港 to the sea at 七股, 將軍溪, 急水溪, 八掌溪 between Tainan and Chiayi,
+ * 朴子溪 past 嘉義 to 東石, and 北港溪 at the north edge.
+ */
+const ERREN = river([{ x: -2120, y: -120 }, { x: -2075, y: -700 }, { x: -2058, y: -1100 }, { x: -2050, y: -1250 }], [14, 12, 9, 4], 120);
+const BAZHANG: [number, number][] = [[4960, -260], [5000, 100], [5150, 600], [5350, 1300], [5550, 1850], [5700, 2300], [5900, 2800], [6050, 3200], [6150, 3500]];
+const NORTH_RIVERS: River[] = [
+  ERREN,
+  northRiver([[2470, -100], [2500, 250], [2560, 700], [2620, 1050], [2690, 1350]], 15, 7, 120),
+  northRiver([[2900, -420], [3000, 0], [3150, 500], [3300, 1000], [3380, 1450], [3420, 2150], [3700, 2400], [4000, 2550], [4250, 2640]], 30, 13, 220),
+  northRiver([[3870, -380], [3920, 0], [3980, 450]], 11, 6, 80),
+  northRiver([[4470, -330], [4520, 100], [4600, 700], [4700, 1300], [4800, 1800], [4860, 2150]], 16, 8, 160),
+  northRiver(BAZHANG, 20, 11, 200),
+  northRiver([[5870, -150], [5900, 200], [5930, 700], [6050, 1400], [6200, 2050], [6400, 2700], [6550, 3200]], 15, 9, 180),
+  northRiver([[6650, -120], [6680, 500], [6700, 1300], [6720, 2100], [6760, 2800], [6780, 3400]], 22, 12, 180),
+];
+
+/** An ellipse on the map, turned to the coast's lie where it is (radii along the coast and inland). */
+interface Oval {
+  c: Vec2;
+  n: Vec2;
+  e: Vec2;
+  rn: number;
+  re: number;
+}
+
+function northOval(s: number, w: number, rn: number, re: number): Oval {
+  const { n, e } = northAxes(s);
+  return { c: northPoint(s, w), n, e, rn, re };
+}
+
+/** 0 at the middle, 1 on the edge. */
+function ovalAt(o: Oval, x: number, y: number): number {
+  const dx = x - o.c.x;
+  const dy = y - o.c.y;
+  return ((dx * o.n.x + dy * o.n.y) / o.rn) ** 2 + ((dx * o.e.x + dy * o.e.y) / o.re) ** 2;
+}
+
+/** Reservoirs and ponds: 烏山頭 (珊瑚潭) at the foot of the hills, 曾文 up in the mountains, 蘭潭 and 仁義潭 by 嘉義, the 鰲鼓 wetland. */
+const NORTH_LAKES: Oval[] = [
+  northOval(3950, 1720, 120, 85),
+  northOval(4060, 1790, 80, 55),
+  northOval(3880, 1810, 70, 45),
+  northOval(4300, 2650, 170, 65),
+  northOval(4450, 2700, 120, 50),
+  northOval(5990, 2420, 85, 55),
+  northOval(5870, 2480, 90, 45),
+  northOval(6250, 110, 95, 60),
+];
+/** 七股潟湖 behind its sandbars, and 四草's lagoon by 安平: sea water inside the coast. */
+const NORTH_LAGOONS: Oval[] = [northOval(3330, -330, 270, 105), northOval(2610, 15, 60, 40)];
+/** Gaps through 七股's sandbars, where the lagoon opens to the sea. */
+const LAGOON_MOUTHS = [3150, 3480];
+/** 外傘頂洲, the long shifting sandbar off 東石 and 布袋. */
+const WAISANDING = northOval(5800, -600, 420, 32);
+
+/** How far out to sea a point up north lies (≤ 0 on land). */
+function northSeaDepth(s: number, w: number): number {
+  return northCoast(s) - w;
+}
+
+function northSea(x: number, y: number, s: number, w: number): boolean {
+  if (ovalAt(WAISANDING, x, y) < 1 || penghuAt(x, y).d < 1) return false;
+  const depth = northSeaDepth(s, w);
+  if (depth > 0) return true;
+  for (const o of NORTH_LAGOONS) {
+    if (ovalAt(o, x, y) < 1) return true;
+  }
+  // The lagoon's mouths through the bar
+  if (s > 3000 && s < 3600 && w < northCoast(s) + 140 && LAGOON_MOUTHS.some((m) => Math.abs(s - m) < 12)) return true;
+  return false;
+}
+
+/** How far inside a river or lake up north a point lies (≤ 0 off them). */
+function northFresh(x: number, y: number): number {
+  let best = -1e9;
+  for (const r of NORTH_RIVERS) best = Math.max(best, riverAt(r, x, y).depth);
+  for (const o of NORTH_LAKES) best = Math.max(best, 40 * (1 - ovalAt(o, x, y) * (0.9 + 0.2 * noise(x / 50, y / 50))));
+  return best;
+}
+
+/** Tainan's and Chiayi's land: the 嘉南 plain, 新化's low hills and the badlands of 左鎮, the mountains behind, highest towards 阿里山. */
+function northLand(x: number, y: number, s: number, w: number): number {
+  let h = 0;
+  const front = table(HILL_FRONT, s) + 80 * (noise(s / 420, 5.3) - 0.5);
+  if (w > front) h += smooth(front, front + 180, w) * (12 + 34 * fbm(x / 170, y / 170));
+  // 月世界: bare, gullied mudstone hills behind Tainan
+  if (s > 1900 && s < 2900 && w > front + 150) h += 18 * smooth(1900, 2200, s) * smooth(2900, 2600, s) * Math.abs(Math.sin(x / 45 + 3 * fbm(x / 120, y / 120)));
+  const mountains = front + table(MOUNTAIN_GAP, s) + 100 * (noise(s / 500, 9.4) - 0.5);
+  if (w > mountains) {
+    const k = (w - mountains) / (s > 5000 ? 800 : 1200);
+    const ridges = 0.55 + 0.45 * fbm(x / 240, y / 240) + 0.25 * Math.abs(Math.sin(s / 140 + fbm(x / 400, y / 400) * 4));
+    h += table(MOUNTAIN_PEAK, s) * k ** 1.15 * ridges;
+  }
+  // Valleys cut down to the rivers and round the reservoirs
+  let cut = 1;
+  for (const r of NORTH_RIVERS) {
+    const at = riverAt(r, x, y);
+    if (at.d < r.valley) cut = Math.min(cut, smooth(10, r.valley, at.d));
+  }
+  for (const o of NORTH_LAKES) {
+    const d = ovalAt(o, x, y);
+    if (d < 6) cut = Math.min(cut, smooth(1, 4.5, d));
+  }
+  return h * cut;
+}
+
+/* Penghu: the islands in the strait west of Chiayi, by their real shapes and places. */
+
+/** Magong, the middle of Penghu: about 58 km off the coast, level with the 北港溪. */
+const MAGONG = geoPoint(23.565, 119.57);
+const PENGHU_AXES = northAxes(1700 + (23.565 - 22.9) * 7500);
+/** Model metres per real km. */
+const KM = 1000 / 14.8;
+
+/** One island or part of one: centre east and north of Magong (km), half-lengths (km), turned (degrees). */
+const PENGHU_ISLES: { e: number; n: number; re: number; rn: number; turn: number; name: string; mesa?: number }[] = [
+  // 澎湖本島: the main body with 湖西 to the east and 嵵裡 to the south; Magong on its peninsula west into the bay,
+  // 風櫃 at the tip; 北寮 along the north shore
+  { e: 6.0, n: 0.0, re: 6.0, rn: 4.0, turn: 10, name: '本島' },
+  { e: 11.5, n: 1.5, re: 1.6, rn: 2.5, turn: 0, name: '湖西' },
+  { e: 2.8, n: -3.6, re: 2.0, rn: 1.4, turn: 0, name: '嵵裡' },
+  { e: 0.2, n: 0.0, re: 2.6, rn: 1.0, turn: 30, name: '馬公' },
+  { e: -2.0, n: -2.2, re: 1.6, rn: 0.6, turn: 55, name: '風櫃' },
+  { e: 4.5, n: 3.8, re: 2.5, rn: 1.0, turn: 15, name: '北寮' },
+  // 中屯 between it and 白沙, a short bridge either side
+  { e: 2.5, n: 5.6, re: 0.9, rn: 0.5, turn: 0, name: '中屯' },
+  // 白沙, with 通樑 at its west end
+  { e: 3.0, n: 8.8, re: 3.8, rn: 1.6, turn: 5, name: '白沙' },
+  { e: 1.5, n: 11.2, re: 1.8, rn: 1.2, turn: 0, name: '赤崁' },
+  { e: 4.8, n: 10.4, re: 1.4, rn: 0.9, turn: 0, name: '後寮' },
+  { e: -1.5, n: 8.6, re: 1.1, rn: 0.8, turn: 0, name: '通樑' },
+  // 西嶼, long north-north-east across the bay from 外垵 to 小門; 跨海大橋 crosses from it to 通樑
+  { e: -7.8, n: 4.0, re: 1.3, rn: 5.0, turn: -25, name: '西嶼' },
+  { e: -9.9, n: -0.3, re: 1.4, rn: 1.2, turn: 0, name: '外垵' },
+  { e: -5.4, n: 8.4, re: 1.2, rn: 1.0, turn: 0, name: '小門' },
+  // Out islands
+  { e: 2.5, n: 18.0, re: 1.6, rn: 1.1, turn: 0, name: '吉貝' },
+  { e: 9.2, n: 10.5, re: 0.7, rn: 0.55, turn: 0, name: '鳥嶼' },
+  { e: 8.2, n: 7.2, re: 0.6, rn: 0.5, turn: 0, name: '員貝' },
+  { e: -5.1, n: -8.3, re: 1.3, rn: 0.6, turn: -10, name: '虎井', mesa: 8 },
+  { e: -6.3, n: -6.6, re: 0.6, rn: 0.6, turn: 0, name: '桶盤', mesa: 12 },
+  { e: -7.0, n: -22.7, re: 2.2, rn: 1.6, turn: 30, name: '望安' },
+  { e: -4.3, n: -22.9, re: 0.9, rn: 0.6, turn: 0, name: '將軍澳' },
+  { e: -14.0, n: -39.0, re: 2.0, rn: 1.4, turn: 10, name: '七美' },
+];
+/** The region takes in the sea this far (model metres) round the islands. */
+const PENGHU_SEA = 200;
+
+/** Magong-relative real km east and north of a map point. */
+function penghuLocal(x: number, y: number): { e: number; n: number } {
+  const dx = x - MAGONG.x;
+  const dy = y - MAGONG.y;
+  return { e: (dx * PENGHU_AXES.e.x + dy * PENGHU_AXES.e.y) / KM, n: (dx * PENGHU_AXES.n.x + dy * PENGHU_AXES.n.y) / KM };
+}
+
+/** The map point `e` km east and `n` km north of Magong. */
+export function penghuPoint(e: number, n: number): Vec2 {
+  return { x: MAGONG.x + (PENGHU_AXES.e.x * e + PENGHU_AXES.n.x * n) * KM, y: MAGONG.y + (PENGHU_AXES.e.y * e + PENGHU_AXES.n.y * n) * KM };
+}
+
+const PENGHU_BOX = (() => {
+  let minE = Infinity;
+  let maxE = -Infinity;
+  let minN = Infinity;
+  let maxN = -Infinity;
+  const pad = PENGHU_SEA / KM;
+  for (const i of PENGHU_ISLES) {
+    const r = Math.max(i.re, i.rn) + pad;
+    minE = Math.min(minE, i.e - r);
+    maxE = Math.max(maxE, i.e + r);
+    minN = Math.min(minN, i.n - r);
+    maxN = Math.max(maxN, i.n + r);
+  }
+  return { minE, maxE, minN, maxN };
+})();
+
+/**
+ * Nearest island and how far into it a point lies: `d` < 1 on land, by the islands' outlines with ragged
+ * basalt shores; `out` is about how many metres off its shore.
+ */
+function penghuAt(x: number, y: number): { d: number; out: number; isle: (typeof PENGHU_ISLES)[number] | null } {
+  const { e, n } = penghuLocal(x, y);
+  const pad = PENGHU_SEA / KM;
+  if (e < PENGHU_BOX.minE || e > PENGHU_BOX.maxE || n < PENGHU_BOX.minN || n > PENGHU_BOX.maxN) return { d: 99, out: 1e9, isle: null };
+  let best = 99;
+  let out = 1e9;
+  let isle: (typeof PENGHU_ISLES)[number] | null = null;
+  const rag = 0.82 + 0.3 * noise(x / 60, y / 60) + 0.12 * noise(x / 17, y / 17);
+  for (const i of PENGHU_ISLES) {
+    const de = e - i.e;
+    const dn = n - i.n;
+    const reach = Math.max(i.re, i.rn) + pad;
+    if (Math.abs(de) > reach || Math.abs(dn) > reach) continue;
+    const a = (i.turn * Math.PI) / 180;
+    const pe = de * Math.cos(a) + dn * Math.sin(a);
+    const pn = -de * Math.sin(a) + dn * Math.cos(a);
+    const r = Math.sqrt((pe / i.re) ** 2 + (pn / i.rn) ** 2);
+    const d = r * rag;
+    if (d < best) {
+      best = d;
+      isle = i;
+    }
+    out = Math.min(out, (r - 1) * Math.min(i.re, i.rn) * KM);
+  }
+  return { d: best, out, isle };
+}
+
+/** The bay inside the main islands, between Magong, 白沙 and 西嶼 (km east and north of Magong, radii). */
+const PENGHU_BAY = { e: -2.5, n: 4.5, re: 8, rn: 7.5 };
+
+function penghuRegion(x: number, y: number): boolean {
+  const at = penghuAt(x, y);
+  if (at.out < PENGHU_SEA) return true;
+  if (at.d === 99) return false;
+  const { e, n } = penghuLocal(x, y);
+  return ((e - PENGHU_BAY.e) / PENGHU_BAY.re) ** 2 + ((n - PENGHU_BAY.n) / PENGHU_BAY.rn) ** 2 < 1;
+}
+
+/** Low flat islands, buildable all over, with a few small heights: 拱北山, 大城北 on 望安, the mesas of 桶盤 and 虎井, 七美's south cliffs. */
+function penghuHeight(x: number, y: number): number {
+  const { e, n } = penghuLocal(x, y);
+  const at = penghuAt(x, y);
+  if (at.isle?.mesa) {
+    const top = Math.min(1, (1 - at.d) * 4);
+    return top > 0 ? Math.max(0, at.isle.mesa * top) : 0;
+  }
+  let h = 0;
+  h += hill(e, n, 8.6, 2.6, 1.0, 0.9, 9);
+  h += hill(e, n, -7.4, -22.4, 0.8, 0.7, 8);
+  h += hill(e, n, -14.0, -39.9, 1.6, 0.7, 10);
+  return h < 0.4 ? 0 : h;
+}
+
+/** Height up north and out in the strait (outside the old square, past where the coast starts to bend). */
+function northHeight(x: number, y: number, s: number, w: number, u: number, v: number): number {
+  const isle = penghuAt(x, y);
+  if (isle.d < 1) return penghuHeight(x, y);
+  if (ovalAt(WAISANDING, x, y) < 1) return 0.9;
+  if (northSea(x, y, s, w)) {
+    const depth = Math.min(Math.max(0, northSeaDepth(s, w)), isle.out);
+    if (NORTH_LAGOONS.some((o) => ovalAt(o, x, y) < 1.3)) return -2.2;
+    return -Math.min(7, 1 + depth * 0.12);
+  }
+  const fresh = northFresh(x, y);
+  if (fresh > 0) return -Math.min(5, 1 + fresh * 0.15);
+  // Near the old square the land carries on from Kaohsiung's, then gives way to the north's own
+  const outside = Math.max(-HALF_MAP - x, -HALF_MAP - y, 0);
+  const fromKaohsiung = 1 - smooth(0, 500, outside);
+  let h = northLand(x, y, s, w);
+  if (fromKaohsiung > 0) h = fromKaohsiung * kaohsiungLand(x, y, u, v) + (1 - fromKaohsiung) * h;
+  return h < 0.4 ? 0 : h;
+}
+
+/** Which northern region a point is in, or null. */
+function northRegion(x: number, y: number, s: number, w: number, v: number): RegionName | null {
+  if (penghuRegion(x, y)) return 'penghu';
+  if (v >= 0 || s < NORTH.s0 || s > NORTH_END || w < NORTH_SEA || w > table(NORTH_LAND, s)) return null;
+  // 八掌溪 is the border
+  return s < table(BAZHANG.map(([bs, bw]) => [bw, bs] as [number, number]), w) ? 'tainan' : 'chiayi';
+}
+
+/** Whether a point outside the old square is in the north's part of the map: past where the coast bends, or out at Penghu. */
+const northward = (s: number) => s >= NORTH.s0;
+
 /**
  * Before v3.0.0 the map had no edge for building, only for the camera (its middle stayed within the
  * square), so old saves can reach a little past the square. The classic terrains below keep that land.
@@ -458,8 +914,10 @@ export const KAOHSIUNG_CLASSIC: Terrain = {
     return seaDepth((x - y) * S, (x + y) * S) > 0;
   },
   region(x, y) {
+    // Near the square the old ground keeps its old regions, even where Tainan's now begins
+    if (!nearSquare(x, y)) return KAOHSIUNG.region(x, y);
     const r = KAOHSIUNG.region(x, y);
-    if (r || !nearSquare(x, y)) return r;
+    if (r === 'kaohsiung' || r === 'pingtung') return r;
     return (x + y) * S < riverCentre((x - y) * S) ? 'kaohsiung' : 'pingtung';
   },
 };
@@ -473,4 +931,6 @@ export const TERRAINS: Record<TerrainName, Terrain> = {
 };
 
 /** Display names of the regions. */
-export const REGION_NAMES: Record<RegionName, string> = { kaohsiung: '高雄區', pingtung: '屏東區' };
+export const REGION_NAMES: Record<RegionName, string> = { kaohsiung: '高雄區', pingtung: '屏東區', tainan: '台南區', chiayi: '嘉義區', penghu: '澎湖區' };
+/** Short place names, for the weather and the like. */
+export const REGION_PLACES: Record<RegionName, string> = { kaohsiung: '高雄', pingtung: '屏東', tainan: '台南', chiayi: '嘉義', penghu: '澎湖' };

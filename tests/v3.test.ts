@@ -56,8 +56,8 @@ describe('regions', () => {
     const before = city.money;
     expect(city.openRegion('pingtung').ok).toBe(true);
     expect(before - city.money).toBe(REGION_COST);
-    // Both ends of 國道 1 號 and 國道 3 號, and 國道 10 號 on towards 旗山
-    expect(city.outside.size).toBe(5);
+    // Both ends of 國道 1 號 and 國道 3 號, 國道 8 號 at 安南 and 國道 10 號 on towards 旗山
+    expect(city.outside.size).toBe(6);
     expect(city.disconnectedRoads()).toHaveLength(0);
     expect(city.buildRoad(free(p.x, p.y), null, free(q.x, q.y)).ok).toBe(true);
     expect(city.openRegion('pingtung').ok).toBe(false);

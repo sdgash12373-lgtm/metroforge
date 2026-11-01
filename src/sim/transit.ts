@@ -160,7 +160,10 @@ export interface BusStop {
 export type MetroLook = 'canopy';
 
 /** 'twin' and 'triple' are 共構 stations: one building over train and metro (and high-speed) together. */
-export type StationStyle = 'standard' | RegionName | HubStyle;
+/** Regions with a station of their own (特色車站). */
+export type SpecialRegion = Extract<RegionName, 'kaohsiung' | 'pingtung'>;
+export const SPECIAL_REGIONS: readonly SpecialRegion[] = ['kaohsiung', 'pingtung'];
+export type StationStyle = 'standard' | SpecialRegion | HubStyle;
 /** What a station looks like and covers: its style, or for a metro station its look. */
 export type StationShape = StationStyle | MetroLook;
 export type HubStyle = 'twin' | 'triple';
