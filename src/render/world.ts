@@ -1191,6 +1191,9 @@ export class World {
     this.materials.lampPool.visible = night > 0.02;
   }
 
+  /** where the shadow's area was last frame */
+  private shadowAt = { x: NaN, y: NaN, span: 0 };
+
   render(): void {
     this.buildings.farView(this.rig.camera.position.y > FAR_DETAIL);
     if (this.grid.visible) placeGrid(this.grid, this.gridAt ?? this.rig.target, this.rig.distance);
@@ -1209,7 +1212,9 @@ export class World {
     // Push the shadow test out by over half a shadow texel, which grows as the view zooms out: with a fixed
     // bias, walls lit at a glancing angle broke up into stripes (shadow acne) when seen from afar
     this.sun.shadow.normalBias = Math.max(0.03, ((span * 2) / this.sun.shadow.mapSize.x) * 0.7);
-    this.graphics.render(this.sky.night.value);
+    const moved = this.shadowAt.span !== span || Math.hypot(this.rig.target.x - this.shadowAt.x, this.rig.target.y - this.shadowAt.y) > span * 0.002;
+    this.shadowAt = { x: this.rig.target.x, y: this.rig.target.y, span };
+    this.graphics.render(this.sky.night.value, moved);
     this.placeNames();
     if (this.guides.length) {
       const el = this.renderer.domElement;

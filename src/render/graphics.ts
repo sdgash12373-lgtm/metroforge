@@ -222,12 +222,17 @@ export class Graphics {
     }
   }
 
-  /** Night 0..1: lights bloom more after dark. */
-  render(night: number): void {
-    // The sun's shadows are drawn every other frame: the shadow pass draws the whole scene again, and a moving
-    // car's shadow a frame behind can't be seen (the map keeps the light's matrix it was made with, so nothing slides)
+  /**
+   * Night 0..1: lights bloom more after dark. `viewMoved`: the shadow's area has moved since the last frame
+   * (the view panned, zoomed or jumped to a city just loaded).
+   */
+  render(night: number, viewMoved = false): void {
+    // The sun's shadows are drawn every other frame while the view holds still: the shadow pass draws the whole
+    // scene again, and a moving car's shadow a frame behind can't be seen. When the view moves they are drawn
+    // every frame: a map kept from the frame before covers the old view, and the ground it no longer reached
+    // lit up for a frame and went dark again, which flickered
     this.renderer.shadowMap.autoUpdate = false;
-    this.renderer.shadowMap.needsUpdate = this.frames++ % 2 === 0;
+    this.renderer.shadowMap.needsUpdate = viewMoved || this.frames++ % 2 === 0;
     if (!this.composer) {
       this.renderer.render(this.scene, this.camera);
       return;
