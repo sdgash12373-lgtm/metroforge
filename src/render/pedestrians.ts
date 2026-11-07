@@ -5,6 +5,7 @@ import { toWorld } from '../sim/facilities';
 import { type RoadSegment, asphaltWidth, roadWidth } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { painted, tint, wheel } from './kit';
+import { type Crowd, PeopleModels } from './people';
 
 const MAX = 900;
 /** One walker on the street per this many residents. */
@@ -44,7 +45,21 @@ interface Walker {
   /** riding a bicycle (residents who can't afford a scooter or car) */
   bike?: boolean;
   who: Person;
+  /** which of its crowd's detailed models this person looks like */
+  look: number;
+  /** Walk cycles so far, for the detailed models */
+  cycle: number;
 }
+
+const CROWD: Record<Person, Crowd> = {
+  [Person.Man]: 'man',
+  [Person.Woman]: 'woman',
+  [Person.Elder]: 'elder',
+  [Person.Child]: 'child',
+  [Person.Police]: 'police',
+};
+/** Within this far of the camera people are drawn as detailed models (once loaded), further off as simple figures. */
+const NEAR = 260;
 
 const SKIN = 0xe8c4a0;
 /** Top of the sidewalk, where people's feet go. */
@@ -219,6 +234,22 @@ const MIX_SCHOOL: Mix = [0.15, 0.15, 0.1, 0.6];
 const MIX_PARK: Mix = [0.12, 0.13, 0.4, 0.35];
 const MIX_WORK: Mix = [0.46, 0.46, 0.04, 0.04];
 
+/** Who stands on duty at each kind of station, where (u, v from its centre, -v toward the street), and which look. */
+const STAFF: Partial<Record<string, [Crowd, number, number, number][]>> = {
+  police: [
+    ['police', -5, -9.6, 0],
+    ['police', 5, -9.6, 1],
+  ],
+  fire: [
+    ['firefighter', 0.4, -8.2, 0],
+    ['firefighter', 5.8, -8, 1],
+  ],
+  hospital: [
+    ['medic', -16.6, -10, 1],
+    ['medic', 7, -11, 0],
+  ],
+};
+
 /**
  * People walking and cycling along the sidewalks: men, women, elders and children, mixed by what the street is near
  * (children by schools, elders and children by parks, working adults among offices and shops); more where more people
@@ -242,8 +273,15 @@ export class PedestrianLayer {
   private up = new THREE.Vector3(0, 1, 0);
   private c = new THREE.Color();
   private seed = 1;
+  /** detailed people near the camera (Gobkit models) */
+  private readonly people: PeopleModels;
+  /** seconds on the clock, for staff standing idle */
+  private clock = 0;
 
   constructor(shadows: boolean) {
+    this.people = new PeopleModels(shadows);
+    this.group.add(this.people.group);
+    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') void this.people.load(`${import.meta.env.BASE_URL}people/`);
     // People walk by swinging their arms and legs in the shader, so they need no mesh per limb
     const mat = swingLimbs(new THREE.MeshLambertMaterial({ flatShading: true }));
     const fixed = swingLimbs(new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true }));
@@ -324,12 +362,23 @@ export class PedestrianLayer {
       color: palette[Math.floor(this.rand() * palette.length)],
       phase: this.rand() * 6,
       who,
+      look: Math.floor(this.rand() * 1000),
+      cycle: this.rand(),
       ...(bike ? { bike } : {}),
     };
   }
 
-  update(city: City, dt: number, hour: number, rain: number): void {
+  update(city: City, dt: number, hour: number, rain: number, eye?: THREE.Vector3): void {
     const net = city.net;
+    this.clock += dt;
+    const people = this.people.ready && eye ? this.people : null;
+    people?.begin();
+    /** Draw a detailed person if near enough and there is room, using this.m as placed by draw */
+    const detailed = (crowd: Crowd, look: number, x: number, y: number, walking: boolean, cycle: number) => {
+      if (!people || Math.hypot(x - eye!.x, y - eye!.z, eye!.y) > NEAR) return false;
+      const model = people.model(crowd, look);
+      return !!model && people.add(model, this.m, walking, cycle);
+    };
     // Fewer people out late at night and in the rain
     const night = hour < 5 ? 0.15 : hour < 7 ? 0.5 : hour >= 22 ? 0.35 : 1;
     const out = night * (1 - rain * 0.6);
@@ -354,15 +403,16 @@ export class PedestrianLayer {
     for (const f of bridges) {
       const on = this.walkers.filter((w) => w.bridge === f.id).length;
       for (let i = on; i < 2; i++) {
-        this.walkers.push({ seg: -1, s: this.rand() * (f.span ?? 16), dir: i ? 1 : -1, side: 1, speed: 1.2, color: CLOTHES[(f.id + i) % CLOTHES.length], phase: 0, bridge: f.id, who: i ? Person.Woman : Person.Man });
+        this.walkers.push({ seg: -1, s: this.rand() * (f.span ?? 16), dir: i ? 1 : -1, side: 1, speed: 1.2, color: CLOTHES[(f.id + i) % CLOTHES.length], phase: 0, bridge: f.id, who: i ? Person.Woman : Person.Man, look: f.id + i, cycle: 0 });
       }
     }
     const counts = PEOPLE.map(() => 0);
     let nb = 0;
-    const draw = (who: Person | 'bike', x: number, y: number, h: number, hx: number, hy: number, color: number, stride: number) => {
+    const draw = (who: Person | 'bike', x: number, y: number, h: number, hx: number, hy: number, color: number, stride: number, w?: { crowd: Crowd; look: number; walking: boolean; cycle: number }) => {
       this.q.setFromAxisAngle(this.up, Math.atan2(-hy, hx));
       this.p.set(x, h, y);
       this.m.compose(this.p, this.q, this.one);
+      if (w && who !== 'bike' && detailed(w.crowd, w.look, x, y, w.walking, w.cycle)) return;
       if (who === 'bike') {
         if (nb >= MAX) return;
         this.bikes.setMatrixAt(nb, this.m);
@@ -380,20 +430,26 @@ export class PedestrianLayer {
       this.setStride(this.rest[who], i, stride);
       counts[who]++;
     };
-    // Officers on guard either side of each police station's door
+    // Staff on duty facing the street: officers either side of each police station's door, firefighters by the
+    // engine bays, a nurse at the hospital door and a paramedic by the 急診 ambulances
     for (const f of city.facilities.values()) {
-      if (f.kind !== 'police') continue;
+      const posts = STAFF[f.kind];
+      if (!posts) continue;
       const o = toWorld(f, 0, 0);
       const ahead = toWorld(f, 0, -1);
-      for (const u of [-5, 5]) {
-        const at = toWorld(f, u, -9.6);
-        draw(Person.Police, at.x, at.y, 0.1, ahead.x - o.x, ahead.y - o.y, POLICE_BLUE, 0);
-      }
+      posts.forEach(([crowd, u, v, look], k) => {
+        const at = toWorld(f, u, v);
+        const fallback = crowd === 'police' ? Person.Police : Person.Man;
+        const color = crowd === 'police' ? POLICE_BLUE : crowd === 'firefighter' ? 0xc8231e : 0xf4f4f4;
+        draw(fallback, at.x, at.y, 0.1, ahead.x - o.x, ahead.y - o.y, color, 0, { crowd, look: f.id + look, walking: false, cycle: this.clock + f.id * 0.37 + k * 0.6 });
+      });
     }
     for (const w of this.walkers) {
       w.s += w.speed * dt * w.dir;
       // A stride every metre or so, longer when cycling
       w.phase += dt * w.speed * (w.bike ? 1.6 : w.who === Person.Child ? 5.5 : 4.2);
+      const model = !w.bike && this.people.ready ? this.people.model(CROWD[w.who], w.look) : null;
+      if (model) w.cycle += (dt * w.speed) / model.stride;
       let x: number;
       let y: number;
       // Feet on the sidewalk
@@ -445,13 +501,15 @@ export class PedestrianLayer {
         hx = tx * w.dir;
         hy = ty * w.dir;
       }
-      draw(w.bike ? 'bike' : w.who, x, y, h, hx, hy, w.color, Math.sin(w.phase) * (w.bike ? 0.5 : STRIDE[w.who]));
+      draw(w.bike ? 'bike' : w.who, x, y, h, hx, hy, w.color, Math.sin(w.phase) * (w.bike ? 0.5 : STRIDE[w.who]), { crowd: CROWD[w.who], look: w.look, walking: true, cycle: w.cycle });
     }
     PEOPLE.forEach((who, k) => {
       this.clothes[who].count = counts[k];
       this.rest[who].count = counts[k];
     });
     this.bikes.count = nb;
+    people?.end();
+    if (!people) this.people.begin(), this.people.end();
     this.bikeFrames.count = nb;
     for (const m of [...this.clothes, ...this.rest, this.bikes, this.bikeFrames]) {
       m.instanceMatrix.needsUpdate = true;
