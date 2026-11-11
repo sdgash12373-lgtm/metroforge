@@ -772,7 +772,7 @@ export class World {
 
   /** Per-frame updates: vehicles always, the traffic colours a few times a second. */
   animate(city: City, dt: number, simDt = dt, hour = 12, rain = 0): void {
-    this.pedestrians.update(city, simDt, hour, rain, this.rig.camera.position);
+    this.pedestrians.update(city, simDt, hour, rain);
     this.vehicles.update(city.traffic, (v) => city.transit.lines.get(v.line ?? -1)?.color ?? 0xf2b134);
     for (const k of RAIL_KINDS) {
       this.rails[k].trains.update(city.rails[k]);
