@@ -99,6 +99,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
         const now = pinch();
         rig.pan(ground(gesture.mid.x, gesture.mid.y), ground(now.mid.x, now.mid.y));
         rig.zoomAt(gesture.dist / now.dist, ground(now.mid.x, now.mid.y));
+        tools.zoomed();
         let d = now.angle - gesture.angle;
         d = Math.atan2(Math.sin(d), Math.cos(d));
         const twist = gesture.twist + d;
@@ -157,6 +158,7 @@ export function attachInput(el: HTMLElement, rig: CameraRig, tools: ToolControll
     (e) => {
       e.preventDefault();
       rig.zoomAt(Math.exp(e.deltaY * 0.0012), ground(e.clientX, e.clientY));
+      tools.zoomed();
     },
     { passive: false },
   );

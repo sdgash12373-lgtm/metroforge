@@ -150,6 +150,8 @@ export class ToolController {
   private draftPath: PathPiece[] = [];
   /** line picked in the dock, to rename, recolour or delete it */
   selectedLine: number | null = null;
+  /** line being made longer: lineDraft then starts with its stops, and new taps add stops after its last one */
+  extendingLine: number | null = null;
   /** which landmark the landmark tool builds */
   landmark: LandmarkKind = 'tower85';
   /** which green space the 綠化 tool builds */
@@ -568,6 +570,7 @@ export class ToolController {
 
   cancel(): void {
     this.draft = { start: null, control: null };
+    this.extendingLine = null;
     if (this.lineDraft.length) {
       this.lineDraft = [];
       this.draftPath = [];
@@ -589,6 +592,26 @@ export class ToolController {
   private finishLineNow(): void {
     const t = this.transit;
     if (!t) return;
+    const ext = this.extendingLine !== null ? t.lines.get(this.extendingLine) : undefined;
+    if (ext) {
+      const added = this.lineDraft.length - ext.stops.length;
+      if (added <= 0) {
+        this.events.toast('還沒有新增車站：沿著路線點下一站');
+        return;
+      }
+      const r = this.city.extendLine(t, ext.id, this.lineDraft);
+      if (!r.ok) {
+        if (r.reason) this.events.toast(r.reason);
+        return;
+      }
+      this.events.toast(`「${ext.name}」延長 ${added} 站，花費 ${ntd(r.cost)}`);
+      this.extendingLine = null;
+      this.lineDraft = [];
+      this.draftPath = [];
+      this.events.changed();
+      this.refresh();
+      return;
+    }
     const r = this.city.createLine(t, this.lineDraft);
     if (!r.ok) {
       if (r.reason) this.events.toast(r.reason);
@@ -683,9 +706,70 @@ export class ToolController {
     if (!hits.length) this.events.toast('點地圖上的路線或車站');
   }
 
+  /** Picks a line in the dock: only its route is drawn, and the camera turns to it. */
   selectLine(id: number | null): void {
+    this.cancel();
     this.selectedLine = id;
+    const line = id !== null ? this.transit?.lines.get(id) : undefined;
+    if (line) this.frameLine(line.stops);
     this.events.changed();
+    this.refresh();
+  }
+
+  /** Moves the camera over a line's stops, backing out until all of them fit. */
+  private frameLine(stopIds: number[]): void {
+    const t = this.transit;
+    const pts = stopIds.map((s) => t?.stops.get(s)?.p).filter((p): p is Vec2 => !!p);
+    if (!pts.length) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    const rig = this.world.rig;
+    rig.target = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+    // A 45° view sees about the camera distance across on a phone held upright
+    const span = Math.max(maxX - minX, maxY - minY);
+    rig.distance = Math.max(rig.distance, Math.min(rig.maxDistance, span * 1.4 + 120));
+    rig.apply();
+  }
+
+  /** Width of a picked line: thicker from further out, so it stays easy to follow across the whole city. */
+  private boldWidth(): number {
+    return Math.round(Math.min(10, Math.max(2.8, this.world.rig.distance / 120)));
+  }
+
+  private drawnBold = 0;
+
+  /** After a zoom: a picked line is redrawn when its width should change. */
+  zoomed(): void {
+    if (this.selectedLine !== null && this.plansLines && this.boldWidth() !== this.drawnBold) this.refresh();
+  }
+
+  /** Starts adding stops to the end of the selected line, so it grows instead of a new line being opened. */
+  extendLine(): void {
+    const t = this.transit;
+    const line = this.selectedLine !== null ? t?.lines.get(this.selectedLine) : undefined;
+    if (!t || !line) return;
+    this.cancel();
+    this.extendingLine = line.id;
+    this.lineDraft = [...line.stops];
+    this.replan();
+    this.events.toast(`延長「${line.name}」：點下一個站，接在最後一站之後`);
+    this.events.changed();
+    this.refresh();
+  }
+
+  /** Route preview of the line being planned; an extension is shown as the whole loop it will run. */
+  private replan(): void {
+    const t = this.transit;
+    if (!t) return;
+    this.draftPath = t.plan(this.lineDraft, this.extendingLine !== null).path;
   }
 
   /** Once a road has a start, a finger drag places its end (with the ghost road following). */
@@ -907,12 +991,19 @@ export class ToolController {
     const t = this.transit!;
     const { label } = t.mode;
     const n = this.lineDraft.length;
+    const ext = this.extendingLine !== null ? t.lines.get(this.extendingLine) : undefined;
+    if (ext) {
+      const added = n - ext.stops.length;
+      return added > 0
+        ? `延長「${ext.name}」：已新增 ${added} 站（每站 ${ntd(t.mode.stopCost)}）；繼續點下一站，或按「完成延長」`
+        : `延長「${ext.name}」：點${t.mode.streetsOnly ? '道路' : '軌道或車站'}，新站會接在最後一站之後${t.mode.streetsOnly ? '，公車再繞回第一站' : ''}`;
+    }
     if (this.tool === 'metro' && this.metroLook === 'canopy' && n === 0 && this.selectedLine === null)
       return '大型高架站：點高架捷運軌道設站（白色膜頂、佔地 4×15 格，地上原有的房子會拆掉讓出空間），已有的高架站點一下也會改建';
     if (n === 1) return `已設 1 站（每站 ${ntd(t.mode.stopCost)}）；沿著路線點下一站`;
     if (n > 1) return t.mode.reverses ? `已設 ${n} 站；點「完成路線」開通，列車在兩端折返` : `已設 ${n} 站；點第一站或「完成路線」讓公車繞回起點`;
     const picked = this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
-    if (picked) return `${picked.name}：${label} ${t.buses(picked.id).length} 列 · 載客 ${picked.riders.toLocaleString()} 人`;
+    if (picked) return `${picked.name}：${label} ${t.buses(picked.id).length} ${t.mode.streetsOnly ? '台' : '列'} · 載客 ${picked.riders.toLocaleString()} 人`;
     if (!t.lines.size) {
       if (t.mode.streetsOnly) return '公車：點地面道路設第一個站，依序點下一站，最後點回第一站完成路線';
       if (!t.net.segments.size) return `先用「軌道」拉${label}軌道，再到「路線」設車站`;
@@ -1158,6 +1249,8 @@ export class ToolController {
   private tapLine(p: Vec2): void {
     const transit = this.transit!;
     const r = this.world.rig.snapRadius;
+    // A tap on the map with a line picked starts a new line: the picked one stops being shown alone
+    if (this.extendingLine === null && this.selectedLine !== null) this.selectedLine = null;
     const first = this.lineDraft[0];
     // Tapping the first stop again closes the loop
     if (this.lineDraft.length >= 2 && transit.stopNear(p, r)?.id === first) {
@@ -1174,7 +1267,7 @@ export class ToolController {
       }
       if (stop.id !== this.lineDraft[this.lineDraft.length - 1]) {
         this.lineDraft.push(stop.id);
-        this.draftPath = transit.plan(this.lineDraft, false).path;
+        this.replan();
       }
       return;
     }
@@ -1201,7 +1294,7 @@ export class ToolController {
     }
     if (stop.id === this.lineDraft[this.lineDraft.length - 1]) return;
     this.lineDraft.push(stop.id);
-    this.draftPath = transit.plan(this.lineDraft, false).path;
+    this.replan();
   }
 
   setMetroLook(look: 'standard' | 'canopy'): void {
@@ -1227,7 +1320,14 @@ export class ToolController {
       const near = this.hover && (t.stopNear(this.hover, this.world.rig.snapRadius)?.p ?? t.locate(this.hover, this.world.rig.snapRadius)?.p);
       w.setCursor(near ?? null, true);
     }
-    w.setDraftLine(this.plansLines && t ? this.draftPath : null, LINE_COLORS[((t?.nextLine ?? 1) - 1) % LINE_COLORS.length], t?.net);
+    // A picked line is drawn alone, so it can be told apart from the others
+    const picked = this.plansLines && t && this.selectedLine !== null ? t.lines.get(this.selectedLine) : undefined;
+    const ext = picked && this.extendingLine === picked.id ? picked : undefined;
+    const bold = this.boldWidth();
+    this.drawnBold = bold;
+    w.setLineFocus(!!picked);
+    if (picked && !this.lineDraft.length) w.setDraftLine(picked.path, picked.color, t!.net, undefined, bold);
+    else w.setDraftLine(this.plansLines && t ? this.draftPath : null, ext ? ext.color : LINE_COLORS[((t?.nextLine ?? 1) - 1) % LINE_COLORS.length], t?.net, undefined, ext ? bold : undefined);
     if (this.tool === 'upgradeRoad') {
       const seg = this.hover && this.city.unlocked('roadUpgrade') ? this.streetAt(this.hover) : null;
       const path = seg ? this.city.net.street(seg).map((x) => ({ seg: x.id, dir: 1 as const, from: 0, to: x.length })) : null;

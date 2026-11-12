@@ -20,6 +20,8 @@ export interface EditTarget {
   rename(name: string): void;
   recolor?(color: number): void;
   remove?: { label: string; run(): void };
+  /** an extra action shown above remove, e.g. 延長這條路線 */
+  action?: { label: string; run(): void };
 }
 
 const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
@@ -97,6 +99,14 @@ export class EditPanel {
     colorHead.className = 'note';
     colorHead.textContent = t.colorLabel ?? '路線顏色';
     const parts: HTMLElement[] = t.color === undefined ? [title, nameRow] : [title, nameRow, colorHead, swatches];
+    if (t.action) {
+      const act = document.createElement('button');
+      act.type = 'button';
+      act.className = 'chip';
+      act.textContent = t.action.label;
+      act.onclick = () => t.action!.run();
+      parts.push(act);
+    }
     if (t.remove) {
       const del = document.createElement('button');
       del.type = 'button';
