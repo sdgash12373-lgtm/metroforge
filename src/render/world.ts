@@ -24,6 +24,7 @@ import { FLAT, REGION_NAMES, type RegionName, type Terrain } from '../sim/terrai
 import { LEVELS, UNLOCK } from '../sim/levels';
 import { VehicleLayer } from './vehicles';
 import { PedestrianLayer } from './pedestrians';
+import { CitizenModels } from './citizens';
 import { RAIL_KINDS, type RailKind, TRACK_OFFSET } from '../sim/rail';
 import type { RoadNetwork, RoadNode, RoadSegment } from '../sim/roads';
 import { airportMaterial, buildAirportGeometry, PlaneLayer, TaxiRank } from './airport';
@@ -32,7 +33,7 @@ import { StationLayer } from './stations';
 import { TrainLayer } from './trains';
 import { ShipLayer } from './ships';
 import { Ocean } from './ocean';
-import { Graphics, type Quality, guessTier, installAerialPerspective } from './graphics';
+import { Graphics, type Quality, type Tier, guessTier, installAerialPerspective } from './graphics';
 import { FACILITIES } from '../sim/facilities';
 import { type RockSpot, coastOf, coastRocks, rockGeometry } from './coast';
 
@@ -72,6 +73,8 @@ const PAINT_REDRAW_MS = 120;
  * show straight away.
  */
 const GROWTH_REDRAW_MS = 2500;
+/** Citizens are drawn as models within this many metres of the camera, per graphics tier. */
+const CITIZENS_NEAR: Record<Tier, number> = { low: 150, medium: 220, high: 280 };
 
 /** A round-crowned street tree in one geometry, coloured per vertex. */
 function mergeTree(): THREE.BufferGeometry {
@@ -136,6 +139,8 @@ export class World {
   private overlayAge = Infinity;
   private readonly trees: { trunks: THREE.InstancedMesh; crowns: THREE.InstancedMesh; spots: TreeSpot[] };
   readonly pedestrians: PedestrianLayer;
+  /** the citizen models drawn near the camera, for walkers, cyclists and scooter riders */
+  readonly citizens: CitizenModels;
   /** trees planted along wide sidewalks */
   private readonly streetTrees: THREE.InstancedMesh;
   private terrain: Terrain = FLAT;
@@ -271,10 +276,13 @@ export class World {
     this.streetTrees.castShadow = shadows;
     this.streetTrees.count = 0;
     this.scene.add(this.streetTrees);
-    this.vehicles = new VehicleLayer(shadows);
-    this.scene.add(this.vehicles.group);
-    this.pedestrians = new PedestrianLayer(shadows);
+    this.citizens = new CitizenModels(shadows);
+    this.scene.add(this.citizens.group);
+    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') void this.citizens.load(`${import.meta.env.BASE_URL}citizens/`);
+    this.pedestrians = new PedestrianLayer(shadows, this.citizens);
     this.scene.add(this.pedestrians.group);
+    this.vehicles = new VehicleLayer(shadows, this.citizens);
+    this.scene.add(this.vehicles.group);
     this.overlay = new THREE.Mesh(
       new THREE.BufferGeometry(),
       new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -3 }),
@@ -543,6 +551,7 @@ export class World {
     this.streetTrees.visible = !on;
     this.vehicles.group.visible = !on;
     this.pedestrians.group.visible = !on;
+    this.citizens.group.visible = !on;
     this.signals.group.visible = !on;
     const { sidewalk, asphalt, markings, concrete } = this.materials;
     for (const m of [sidewalk, asphalt, markings, concrete]) {
@@ -786,8 +795,13 @@ export class World {
 
   /** Per-frame updates: vehicles always, the traffic colours a few times a second. */
   animate(city: City, dt: number, simDt = dt, hour = 12, rain = 0): void {
-    this.pedestrians.update(city, simDt, hour, rain);
-    this.vehicles.update(city.traffic, (v) => city.transit.lines.get(v.line ?? -1)?.color ?? 0xf2b134);
+    // Citizen models within this far of the camera, nearer on lighter graphics tiers
+    const near = CITIZENS_NEAR[this.graphics.tier];
+    const eye = this.rig.camera.position;
+    this.citizens.begin();
+    this.pedestrians.update(city, simDt, hour, rain, eye, near);
+    this.vehicles.update(city.traffic, (v) => city.transit.lines.get(v.line ?? -1)?.color ?? 0xf2b134, eye, near);
+    this.citizens.end();
     for (const k of RAIL_KINDS) {
       this.rails[k].trains.update(city.rails[k]);
       this.rails[k].stations.light(this.sky.night.value);
