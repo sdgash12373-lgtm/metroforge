@@ -131,6 +131,7 @@ export class World {
   private aviationVersion = -1;
   /** which kind of transport's lines are shown, if any */
   private lineView: 'bus' | RailKind | 'all' | null = null;
+  private lineFocus = false;
   private readonly overlay: THREE.Mesh;
   private overlayAge = Infinity;
   private readonly trees: { trunks: THREE.InstancedMesh; crowns: THREE.InstancedMesh; spots: TreeSpot[] };
@@ -570,8 +571,21 @@ export class World {
   /** Shows one kind of transport's routes (that tool's view), all of them (picking a line to remove), or none. */
   setLineOverlay(kind: 'bus' | RailKind | 'all' | null): void {
     this.lineView = kind;
-    this.linePaths.visible = kind === 'bus' || kind === 'all';
-    for (const k of RAIL_KINDS) this.rails[k].lines.visible = kind === k || kind === 'all';
+    this.showLines();
+  }
+
+  /** Hides the other routes while one picked line is drawn on its own. */
+  setLineFocus(on: boolean): void {
+    if (on === this.lineFocus) return;
+    this.lineFocus = on;
+    this.showLines();
+  }
+
+  private showLines(): void {
+    const kind = this.lineView;
+    const all = kind === 'all';
+    this.linePaths.visible = (kind === 'bus' || all) && !this.lineFocus;
+    for (const k of RAIL_KINDS) this.rails[k].lines.visible = (kind === k || all) && !this.lineFocus;
   }
 
   /** Route of a line being planned (or a street being named), or null. */

@@ -306,6 +306,15 @@ export class Transit {
     return clamp(this.mode.shareAtFree - this.mode.sharePerDollar * this.fare, 0.1, 0.9);
   }
 
+  /** Gives a line a new list of stops (e.g. made longer) and routes it again; its vehicles keep running. */
+  setStops(id: number, stops: number[]): void {
+    const line = this.lines.get(id);
+    if (!line) return;
+    line.stops = [...stops];
+    this.route(line);
+    this.version++;
+  }
+
   /** Renames or recolours a line (blank names fall back to the default). */
   editLine(id: number, change: { name?: string; color?: number }): void {
     const line = this.lines.get(id);

@@ -2627,6 +2627,22 @@ export class City {
     return { ok: true, cost };
   }
 
+  /** Makes a line longer: `stops` is its old stops followed by the new ones; only the new stops are paid for. */
+  extendLine(transit: Transit, id: number, stops: number[]): { ok: boolean; cost: number; reason?: string } {
+    const line = transit.lines.get(id);
+    if (!line) return { ok: false, cost: 0, reason: '找不到這條路線' };
+    const added = stops.slice(line.stops.length);
+    const cost = added.filter((s) => !line.stops.includes(s) && !transit.stops.get(s)?.style).length * transit.mode.stopCost;
+    if (!added.length) return { ok: false, cost, reason: '還沒有新增車站' };
+    if (cost > this.money) return { ok: false, cost, reason: `資金不足，需要 ${ntd(cost)}` };
+    const plan = transit.plan(stops, true);
+    if (!plan.ok) return { ok: false, cost, reason: transit.mode.streetsOnly ? '新的站和原路線之間沒有道路相連' : '新的車站和原路線之間沒有軌道相連' };
+    this.spend(cost);
+    transit.setStops(id, stops);
+    if (transit !== this.transit) this.landChanged();
+    return { ok: true, cost };
+  }
+
   paint(center: Vec2, radius: number, zone: Zone, overwrite = false): number {
     const n = paintZone(this.net, center, radius, zone, overwrite, zone === Zone.Forestry ? (l) => this.nearForest(l) : undefined);
     if (n) {

@@ -754,6 +754,13 @@ export class Hud {
     const t = this.tools;
     const transit = t.transit;
     if (!transit) return;
+    const extending = t.extendingLine !== null ? transit.lines.get(t.extendingLine) : undefined;
+    if (extending) {
+      const added = t.lineDraft.length - extending.stops.length;
+      option(`完成延長（新增 ${added} 站）`, false, () => t.finishLine(), extending.color);
+      option('取消', false, () => t.cancel());
+      return;
+    }
     if (t.lineDraft.length) {
       option(`完成路線（${t.lineDraft.length} 站）`, false, () => t.finishLine(), LINE_COLORS[(transit.nextLine - 1) % LINE_COLORS.length]);
       option('取消', false, () => t.cancel());
@@ -762,6 +769,7 @@ export class Hud {
     for (const line of transit.lines.values()) {
       const label = `${line.name} · ${line.stops.length} 站${line.ok ? '' : ' · 中斷'}`;
       option(label, t.selectedLine === line.id, () => t.selectLine(t.selectedLine === line.id ? null : line.id), line.color);
+      if (t.selectedLine === line.id) option('＋ 延長', false, () => t.extendLine());
     }
     if (transit.lines.size) {
       this.sub.append(el('span', 'divider'));
@@ -786,7 +794,8 @@ export class Hud {
   private updateEditor(city: City): void {
     const t = this.tools;
     const transit = t.transit;
-    const line = transit && t.selectedLine !== null ? transit.lines.get(t.selectedLine) : undefined;
+    // While extending, the panel steps aside so the map stays clear for tapping stops
+    const line = transit && t.selectedLine !== null && t.extendingLine === null ? transit.lines.get(t.selectedLine) : undefined;
     const flight = t.tool === 'airport' && t.selectedFlight !== null ? city.aviation.flights.get(t.selectedFlight) : undefined;
     const street = t.tool === 'streetName' && t.selectedStreet !== null ? city.net.segments.get(t.selectedStreet) : undefined;
     const district = t.tool === 'district' && t.selectedDistrict !== null ? city.districts.get(t.selectedDistrict) : undefined;
@@ -885,6 +894,7 @@ export class Hud {
         transit.editLine(id, { color });
         this.render();
       },
+      action: { label: '延長這條路線', run: () => t.extendLine() },
       remove: { label: '刪除這條路線', run: () => t.deleteLine(id) },
     });
   }

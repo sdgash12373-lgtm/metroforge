@@ -105,6 +105,43 @@ describe('bus lines', () => {
     expect(visited.size).toBe(3);
   });
 
+  it('can be made longer instead of opening a new line', () => {
+    const city = block();
+    expect(line(city, [[150, 0], [300, 150]]).ok).toBe(true);
+    const l = [...city.transit.lines.values()][0];
+    city.tick(rng());
+    const bus = city.transit.buses(l.id)[0];
+    const before = l.length;
+    const money = city.money;
+    const extra = city.transit.stopAt({ x: 150, y: 300 }, 12)!.id;
+    const r = city.extendLine(city.transit, l.id, [...l.stops, extra]);
+    expect(r.ok).toBe(true);
+    expect(r.cost).toBe(city.transit.mode.stopCost);
+    expect(city.money).toBe(money - r.cost);
+    expect(city.transit.lines.size).toBe(1);
+    expect(l.stops).toHaveLength(3);
+    expect(l.ok).toBe(true);
+    expect(l.length).toBeGreaterThan(before);
+    // The buses already running keep going and reach the new stop
+    let reached = false;
+    for (let i = 0; i < 8000 && !reached; i++) {
+      city.traffic.step(0.1);
+      if (bus.dwell && bus.dwell > 0 && l.stops[(bus.next! + 2) % 3] === extra) reached = true;
+    }
+    expect(city.traffic.vehicles).toContain(bus);
+    expect(reached).toBe(true);
+  });
+
+  it('refuse an extension to a street the line cannot reach', () => {
+    const city = block();
+    line(city, [[150, 0], [300, 150]]);
+    const l = [...city.transit.lines.values()][0];
+    city.buildRoad(free(500, 0), null, free(700, 0), true);
+    const far = city.transit.stopAt({ x: 600, y: 0 }, 12)!.id;
+    expect(city.extendLine(city.transit, l.id, [...l.stops, far]).ok).toBe(false);
+    expect(l.stops).toHaveLength(2);
+  });
+
   it('carry commuters instead of cars and earn fares', () => {
     const city = block();
     city.addOutsideConnection([...city.net.nodes.values()].find((n) => n.p.x === 0 && n.p.y === 0)!.id);
