@@ -4,6 +4,7 @@ import type { City } from '../sim/city';
 import { toWorld } from '../sim/facilities';
 import { type RoadSegment, asphaltWidth, roadWidth } from '../sim/roads';
 import { Zone } from '../sim/zoning';
+import { type Citizen, CYCLISTS, CitizenModels } from './citizens';
 import { painted, tint, wheel } from './kit';
 
 const MAX = 900;
@@ -44,7 +45,34 @@ interface Walker {
   /** riding a bicycle (residents who can't afford a scooter or car) */
   bike?: boolean;
   who: Person;
+  /** which citizen model this person is, up close */
+  model: Citizen;
+  /** clip cycles so far, for the citizen models */
+  cycle: number;
 }
+
+/** Each kind of person's citizen models, and the shirt colour each model was made in. */
+const MODELS: Record<Person, Citizen[]> = {
+  [Person.Man]: ['adultMan', 'adultMan', 'adultMan', 'teenBoy'],
+  [Person.Woman]: ['adultWoman', 'adultWoman', 'adultWoman', 'teenGirl'],
+  [Person.Elder]: ['elderMan', 'elderWoman'],
+  [Person.Child]: ['childBoy', 'childGirl'],
+  [Person.Police]: ['adultMan'],
+};
+const OWN_SHIRT: Record<Citizen, number> = {
+  adultMan: 0x2e86ab,
+  adultWoman: 0xa23b72,
+  elderMan: 0x8a7f6e,
+  elderWoman: 0xa4746a,
+  teenBoy: 0x6a994e,
+  teenGirl: 0x4f8fd6,
+  childBoy: 0xf2b134,
+  childGirl: 0xd98ab0,
+};
+/** Children faster than this run instead of walking. */
+const RUN_SPEED = 1.6;
+/** Metres a bicycle goes per pedal cycle. */
+const PEDAL = 4.5;
 
 const SKIN = 0xe8c4a0;
 /** Top of the sidewalk, where people's feet go. */
@@ -242,8 +270,11 @@ export class PedestrianLayer {
   private up = new THREE.Vector3(0, 1, 0);
   private c = new THREE.Color();
   private seed = 1;
+  /** seconds on the clock, for officers standing idle */
+  private clock = 0;
 
-  constructor(shadows: boolean) {
+  /** `citizens` draws people near the camera once loaded; further off (and until then) the simple figures do. */
+  constructor(shadows: boolean, private readonly citizens?: CitizenModels) {
     // People walk by swinging their arms and legs in the shader, so they need no mesh per limb
     const mat = swingLimbs(new THREE.MeshLambertMaterial({ flatShading: true }));
     const fixed = swingLimbs(new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true }));
@@ -314,6 +345,10 @@ export class PedestrianLayer {
     const who = bike ? Person.Man : this.person(this.mixOf(city, seg));
     const working = this.mixOf(city, seg) === MIX_WORK && who !== Person.Elder && who !== Person.Child;
     const palette = who === Person.Elder ? ELDER : who === Person.Child ? KIDS : working ? OFFICE : CLOTHES;
+    const choices = bike ? CYCLISTS : MODELS[who];
+    const model = choices[Math.floor(this.rand() * choices.length)];
+    // Children keep the colours they were made in, like a uniform; a third of everyone else does too
+    const own = who === Person.Child || (!working && this.rand() < 0.33);
     const pace = who === Person.Elder ? 0.6 + this.rand() * 0.3 : who === Person.Child ? 1.2 + this.rand() * 0.6 : 1.1 + this.rand() * 0.6;
     return {
       seg: seg.id,
@@ -321,15 +356,33 @@ export class PedestrianLayer {
       dir: this.rand() < 0.5 ? 1 : -1,
       side: this.rand() < 0.5 ? 1 : -1,
       speed: bike ? 3.5 + this.rand() * 2 : pace,
-      color: palette[Math.floor(this.rand() * palette.length)],
+      color: own ? OWN_SHIRT[model] : palette[Math.floor(this.rand() * palette.length)],
       phase: this.rand() * 6,
       who,
+      model,
+      cycle: this.rand(),
       ...(bike ? { bike } : {}),
     };
   }
 
-  update(city: City, dt: number, hour: number, rain: number): void {
+  /**
+   * Move everyone along and draw them: as citizen models within `near` metres of `eye` (when given and loaded), as
+   * simple figures further off. The caller brackets this with the citizens' begin() and end().
+   */
+  update(city: City, dt: number, hour: number, rain: number, eye?: THREE.Vector3, near = 0): void {
     const net = city.net;
+    this.clock += dt;
+    const citizens = this.citizens?.ready && eye ? this.citizens : null;
+    const near2 = near * near;
+    /** Draw a citizen model at this.m (as placed by draw) if near enough and there is room. */
+    const detailed = (model: Citizen, ride: 'walk' | 'bicycle', x: number, y: number, clip: 'Walk' | 'Idle' | 'Run' | 'Bicycle', cycle: number, shirt: number) => {
+      if (!citizens) return false;
+      const dx = x - eye!.x;
+      const dy = y - eye!.z;
+      if (dx * dx + dy * dy + eye!.y * eye!.y > near2) return false;
+      const m = citizens.model(model, ride);
+      return !!m && citizens.add(m, this.m, clip, cycle, shirt);
+    };
     // Fewer people out late at night and in the rain
     const night = hour < 5 ? 0.15 : hour < 7 ? 0.5 : hour >= 22 ? 0.35 : 1;
     const out = night * (1 - rain * 0.6);
@@ -354,15 +407,17 @@ export class PedestrianLayer {
     for (const f of bridges) {
       const on = this.walkers.filter((w) => w.bridge === f.id).length;
       for (let i = on; i < 2; i++) {
-        this.walkers.push({ seg: -1, s: this.rand() * (f.span ?? 16), dir: i ? 1 : -1, side: 1, speed: 1.2, color: CLOTHES[(f.id + i) % CLOTHES.length], phase: 0, bridge: f.id, who: i ? Person.Woman : Person.Man });
+        this.walkers.push({ seg: -1, s: this.rand() * (f.span ?? 16), dir: i ? 1 : -1, side: 1, speed: 1.2, color: CLOTHES[(f.id + i) % CLOTHES.length], phase: 0, bridge: f.id, who: i ? Person.Woman : Person.Man, model: i ? 'adultWoman' : 'adultMan', cycle: 0 });
       }
     }
     const counts = PEOPLE.map(() => 0);
     let nb = 0;
-    const draw = (who: Person | 'bike', x: number, y: number, h: number, hx: number, hy: number, color: number, stride: number) => {
+    type Up = { model: Citizen; clip: 'Walk' | 'Idle' | 'Run' | 'Bicycle'; cycle: number };
+    const draw = (who: Person | 'bike', x: number, y: number, h: number, hx: number, hy: number, color: number, stride: number, up?: Up) => {
       this.q.setFromAxisAngle(this.up, Math.atan2(-hy, hx));
       this.p.set(x, h, y);
       this.m.compose(this.p, this.q, this.one);
+      if (up && detailed(up.model, who === 'bike' ? 'bicycle' : 'walk', x, y, up.clip, up.cycle, color)) return;
       if (who === 'bike') {
         if (nb >= MAX) return;
         this.bikes.setMatrixAt(nb, this.m);
@@ -387,13 +442,18 @@ export class PedestrianLayer {
       const ahead = toWorld(f, 0, -1);
       for (const u of [-5, 5]) {
         const at = toWorld(f, u, -9.6);
-        draw(Person.Police, at.x, at.y, 0.1, ahead.x - o.x, ahead.y - o.y, POLICE_BLUE, 0);
+        draw(Person.Police, at.x, at.y, 0.1, ahead.x - o.x, ahead.y - o.y, POLICE_BLUE, 0, { model: 'adultMan', clip: 'Idle', cycle: this.clock / 2 + f.id * 0.37 + u * 0.05 });
       }
     }
     for (const w of this.walkers) {
       w.s += w.speed * dt * w.dir;
       // A stride every metre or so, longer when cycling
       w.phase += dt * w.speed * (w.bike ? 1.6 : w.who === Person.Child ? 5.5 : 4.2);
+      const running = w.who === Person.Child && w.speed > RUN_SPEED;
+      const clip = w.bike ? 'Bicycle' : running ? 'Run' : 'Walk';
+      const model = citizens?.model(w.model, w.bike ? 'bicycle' : 'walk');
+      // Cycles of the clip so far, so feet keep pace with the ground
+      if (model) w.cycle += (dt * w.speed) / (w.bike ? PEDAL : citizens!.stride(model, clip));
       let x: number;
       let y: number;
       // Feet on the sidewalk
@@ -445,7 +505,7 @@ export class PedestrianLayer {
         hx = tx * w.dir;
         hy = ty * w.dir;
       }
-      draw(w.bike ? 'bike' : w.who, x, y, h, hx, hy, w.color, Math.sin(w.phase) * (w.bike ? 0.5 : STRIDE[w.who]));
+      draw(w.bike ? 'bike' : w.who, x, y, h, hx, hy, w.color, Math.sin(w.phase) * (w.bike ? 0.5 : STRIDE[w.who]), { model: w.model, clip, cycle: w.cycle });
     }
     PEOPLE.forEach((who, k) => {
       this.clothes[who].count = counts[k];

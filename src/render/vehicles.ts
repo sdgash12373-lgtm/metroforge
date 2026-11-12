@@ -4,6 +4,8 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { type Traffic, type Vehicle, isTaxi } from '../sim/traffic';
 import { GLASS, HEADLIGHT, TAILLIGHT, painted, shade, tint, wheel } from './kit';
 import { PORTAL_DEPTH } from './roadMesh';
+import { type CitizenModels, SCOOTERISTS } from './citizens';
+import { CLOTHES } from './pedestrians';
 
 const MAX = 1200;
 /** Popular colours on Taiwan's roads: pearl white, silver, black, grey, deep blue, red, and a few brighter ones */
@@ -184,7 +186,8 @@ export class VehicleLayer {
   private up = new THREE.Vector3(0, 1, 0);
   private c = new THREE.Color();
 
-  constructor(shadows: boolean) {
+  /** `citizens` draws scooter riders near the camera once loaded. */
+  constructor(shadows: boolean, private readonly citizens?: CitizenModels) {
     const mat = new THREE.MeshLambertMaterial({ flatShading: true, vertexColors: true });
     // Lacquered paint catches the sky and the sun
     glossy(mat, 0.4, 'paint');
@@ -210,8 +213,11 @@ export class VehicleLayer {
   }
 
   /** `busColor` gives each bus its line colour. */
-  update(traffic: Traffic, busColor: (v: Vehicle) => number): void {
+  update(traffic: Traffic, busColor: (v: Vehicle) => number, eye?: THREE.Vector3, near = 0): void {
     const counts = this.paint.map(() => 0);
+    const citizens = this.citizens?.ready && eye ? this.citizens : null;
+    const near2 = near * near;
+    const seconds = performance.now() / 1000;
     let taxis = 0;
     let l = 0;
     const flash = Math.floor(performance.now() / 350) % 2;
@@ -228,6 +234,15 @@ export class VehicleLayer {
       // Wheels on the asphalt (drawn 7 cm up); ramps into tunnels are drawn at street level up to the portal
       this.p.set(pose.p.x, (pose.h > PORTAL_DEPTH ? Math.max(0, pose.h) : pose.h) + 0.07, pose.p.y);
       this.m.compose(this.p, this.q, this.one);
+      if (citizens && v.kind === 'scooter') {
+        // Up close, a citizen on their scooter
+        const dx = this.p.x - eye!.x;
+        const dz = this.p.z - eye!.z;
+        const rider = citizens.model(SCOOTERISTS[v.id % SCOOTERISTS.length], 'motorcycle');
+        const paint = CAR_COLORS[Math.floor(v.tint * CAR_COLORS.length) % CAR_COLORS.length];
+        const shirt = CLOTHES[(v.id * 7) % CLOTHES.length];
+        if (dx * dx + dz * dz + eye!.y * eye!.y < near2 && rider && citizens.add(rider, this.m, 'Motorcycle', seconds / 2 + v.id * 0.13, shirt, paint)) continue;
+      }
       this.paint[k].setMatrixAt(i, this.m);
       this.trim[k].setMatrixAt(i, this.m);
       counts[k]++;
