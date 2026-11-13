@@ -8,6 +8,15 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '3.20.1',
+    date: '2026-11-13',
+    title: '轉彎更順',
+    notes: [
+      '汽車、機車、公車在路口沿弧線轉彎，不再從一條路的盡頭直接跳到下一條路',
+      '市民走到街角會沿著人行道轉過去，接著走下一條街，不再突然跳到對面或下個路口',
+    ],
+  },
+  {
     version: '3.20.0',
     date: '2026-11-12',
     title: '全新市民模型',
