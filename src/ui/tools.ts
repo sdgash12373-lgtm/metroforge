@@ -516,7 +516,7 @@ export class ToolController {
     this.world.rig.pickHeight = this.isRoadTool ? this.height : 0;
   }
 
-  /** See-through ground while building tunnels, metro lines or picking lines to remove, and a cleared city for the metro; tunnels marked on the surface while bulldozing. */
+  /** See-through ground while building tunnels, metro lines or picking lines to remove, and a cleared city for the metro and tunnels; tunnels marked on the surface while bulldozing. */
   private updateUnderground(): void {
     // Underground metro lines must stay visible to be picked for removal too
     const pickingLines = this.tool === 'bulldoze' && this.demolishLines;
@@ -525,8 +525,9 @@ export class ToolController {
     // Laying track underground: every kind's tunnels marked in its own colour, so the right one is joined
     const railTunnel = isRail(this.tool) && this.railAction === 'track' && this.level === 'tunnel';
     this.world.setUndergroundView((this.tool === 'bulldoze' && !this.demolishLines) || railTunnel);
-    // Metro runs over and under the city: buildings and streets would hide the track being laid
-    this.world.setDeclutter(this.tool === 'metro');
+    // Metro runs over and under the city, and tunnels under it: buildings and streets would hide what is being built
+    const tunnelling = (this.isRoadTool || isRail(this.tool)) && this.level === 'tunnel';
+    this.world.setDeclutter(this.tool === 'metro' || tunnelling || boring);
   }
 
   setOverwriteZones(on: boolean): void {
