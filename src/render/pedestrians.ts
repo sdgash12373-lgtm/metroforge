@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { City } from '../sim/city';
 import { toWorld } from '../sim/facilities';
+import { cornerCurve } from '../sim/geometry';
 import { type RoadSegment, asphaltWidth, roadWidth } from '../sim/roads';
 import { Zone } from '../sim/zoning';
 import { type Citizen, CYCLISTS, CitizenModels } from './citizens';
@@ -42,6 +43,10 @@ interface Walker {
   phase: number;
   /** walking over a footbridge: its id, and how far across */
   bridge?: number;
+  /** the street they'll turn onto at the corner ahead, once it's near */
+  next?: number;
+  /** the street they came from round the last corner, its way and side, to finish the curve */
+  from?: { seg: number; dir: 1 | -1; side: 1 | -1 };
   /** riding a bicycle (residents who can't afford a scooter or car) */
   bike?: boolean;
   who: Person;
@@ -73,6 +78,39 @@ const OWN_SHIRT: Record<Citizen, number> = {
 const RUN_SPEED = 1.6;
 /** Metres a bicycle goes per pedal cycle. */
 const PEDAL = 4.5;
+/** Most a walker's corner curve reaches along each street from the junction centre. */
+const CORNER_REACH = 16;
+
+/** How far out from the road's centre line the sidewalk people walk on is. */
+const walkOffset = (seg: RoadSegment) => (seg.walk ? asphaltWidth(seg) / 2 + 2.9 : (asphaltWidth(seg) + roadWidth(seg)) / 4);
+
+/** How far from the junction centre a walker starts rounding the corner between two streets: past the crossing street's kerb. */
+const cornerReach = (a: RoadSegment, b: RoadSegment) => Math.min(CORNER_REACH, Math.max(walkOffset(a), walkOffset(b)) + 1.5, a.length / 2, b.length / 2);
+
+/**
+ * A point on a sidewalk `along` metres from where a walk going `dir` starts, `side` the sidewalk (+1 right of a → b),
+ * with the walking heading.
+ */
+function walkAt(seg: RoadSegment, dir: 1 | -1, along: number, side: 1 | -1): { x: number; y: number; hx: number; hy: number } {
+  const s = dir === 1 ? along : seg.length - along;
+  const S = seg.samples;
+  let i = 1;
+  while (i < S.length - 1 && S[i].s < s) i++;
+  const a = S[i - 1];
+  const b = S[i];
+  const t = Math.max(0, Math.min(1, (s - a.s) / (b.s - a.s || 1)));
+  const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const tx = (b.x - a.x) / l;
+  const ty = (b.y - a.y) / l;
+  const off = side * walkOffset(seg);
+  return { x: a.x + (b.x - a.x) * t - ty * off, y: a.y + (b.y - a.y) * t + tx * off, hx: tx * dir, hy: ty * dir };
+}
+
+/** `t` 0..1 along the curve between two sidewalk points. */
+function corner(a: { x: number; y: number; hx: number; hy: number }, b: { x: number; y: number; hx: number; hy: number }, t: number) {
+  const c = cornerCurve(a, { x: a.hx, y: a.hy }, b, { x: b.hx, y: b.hy }, Math.max(0, Math.min(1, t)));
+  return { x: c.p.x, y: c.p.y, hx: c.heading.x, hy: c.heading.y };
+}
 
 const SKIN = 0xe8c4a0;
 /** Top of the sidewalk, where people's feet go. */
@@ -475,35 +513,54 @@ export class PedestrianLayer {
         hy = a.y - toWorld(f, 0, v).y;
       } else {
         let seg = net.segments.get(w.seg)!;
+        const from = (o: RoadSegment, dir: 1 | -1) => (dir === 1 ? w.s : o.length - w.s);
+        // Pick the street to turn onto as the corner comes up, so the walk can curve round it
+        if (w.next === undefined && seg.length - from(seg, w.dir) < CORNER_REACH) w.next = this.nextStreet(city, seg, w.dir);
         if (w.s > seg.length || w.s < 0) {
-          // Turn onto another street at the corner, or back the way they came
+          // Turn onto the street picked, keeping to the same side of the way they walk, or back the way they came
           const node = w.s > seg.length ? seg.b : seg.a;
-          const next = [...net.segments.values()].filter((o) => o.id !== seg.id && (o.a === node || o.b === node) && net.isStreet(o));
-          const o = next.length ? next[Math.floor(this.rand() * next.length)] : seg;
-          if (o === seg) {
+          const o = w.next !== undefined ? net.segments.get(w.next) : undefined;
+          const over = w.s > seg.length ? w.s - seg.length : -w.s;
+          if (!o || o === seg || (o.a !== node && o.b !== node)) {
             w.dir = w.dir === 1 ? -1 : 1;
             w.s = Math.max(0, Math.min(seg.length, w.s));
+            w.from = undefined;
           } else {
+            const dir = o.a === node ? 1 : -1;
+            w.from = { seg: seg.id, dir: w.dir, side: w.side };
+            w.side = (w.side * w.dir * dir) as 1 | -1;
             w.seg = o.id;
-            w.dir = o.a === node ? 1 : -1;
-            w.s = w.dir === 1 ? 0 : o.length;
+            w.dir = dir;
+            w.s = dir === 1 ? Math.min(over, o.length) : Math.max(0, o.length - over);
             seg = o;
           }
+          w.next = undefined;
         }
-        const off = w.side * (seg.walk ? asphaltWidth(seg) / 2 + 2.9 : (asphaltWidth(seg) + roadWidth(seg)) / 4);
-        const S = seg.samples;
-        let i = 1;
-        while (i < S.length - 1 && S[i].s < w.s) i++;
-        const a = S[i - 1];
-        const b = S[i];
-        const t = Math.max(0, Math.min(1, (w.s - a.s) / (b.s - a.s || 1)));
-        const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-        const tx = (b.x - a.x) / l;
-        const ty = (b.y - a.y) / l;
-        x = a.x + (b.x - a.x) * t - ty * off;
-        y = a.y + (b.y - a.y) * t + tx * off;
-        hx = tx * w.dir;
-        hy = ty * w.dir;
+        const along = from(seg, w.dir);
+        const ahead = seg.length - along;
+        const turnIn = w.next !== undefined ? net.segments.get(w.next) : undefined;
+        const prev = w.from ? net.segments.get(w.from.seg) : undefined;
+        let p: { x: number; y: number; hx: number; hy: number } | null = null;
+        if (turnIn && turnIn !== seg && ahead < CORNER_REACH) {
+          // Coming up to the corner: curve from this sidewalk onto the next street's
+          const node = w.dir === 1 ? seg.b : seg.a;
+          const dir = turnIn.a === node ? 1 : -1;
+          const r = cornerReach(seg, turnIn);
+          if (ahead < r && (turnIn.a === node || turnIn.b === node)) {
+            const side = (w.side * w.dir * dir) as 1 | -1;
+            p = corner(walkAt(seg, w.dir, seg.length - r, w.side), walkAt(turnIn, dir, r, side), 0.5 * (1 - ahead / r));
+          }
+        }
+        if (!p && prev && w.from && along < CORNER_REACH) {
+          // Just round the corner: finish the curve
+          const r = cornerReach(prev, seg);
+          if (along < r) p = corner(walkAt(prev, w.from.dir, prev.length - r, w.from.side), walkAt(seg, w.dir, r, w.side), 0.5 + (0.5 * along) / r);
+        }
+        p ??= walkAt(seg, w.dir, along, w.side);
+        x = p.x;
+        y = p.y;
+        hx = p.hx;
+        hy = p.hy;
       }
       draw(w.bike ? 'bike' : w.who, x, y, h, hx, hy, w.color, Math.sin(w.phase) * (w.bike ? 0.5 : STRIDE[w.who]), { model: w.model, clip, cycle: w.cycle });
     }
@@ -518,6 +575,14 @@ export class PedestrianLayer {
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
       m.geometry.getAttribute('stride').needsUpdate = true;
     }
+  }
+
+  /** A street to turn onto at the end of `seg` walking `dir`, or none at a dead end. */
+  private nextStreet(city: City, seg: RoadSegment, dir: 1 | -1): number | undefined {
+    const node = dir === 1 ? seg.b : seg.a;
+    const net = city.net;
+    const next = [...net.segments.values()].filter((o) => o.id !== seg.id && (o.a === node || o.b === node) && net.isStreet(o));
+    return next.length ? next[Math.floor(this.rand() * next.length)].id : undefined;
   }
 
   private setStride(m: THREE.InstancedMesh, i: number, angle: number): void {

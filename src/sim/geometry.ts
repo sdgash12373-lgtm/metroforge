@@ -183,3 +183,27 @@ export function hash01(x: number, y: number): number {
   const s = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
   return s - Math.floor(s);
 }
+
+/**
+ * A smooth turn from `p0` heading `h0` to `p2` heading `h2` (unit headings), as a quadratic curve whose middle
+ * control point is where the two lines meet (or halfway between, when they are near parallel or meet behind).
+ * `t` 0..1 along it; gives the point and the unit heading there.
+ */
+export function cornerCurve(p0: Vec2, h0: Vec2, p2: Vec2, h2: Vec2, t: number): { p: Vec2; heading: Vec2 } {
+  const gap = Math.hypot(p2.x - p0.x, p2.y - p0.y);
+  let c = { x: (p0.x + p2.x) / 2, y: (p0.y + p2.y) / 2 };
+  // p0 + h0·a = p2 − h2·b
+  const det = h0.x * h2.y - h0.y * h2.x;
+  if (Math.abs(det) > 0.05) {
+    const dx = p2.x - p0.x;
+    const dy = p2.y - p0.y;
+    const a = (dx * h2.y - dy * h2.x) / det;
+    const b = (dy * h0.x - dx * h0.y) / det;
+    if (a > 0 && b > 0 && a < gap * 2 && b < gap * 2) c = { x: p0.x + h0.x * a, y: p0.y + h0.y * a };
+  }
+  const q: Quad = { a: p0, c, b: p2 };
+  const tx = 2 * (1 - t) * (c.x - p0.x) + 2 * t * (p2.x - c.x);
+  const ty = 2 * (1 - t) * (c.y - p0.y) + 2 * t * (p2.y - c.y);
+  const l = Math.hypot(tx, ty);
+  return { p: quadPoint(q, t), heading: l > 1e-6 ? { x: tx / l, y: ty / l } : h0 };
+}

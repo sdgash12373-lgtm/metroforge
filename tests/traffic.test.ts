@@ -233,6 +233,33 @@ describe('traffic lights', () => {
   });
 });
 
+describe('turning at junctions', () => {
+  it('draws cars round the corner without jumping', () => {
+    const city = new City();
+    city.buildRoad(free(0, 0), null, free(200, 0), true);
+    city.buildRoad(free(200, 0), null, free(200, 200), true);
+    const a = segAt(city, 100, 0);
+    const b = segAt(city, 200, 100);
+    const v = city.traffic.spawn({ seg: a.id, s: 150 }, { seg: b.id, s: 150 }, 'car', 0.5)!;
+    let last = city.traffic.pose(v)!;
+    let worst = 0;
+    let turned = 0;
+    for (let i = 0; i < 400 && city.traffic.vehicles.length; i++) {
+      city.traffic.step(0.05);
+      const now = city.traffic.pose(v);
+      if (!now) break;
+      // Never further than the car could drive in the step, plus a little for lane drift
+      worst = Math.max(worst, Math.hypot(now.p.x - last.p.x, now.p.y - last.p.y) - v.speed * 0.05);
+      const turn = Math.acos(Math.max(-1, Math.min(1, now.heading.x * last.heading.x + now.heading.y * last.heading.y)));
+      turned = Math.max(turned, turn);
+      last = now;
+    }
+    expect(worst).toBeLessThan(0.15);
+    // The 90° turn is spread over many steps
+    expect(turned).toBeLessThan(0.3);
+  });
+});
+
 describe('the player car (第一人稱巡查)', () => {
   it('drives where it is steered and ignores the rules: runs red lights and speeds', () => {
     const city = new City();

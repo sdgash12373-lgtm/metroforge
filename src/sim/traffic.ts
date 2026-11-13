@@ -1,5 +1,5 @@
-import { type Vec2, dist } from './geometry';
-import { LANE_WIDTH, type RoadNetwork, type RoadSegment } from './roads';
+import { type Vec2, cornerCurve, dist } from './geometry';
+import { LANE_WIDTH, type RoadNetwork, type RoadSegment, asphaltWidth } from './roads';
 import { type Junction, type Light, STOP_BACK, findJunctions, lightAt } from './signals';
 
 /** 50 km/h town roads. */
@@ -26,6 +26,11 @@ const NO_CHANGE_NEAR = 12;
  * the lane for the turn: so on a long road the turning traffic doesn't fill one lane from end to end.
  */
 const TURN_LANE_REACH = 90;
+/** Road vehicles start curving round a junction this far before the asphalt of the crossing road (metres). */
+const TURN_LEAD = 1.5;
+/** Most a turn curve reaches into each road, so the curve stays inside the junction. */
+const TURN_REACH = 14;
+const RAIL_KINDS_SET = new Set<VehicleKind>(['metro', 'train', 'hsr']);
 
 export type Dir = 1 | -1;
 export type VehicleKind = 'car' | 'police' | 'scooter' | 'truck' | 'bus' | 'metro' | 'train' | 'hsr';
@@ -92,6 +97,8 @@ export interface Vehicle {
   want?: number;
   /** the lane for its turn at the end of this road, moved into once near the junction (none going straight on) */
   turn?: number;
+  /** the lane it came from at the last junction, to draw the turn through it */
+  from?: LaneRef;
   /** driven by the player: never gives up or arrives, speed set from the controls */
   player?: boolean;
   /** player's throttle, −1 (brake) .. 1 */
@@ -631,6 +638,7 @@ export class Traffic {
             const nextSeg = this.net.segments.get(next.seg);
             const top = nextSeg ? this.laneCount(nextSeg) - 1 : 0;
             v.pos -= seg.length;
+            v.from = { seg: v.seg, dir: v.dir };
             v.seg = next.seg;
             v.dir = next.dir;
             v.sub = v.player ? Math.min(v.sub ?? 0, top) : entry.sub;
@@ -661,7 +669,50 @@ export class Traffic {
 
   /** World position, height and heading of a vehicle (sim coordinates). */
   pose(v: Vehicle): { p: Vec2; h: number; heading: Vec2 } | null {
-    return this.poseBack(v, 0);
+    return (RAIL_KINDS_SET.has(v.kind) ? null : this.turning(v)) ?? this.poseBack(v, 0);
+  }
+
+  /**
+   * Road vehicles round a junction on a curve instead of snapping from the end of one lane to the start of the
+   * next: from where the junction's asphalt begins on the lane in to as far into the lane out. Null when not near one.
+   */
+  private turning(v: Vehicle): { p: Vec2; h: number; heading: Vec2 } | null {
+    const seg = this.net.segments.get(v.seg);
+    if (!seg) return null;
+    let inSeg: RoadSegment | undefined;
+    let inDir: Dir;
+    let outSeg: RoadSegment | undefined;
+    let outDir: Dir;
+    let t: number;
+    let reach: number;
+    const lat = v.lat ?? v.sub ?? 0;
+    const near = (a: RoadSegment, b: RoadSegment) =>
+      Math.min(TURN_REACH, Math.max(asphaltWidth(a), asphaltWidth(b)) / 2 + TURN_LEAD, a.length / 2, b.length / 2);
+    if (v.route.length && v.pos > seg.length - TURN_REACH) {
+      inSeg = seg;
+      inDir = v.dir;
+      outSeg = this.net.segments.get(v.route[0].seg);
+      outDir = v.route[0].dir;
+      if (!outSeg) return null;
+      reach = near(inSeg, outSeg);
+      if (v.pos <= seg.length - reach) return null;
+      t = (0.5 * (v.pos - (seg.length - reach))) / reach;
+    } else if (v.from && v.pos < TURN_REACH) {
+      inSeg = this.net.segments.get(v.from.seg);
+      inDir = v.from.dir;
+      outSeg = seg;
+      outDir = v.dir;
+      if (!inSeg) return null;
+      reach = near(inSeg, outSeg);
+      if (v.pos >= reach) return null;
+      t = 0.5 + (0.5 * Math.max(0, v.pos)) / reach;
+    } else return null;
+    const lane = (s: RoadSegment) => Math.min(lat, this.laneCount(s) - 1);
+    const a = this.laneSample(inSeg, inDir, inSeg.length - reach, lane(inSeg));
+    const b = this.laneSample(outSeg, outDir, reach, lane(outSeg));
+    // Heights: the lane ends meet at the junction
+    const c = cornerCurve(a.p, a.heading, b.p, b.heading, Math.min(1, t));
+    return { p: c.p, h: a.h + (b.h - a.h) * t, heading: c.heading };
   }
 
   /**
