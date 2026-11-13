@@ -297,4 +297,27 @@ describe('the player car (第一人稱巡查)', () => {
     for (let i = 0; i < 2000; i++) t.step(0.05);
     expect(t.vehicles).toContain(car);
   });
+
+  it('answers the controls at once and steers over the centre line into oncoming lanes', () => {
+    const city = new City();
+    city.buildRoad(free(-300, 0), null, free(300, 0), true);
+    const road = segAt(city, 0, 0);
+    const t = city.traffic;
+    const car = t.spawnPlayer(road, 1, 10);
+    car.throttle = 1;
+    // Moving off within a few frames
+    for (let i = 0; i < 6; i++) t.step(1 / 60);
+    expect(car.speed).toBeGreaterThan(0.5);
+    for (let i = 0; i < 60; i++) t.step(1 / 60);
+    const start = t.pose(car)!;
+    // Steer left for a second and a half: across the double yellow line into the oncoming lane
+    car.steer = -1;
+    for (let i = 0; i < 90; i++) t.step(1 / 60);
+    car.steer = 0;
+    const across = t.pose(car)!;
+    // Driving east on a two-way road, the oncoming lane is to the north (−y)
+    expect(across.p.y).toBeLessThan(-1);
+    expect(start.p.y).toBeGreaterThan(1);
+    expect(car.lat!).toBeLessThanOrEqual(t.playerLatMax(road) + 0.25);
+  });
 });

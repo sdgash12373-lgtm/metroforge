@@ -13,10 +13,16 @@ const HEADWAY = 1.2;
 const MIN_GAP = 2.0;
 /** Seconds a vehicle may sit still before it gives up (keeps gridlocked loops from freezing forever). */
 export const GIVE_UP_AFTER = 40;
-/** The player's car accelerates this much harder than traffic. */
-const PLAYER_PUNCH = 1.8;
+/** The player's car: full-throttle acceleration and full braking (m/s²), and how it slows off the pedal. */
+const PLAYER_ACCEL = 6.5;
+const PLAYER_BRAKE = 10;
+const PLAYER_COAST = 1.2;
 /** Patrol ignores the rules: it may drive this much faster than the speed limit. */
-const PLAYER_TOP = 1.6;
+const PLAYER_TOP = 2;
+/** The player's car slides across the road at up to this many metres a second at full steer, more as it goes faster. */
+const PLAYER_SLIDE = 2.5;
+const PLAYER_SLIDE_PER_MS = 0.3;
+const PLAYER_SLIDE_MAX = 7;
 /** Lanes per second a vehicle drifts across while changing lanes. */
 const LANE_CHANGE_RATE = 0.7;
 /** Vehicles don't start a lane change this close to the junction ahead. */
@@ -103,6 +109,10 @@ export interface Vehicle {
   player?: boolean;
   /** player's throttle, −1 (brake) .. 1 */
   throttle?: number;
+  /** player's steering, −1 (left) .. 1 (right): slides the car across the road, over the centre line too */
+  steer?: number;
+  /** player's sideways speed in lanes a second (+ towards the centre line), eased, to angle the car as it slides */
+  slide?: number;
   /** buses and trains: the line they run on, the index of the stop they are heading to, and seconds left at a stop */
   line?: number;
   next?: number;
@@ -592,10 +602,10 @@ export class Traffic {
         let acc = accel * (1 - (v.speed / top) ** 4 - (Math.max(sStar, 0) / gap) ** 2);
         // The player's car goes as the controls ask
         if (v.player) {
-          // A livelier car than the city's traffic, so driving it feels responsive
-          const free = acc * PLAYER_PUNCH;
+          // Like a game car: it pulls hard at once, tailing off towards its top speed, and stops short on the brake
           const t = v.throttle ?? 0;
-          acc = Math.min(free, t > 0 ? t * accel * PLAYER_PUNCH : t < 0 ? t * brake * 2 : -0.6);
+          acc = t > 0 ? t * PLAYER_ACCEL * (1 - (v.speed / top) ** 2) : t < 0 ? t * PLAYER_BRAKE : -PLAYER_COAST;
+          if (v.route.length === 0 && gap < 1) acc = Math.min(acc, -PLAYER_BRAKE);
         }
         v.speed = Math.max(0, Math.min(top, v.speed + acc * dt));
         v.pos += v.speed * dt;
@@ -618,9 +628,12 @@ export class Traffic {
           const to = sub0 + Math.sign(want - sub0);
           if (!this.laneTaken(v, to)) v.sub = to;
         }
-        const target = v.sub ?? 0;
-        const lat = v.lat ?? target;
-        v.lat = lat + Math.max(-LANE_CHANGE_RATE * dt, Math.min(LANE_CHANGE_RATE * dt, target - lat));
+        if (v.player) this.steerPlayer(v, seg, dt);
+        else {
+          const target = v.sub ?? 0;
+          const lat = v.lat ?? target;
+          v.lat = lat + Math.max(-LANE_CHANGE_RATE * dt, Math.min(LANE_CHANGE_RATE * dt, target - lat));
+        }
 
         if (!v.route.length) {
           if (v.pos < v.dest - 0.5 || v.player) continue;
@@ -642,7 +655,7 @@ export class Traffic {
             v.seg = next.seg;
             v.dir = next.dir;
             v.sub = v.player ? Math.min(v.sub ?? 0, top) : entry.sub;
-            v.lat = Math.min(v.lat ?? v.sub, top);
+            v.lat = v.player && nextSeg ? Math.min(v.lat ?? 0, this.playerLatMax(nextSeg)) : Math.min(v.lat ?? v.sub, top);
             v.route.shift();
             if (v.player) {
               v.want = v.sub;
@@ -667,9 +680,37 @@ export class Traffic {
     }
   }
 
+  /** Furthest across the road the player's car may go, in lanes from the kerb lane: over the centre line to the far kerb lane of a two-way road. */
+  playerLatMax(seg: RoadSegment): number {
+    const n = this.laneCount(seg);
+    return seg.oneway && !seg.ring ? n - 1 : 2 * n - 1;
+  }
+
+  /** Slide the player's car across the road as the steering asks; the lane it counts as in follows. */
+  private steerPlayer(v: Vehicle, seg: RoadSegment, dt: number): void {
+    const max = this.playerLatMax(seg);
+    // Left (−) is towards the centre line, a higher lane
+    const rate = (Math.min(PLAYER_SLIDE_MAX, PLAYER_SLIDE + v.speed * PLAYER_SLIDE_PER_MS) / LANE_WIDTH) * (v.speed > 0.3 ? 1 : 0);
+    const before = v.lat ?? 0;
+    const lat = Math.max(-0.25, Math.min(max + 0.25, before - (v.steer ?? 0) * rate * dt));
+    v.lat = lat;
+    const moved = dt > 0 ? (lat - before) / dt : 0;
+    v.slide = (v.slide ?? 0) + (moved - (v.slide ?? 0)) * Math.min(1, dt * 12);
+    v.sub = Math.max(0, Math.min(this.laneCount(seg) - 1, Math.round(lat)));
+  }
+
   /** World position, height and heading of a vehicle (sim coordinates). */
   pose(v: Vehicle): { p: Vec2; h: number; heading: Vec2 } | null {
-    return (RAIL_KINDS_SET.has(v.kind) ? null : this.turning(v)) ?? this.poseBack(v, 0);
+    const pose = (RAIL_KINDS_SET.has(v.kind) ? null : this.turning(v)) ?? this.poseBack(v, 0);
+    if (pose && v.player && v.slide && v.speed > 0.1) {
+      // Angle the car the way it slides: towards the centre line is to the left of travel
+      const side = v.slide * LANE_WIDTH;
+      const hx = pose.heading.x * v.speed + pose.heading.y * side;
+      const hy = pose.heading.y * v.speed - pose.heading.x * side;
+      const l = Math.hypot(hx, hy) || 1;
+      pose.heading = { x: hx / l, y: hy / l };
+    }
+    return pose;
   }
 
   /**
@@ -707,7 +748,7 @@ export class Traffic {
       if (v.pos >= reach) return null;
       t = 0.5 + (0.5 * Math.max(0, v.pos)) / reach;
     } else return null;
-    const lane = (s: RoadSegment) => Math.min(lat, this.laneCount(s) - 1);
+    const lane = (s: RoadSegment) => Math.min(lat, v.player ? this.playerLatMax(s) : this.laneCount(s) - 1);
     const a = this.laneSample(inSeg, inDir, inSeg.length - reach, lane(inSeg));
     const b = this.laneSample(outSeg, outDir, reach, lane(outSeg));
     // Heights: the lane ends meet at the junction
