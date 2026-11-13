@@ -32,8 +32,8 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 
 /**
  * First-person patrol (第一人稱巡查): the player drives a car through the city in traffic, ignoring
- * its rules. W/S or the joystick's up/down drive and brake. A/D or left/right change lanes on wide
- * roads, and near a junction (or with no lane that way) pick the turn there, from any lane. Q or the
+ * its rules. W/S or the joystick's up/down drive and brake, answering at once. A/D or left/right steer the car
+ * across the road, over the centre line into oncoming lanes too, and near a junction pick the turn there. Q or the
  * 迴轉 button turns round on the spot.
  *
  * 空拍機 (F) leaves the car parked and flies a free camera anywhere, through buildings and the ground: W/S or
@@ -268,6 +268,14 @@ export class DriveMode {
     return t;
   }
 
+  /** Steering from the controls, −1 (left) .. 1 (right): the stick is analogue. */
+  private steering(): number {
+    let s = Math.abs(this.stick.x) > 0.12 ? this.stick.x : 0;
+    if (this.keys.has('a') || this.keys.has('arrowleft')) s = -1;
+    if (this.keys.has('d') || this.keys.has('arrowright')) s = 1;
+    return s;
+  }
+
   private side(): number {
     let s = Math.abs(this.stick.x) > 0.5 ? Math.sign(this.stick.x) : 0;
     if (this.keys.has('a') || this.keys.has('arrowleft')) s = -1;
@@ -319,21 +327,20 @@ export class DriveMode {
     if (this.view === 'drone') {
       // The car waits where it was left while the drone flies
       car.throttle = -1;
+      car.steer = 0;
       this.fly(dt);
       return;
     }
     car.throttle = this.throttle();
     const exits = this.exits(seg, car.dir);
     const side = this.side();
-    if (side !== this.lastSide && side !== 0) {
-      // Left is towards the centre line: a higher sub-lane
-      const lanes = traffic.laneCount(seg);
-      const sub = car.sub ?? 0;
-      const to = sub - side;
-      const nearJunction = exits.length > 0 && seg.length - car.pos < TURN_ZONE;
+    const nearJunction = exits.length > 0 && seg.length - car.pos < TURN_ZONE;
+    // Steering slides the car across the road at once, over the double yellow line too; near a junction it picks
+    // the turn there instead (steer the other way to go straight on)
+    car.steer = nearJunction ? 0 : this.steering();
+    if (nearJunction && side !== this.lastSide && side !== 0) {
       if (this.turn !== 'straight' && (side < 0) !== (this.turn === 'left')) this.turn = 'straight';
-      else if (!nearJunction && to >= 0 && to < lanes) car.sub = to;
-      else if (exits.length) this.turn = side < 0 ? 'left' : 'right';
+      else this.turn = side < 0 ? 'left' : 'right';
     }
     this.lastSide = side;
     if (!exits.length) {
@@ -441,8 +448,8 @@ export class DriveMode {
         ? '空拍機：搖桿前後左右飛，▲▼ 升降，在畫面上拖曳轉頭；可以穿過建築和地面'
         : '空拍機：W／S 前後　A／D 左右　E／Q 升降　Shift 加速　拖曳或方向鍵轉頭　F 回到車上　R 錄影　Esc 離開'
       : touch
-        ? '搖桿往上加速、往下煞車，左右換車道，靠近路口時左右選轉向'
-        : 'W 油門　S 煞車　A／D 換車道（近路口選轉向）　Q 迴轉　V 切換視角　F 空拍機　R 錄影　Esc 離開';
+        ? '搖桿往上加速、往下煞車，左右移動（可跨到對向車道），靠近路口時左右選轉向'
+        : 'W 油門　S 煞車　A／D 左右（可跨越對向車道，近路口選轉向）　Q 迴轉　V 切換視角　F 空拍機　R 錄影　Esc 離開';
   }
 
   /** While the drone flies, a drag on the map turns it instead of moving the map. */
@@ -533,8 +540,8 @@ export class DriveMode {
     const hy = pose.heading.y;
     const pos = this.view === 'driver' ? new THREE.Vector3(pose.p.x + hx * 0.5, h + 1.5, pose.p.y + hy * 0.5) : new THREE.Vector3(pose.p.x - hx * 11, h + 4.2, pose.p.y - hy * 11);
     const look = new THREE.Vector3(pose.p.x + hx * 25, h + (this.view === 'driver' ? 1.2 : 1.5), pose.p.y + hy * 25);
-    // Ease the camera so junction turns and lane changes swing smoothly
-    const k = snap ? 1 : 1 - Math.exp(-dt * (this.view === 'driver' ? 9 : 5));
+    // Ease the camera a little so junction turns swing smoothly, but keep it tight on the car so it answers at once
+    const k = snap ? 1 : 1 - Math.exp(-dt * (this.view === 'driver' ? 20 : 12));
     this.camPos.lerp(pos, k);
     this.camLook.lerp(look, k);
     if (snap) {
