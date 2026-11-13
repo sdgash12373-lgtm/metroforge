@@ -539,12 +539,21 @@ export class World {
     this.scene.background = new THREE.Color(on ? 0x5d6b62 : 0xbcd8ea);
   }
 
-  /** Hides buildings, trees and traffic and fades the streets, so metro track is never hidden by the city. */
-  setDeclutter(on: boolean): void {
+  /**
+   * Hides buildings, public facilities, airports, trees and traffic and fades the streets, so metro track and tunnels
+   * are never hidden by the city; `stations` hides rail station buildings too.
+   */
+  setDeclutter(on: boolean, stations = false): void {
+    // Station buildings hide tunnels under them too, but the metro tool needs its stations to tap
+    for (const k of RAIL_KINDS) this.rails[k].stations.mesh.visible = !(on && stations);
     if (this.decluttered === on) return;
     this.decluttered = on;
     this.buildings.group.visible = !on;
     this.facilities.visible = !on;
+    this.arenaDecor.group.visible = !on;
+    this.airports.visible = !on;
+    this.planes.group.visible = !on;
+    this.taxiRanks.mesh.visible = !on;
     this.ships.group.visible = !on;
     this.trees.trunks.visible = !on;
     this.trees.crowns.visible = !on;
