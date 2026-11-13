@@ -527,7 +527,7 @@ export class ToolController {
     this.world.setUndergroundView((this.tool === 'bulldoze' && !this.demolishLines) || railTunnel);
     // Metro runs over and under the city, and tunnels under it: buildings and streets would hide what is being built
     const tunnelling = (this.isRoadTool || isRail(this.tool)) && this.level === 'tunnel';
-    this.world.setDeclutter(this.tool === 'metro' || tunnelling || boring);
+    this.world.setDeclutter(this.tool === 'metro' || tunnelling || boring, tunnelling || boring);
   }
 
   setOverwriteZones(on: boolean): void {
