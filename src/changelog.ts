@@ -8,6 +8,12 @@ export interface Release {
 
 export const CHANGELOG: Release[] = [
   {
+    version: '3.20.3',
+    date: '2026-11-13',
+    title: '蓋地下道路看得清楚',
+    notes: ['蓋地下道路、地下軌道或用整地挖隧道時，地面上的建築、樹木和車輛暫時隱藏，街道變半透明，地下的路不再被擋住；換回地面或其他工具就恢復'],
+  },
+  {
     version: '3.20.2',
     date: '2026-11-13',
     title: '巡查開車更跟手',
